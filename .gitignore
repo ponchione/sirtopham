@@ -1,1 +1,20 @@
+# IDE
 .idea
+
+# Build output
+bin/
+
+# Frontend
+frontend/dist/
+frontend/node_modules/
+
+# SQLite databases
+*.db
+*.db-wal
+*.db-shm
+
+# Environment
+.env
+
+# Go vendor (if used)
+vendor/
