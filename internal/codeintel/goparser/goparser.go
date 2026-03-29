@@ -107,18 +107,18 @@ func New(rootDir string) (*Parser, error) {
 // Non-Go files return an empty slice and nil error.
 func (p *Parser) Parse(filePath string, content []byte) ([]codeintel.RawChunk, error) {
 	if !strings.HasSuffix(filePath, ".go") {
-		return nil, nil
+		return []codeintel.RawChunk{}, nil
 	}
 
 	absPath, err := filepath.Abs(filePath)
 	if err != nil {
-		return nil, nil
+		return []codeintel.RawChunk{}, nil
 	}
 
 	pkg, ok := p.pkgsByFile[absPath]
 	if !ok || pkg.TypesInfo == nil {
 		slog.Debug("file not in loaded packages", "path", filePath)
-		return nil, nil
+		return []codeintel.RawChunk{}, nil
 	}
 
 	var astFile *ast.File
@@ -131,7 +131,7 @@ func (p *Parser) Parse(filePath string, content []byte) ([]codeintel.RawChunk, e
 		}
 	}
 	if astFile == nil {
-		return nil, nil
+		return []codeintel.RawChunk{}, nil
 	}
 
 	fileImports := extractImports(astFile)

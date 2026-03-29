@@ -164,6 +164,31 @@ func TestParse_MethodDetection(t *testing.T) {
 	}
 }
 
+func newTestParser(t *testing.T) *Parser {
+	t.Helper()
+	root := repoRoot(t)
+	p, err := New(root)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return p
+}
+
+func TestParse_NonGoFile_ReturnsEmptySlice(t *testing.T) {
+	p := newTestParser(t)
+
+	chunks, err := p.Parse("readme.md", []byte("# Hello"))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if chunks == nil {
+		t.Fatal("expected non-nil empty slice, got nil")
+	}
+	if len(chunks) != 0 {
+		t.Errorf("expected 0 chunks, got %d", len(chunks))
+	}
+}
+
 func TestParserImplementsInterface(t *testing.T) {
 	var _ codeintel.Parser = (*Parser)(nil)
 }
