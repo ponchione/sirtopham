@@ -19,5 +19,9 @@ frontend/node_modules/
 # Go vendor (if used)
 vendor/
 
+# Native libraries (LanceDB) — managed outside git
+lib/
+include/
+
 .claude
 .hermes
