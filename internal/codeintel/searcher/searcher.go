@@ -2,6 +2,7 @@ package searcher
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sort"
 
@@ -25,7 +26,7 @@ func New(store codeintel.Store, embedder codeintel.Embedder) *Searcher {
 // breaking, optionally expands one hop, and returns up to MaxResults.
 func (s *Searcher) Search(ctx context.Context, queries []string, opts codeintel.SearchOptions) ([]codeintel.SearchResult, error) {
 	if len(queries) == 0 {
-		return nil, nil
+		return nil, fmt.Errorf("searcher: at least one query is required")
 	}
 
 	topK := opts.TopK
@@ -39,17 +40,20 @@ func (s *Searcher) Search(ctx context.Context, queries []string, opts codeintel.
 		best     float64
 	}
 	seen := make(map[string]*scored)
+	var failCount int
 
 	for _, q := range queries {
 		vec, err := s.embedder.EmbedQuery(ctx, q)
 		if err != nil {
 			slog.Warn("embed query failed", "query", q, "error", err)
+			failCount++
 			continue
 		}
 
 		results, err := s.store.VectorSearch(ctx, vec, topK, opts.Filter)
 		if err != nil {
 			slog.Warn("vector search failed", "query", q, "error", err)
+			failCount++
 			continue
 		}
 
@@ -70,6 +74,10 @@ func (s *Searcher) Search(ctx context.Context, queries []string, opts codeintel.
 		}
 	}
 
+	if failCount == len(queries) {
+		return nil, fmt.Errorf("searcher: all %d queries failed", len(queries))
+	}
+
 	directHits := make([]*scored, 0, len(seen))
 	for _, s := range seen {
 		directHits = append(directHits, s)
@@ -83,15 +91,19 @@ func (s *Searcher) Search(ctx context.Context, queries []string, opts codeintel.
 
 	maxResults := opts.MaxResults
 	if maxResults == 0 {
-		maxResults = len(directHits)
+		maxResults = 30
 	}
 
 	var results []codeintel.SearchResult
 
 	directBudget := len(directHits)
 	hopBudget := 0
-	if opts.EnableHopExpansion && opts.HopBudgetFraction > 0 {
-		directBudget = min(int(float64(maxResults)*(1-opts.HopBudgetFraction)), len(directHits))
+	if opts.EnableHopExpansion {
+		hopFrac := opts.HopBudgetFraction
+		if hopFrac == 0 {
+			hopFrac = 0.4
+		}
+		directBudget = min(int(float64(maxResults)*(1-hopFrac)), len(directHits))
 		hopBudget = maxResults - directBudget
 	}
 

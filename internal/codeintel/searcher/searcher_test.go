@@ -2,6 +2,7 @@ package searcher
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/ponchione/sirtopham/internal/codeintel"
@@ -138,12 +139,97 @@ func TestSearch_HopExpansion(t *testing.T) {
 func TestSearch_EmptyQueries(t *testing.T) {
 	s := New(&fakeStore{}, &fakeEmbedder{})
 
-	results, err := s.Search(context.Background(), nil, codeintel.SearchOptions{})
+	_, err := s.Search(context.Background(), nil, codeintel.SearchOptions{})
+	if err == nil {
+		t.Fatal("expected error for nil queries")
+	}
+
+	_, err = s.Search(context.Background(), []string{}, codeintel.SearchOptions{})
+	if err == nil {
+		t.Fatal("expected error for empty queries")
+	}
+}
+
+func TestSearch_MaxResultsDefault(t *testing.T) {
+	results := make([]codeintel.SearchResult, 40)
+	for i := range results {
+		results[i] = codeintel.SearchResult{
+			Chunk: codeintel.Chunk{ID: fmt.Sprintf("chunk-%d", i), Name: fmt.Sprintf("Func%d", i)},
+			Score: float64(40-i) / 40.0,
+		}
+	}
+	store := &fakeStore{searchResults: results}
+	embedder := &fakeEmbedder{vec: make([]float32, 10)}
+
+	s := New(store, embedder)
+
+	got, err := s.Search(context.Background(), []string{"query"}, codeintel.SearchOptions{
+		TopK: 50,
+	})
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
-	if len(results) != 0 {
-		t.Errorf("expected empty results, got %d", len(results))
+	if len(got) != 30 {
+		t.Errorf("got %d results, want 30 (default MaxResults)", len(got))
+	}
+}
+
+func TestSearch_HopBudgetFractionDefault(t *testing.T) {
+	store := &fakeStore{
+		searchResults: []codeintel.SearchResult{
+			{Chunk: codeintel.Chunk{
+				ID:   "a",
+				Name: "FuncA",
+				Calls: []codeintel.FuncRef{{Name: "HelperB", Package: "pkg"}},
+			}, Score: 0.9},
+		},
+		byName: map[string][]codeintel.Chunk{
+			"HelperB": {{ID: "b", Name: "HelperB"}},
+		},
+	}
+	embedder := &fakeEmbedder{vec: make([]float32, 10)}
+
+	s := New(store, embedder)
+
+	results, err := s.Search(context.Background(), []string{"query"}, codeintel.SearchOptions{
+		TopK:               10,
+		MaxResults:         10,
+		EnableHopExpansion: true,
+	})
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+
+	var foundHop bool
+	for _, r := range results {
+		if r.FromHop {
+			foundHop = true
+		}
+	}
+	if !foundHop {
+		t.Error("expected hop expansion with default HopBudgetFraction=0.4")
+	}
+}
+
+type errorEmbedder struct{}
+
+func (e *errorEmbedder) EmbedTexts(_ context.Context, _ []string) ([][]float32, error) {
+	return nil, fmt.Errorf("embed failed")
+}
+
+func (e *errorEmbedder) EmbedQuery(_ context.Context, _ string) ([]float32, error) {
+	return nil, fmt.Errorf("embed failed")
+}
+
+func TestSearch_AllQueriesFail(t *testing.T) {
+	s := New(&fakeStore{}, &errorEmbedder{})
+
+	_, err := s.Search(context.Background(), []string{"q1", "q2"}, codeintel.SearchOptions{
+		TopK:       10,
+		MaxResults: 5,
+	})
+	if err == nil {
+		t.Fatal("expected error when all queries fail to embed")
 	}
 }
 
