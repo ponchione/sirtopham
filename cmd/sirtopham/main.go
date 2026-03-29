@@ -7,10 +7,17 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var version = "dev"
+
 func main() {
 	rootCmd := &cobra.Command{
-		Use:   "sirtopham",
-		Short: "A self-hosted AI coding agent",
+		Use:          "sirtopham",
+		Short:        "A self-hosted AI coding agent",
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			fmt.Fprintf(os.Stdout, "sirtopham %s\n", version)
+			return nil
+		},
 	}
 
 	serveCmd := &cobra.Command{

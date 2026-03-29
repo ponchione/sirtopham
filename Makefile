@@ -6,6 +6,7 @@ FRONTEND   := frontend
 .PHONY: build test dev-backend dev-frontend dev frontend-deps frontend-build clean
 
 build: frontend-build
+	mkdir -p $(BIN_DIR)
 	CGO_ENABLED=1 go build -o $(BIN_DIR)/$(BINARY) $(CMD_PKG)
 
 test:
