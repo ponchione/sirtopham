@@ -35,6 +35,12 @@ const (
 	QueryPrefix = "Represent this query for searching relevant code: "
 )
 
+// FuncRef identifies a function or method in the call graph.
+type FuncRef struct {
+	Name    string `json:"name"`
+	Package string `json:"package"`
+}
+
 // RawChunk is the direct output of a parser before enrichment and storage.
 type RawChunk struct {
 	Name      string
@@ -43,6 +49,12 @@ type RawChunk struct {
 	ChunkType ChunkType
 	LineStart int
 	LineEnd   int
+
+	// Relationship metadata populated by AST-aware parsers.
+	Calls      []FuncRef
+	TypesUsed  []string
+	Implements []string
+	Imports    []string
 }
 
 // Chunk is the fully enriched record stored in the semantic index.
