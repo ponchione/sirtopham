@@ -64,3 +64,13 @@ type Describer interface {
 	// cancellation should produce a non-nil error.
 	DescribeFile(ctx context.Context, fileContent string, relationshipContext string) ([]Description, error)
 }
+
+// Searcher executes one or more semantic queries against the code index.
+type Searcher interface {
+	// Search embeds each query, runs vector search with the provided options,
+	// deduplicates by chunk ID, re-ranks by hit count with best-score tie
+	// breaking, optionally expands one-hop callers/callees according to
+	// HopBudgetFraction, and returns up to MaxResults results. If no results are
+	// found, Search returns an empty slice and nil error.
+	Search(ctx context.Context, queries []string, opts SearchOptions) ([]SearchResult, error)
+}

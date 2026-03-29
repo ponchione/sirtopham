@@ -13,6 +13,8 @@ type embedderStub struct{}
 
 type describerStub struct{}
 
+type searcherStub struct{}
+
 func (parserStub) Parse(filePath string, content []byte) ([]RawChunk, error) {
 	return []RawChunk{}, nil
 }
@@ -51,6 +53,13 @@ func (embedderStub) EmbedQuery(ctx context.Context, query string) ([]float32, er
 
 func (describerStub) DescribeFile(ctx context.Context, fileContent string, relationshipContext string) ([]Description, error) {
 	return []Description{{Name: "ValidateToken", Description: "Validates a token."}}, nil
+}
+
+func (searcherStub) Search(ctx context.Context, queries []string, opts SearchOptions) ([]SearchResult, error) {
+	return []SearchResult{{
+		Chunk: Chunk{ID: "chunk-id", Name: "ValidateToken", ChunkType: ChunkTypeFunction},
+		Score: 0.9,
+	}}, nil
 }
 
 func TestParserInterfaceIsSatisfied(t *testing.T) {
@@ -142,5 +151,31 @@ func TestDescriberInterfaceIsSatisfied(t *testing.T) {
 	}
 	if descriptions[0].Description == "" {
 		t.Fatal("Description text is empty, want semantic summary")
+	}
+}
+
+func TestSearcherInterfaceIsSatisfied(t *testing.T) {
+	var searcher Searcher = searcherStub{}
+	ctx := context.Background()
+
+	results, err := searcher.Search(ctx, []string{"auth middleware", "jwt validator"}, SearchOptions{
+		TopK:               10,
+		Filter:             Filter{Language: "go"},
+		MaxResults:         30,
+		EnableHopExpansion: true,
+		HopBudgetFraction:  0.4,
+		HopDepth:           1,
+	})
+	if err != nil {
+		t.Fatalf("Search returned unexpected error: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("Search returned %#v, want one result", results)
+	}
+	if results[0].Chunk.ID != "chunk-id" {
+		t.Fatalf("Search result chunk ID = %q, want %q", results[0].Chunk.ID, "chunk-id")
+	}
+	if results[0].Score != 0.9 {
+		t.Fatalf("Search result score = %v, want 0.9", results[0].Score)
 	}
 }

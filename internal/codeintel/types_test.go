@@ -188,3 +188,33 @@ func TestDescriptionFields(t *testing.T) {
 		t.Fatal("Description is empty, want semantic summary")
 	}
 }
+
+func TestSearchOptionsFields(t *testing.T) {
+	opts := SearchOptions{
+		TopK:               10,
+		Filter:             Filter{Language: "go", ChunkType: ChunkTypeFunction, FilePathPrefix: "internal/auth"},
+		MaxResults:         30,
+		EnableHopExpansion: true,
+		HopBudgetFraction:  0.4,
+		HopDepth:           1,
+	}
+
+	if opts.TopK != 10 {
+		t.Fatalf("TopK = %d, want 10", opts.TopK)
+	}
+	if opts.Filter.Language != "go" || opts.Filter.ChunkType != ChunkTypeFunction || opts.Filter.FilePathPrefix != "internal/auth" {
+		t.Fatalf("Filter = %+v, want go/function/internal/auth", opts.Filter)
+	}
+	if opts.MaxResults != 30 {
+		t.Fatalf("MaxResults = %d, want 30", opts.MaxResults)
+	}
+	if !opts.EnableHopExpansion {
+		t.Fatal("EnableHopExpansion = false, want true")
+	}
+	if opts.HopBudgetFraction != 0.4 {
+		t.Fatalf("HopBudgetFraction = %v, want 0.4", opts.HopBudgetFraction)
+	}
+	if opts.HopDepth != 1 {
+		t.Fatalf("HopDepth = %d, want 1", opts.HopDepth)
+	}
+}

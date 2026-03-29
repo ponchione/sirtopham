@@ -94,3 +94,13 @@ type Description struct {
 	Name        string
 	Description string
 }
+
+// SearchOptions configures semantic search execution and hop expansion.
+type SearchOptions struct {
+	TopK               int
+	Filter             Filter
+	MaxResults         int
+	EnableHopExpansion bool
+	HopBudgetFraction  float64
+	HopDepth           int
+}
