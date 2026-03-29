@@ -40,3 +40,27 @@ type Store interface {
 	// Close releases store-held resources.
 	Close() error
 }
+
+// Embedder produces vector embeddings for chunks and queries.
+type Embedder interface {
+	// EmbedTexts embeds a batch of indexing texts.
+	// Each text is typically "signature\ndescription" for a chunk.
+	// Implementations may split requests into DefaultEmbedBatchSize batches and
+	// must return one embedding vector per input text in the same order.
+	EmbedTexts(ctx context.Context, texts []string) ([][]float32, error)
+
+	// EmbedQuery embeds a single retrieval query.
+	// Implementations prepend QueryPrefix before embedding and return one vector.
+	EmbedQuery(ctx context.Context, query string) ([]float32, error)
+}
+
+// Describer generates semantic descriptions for code entities in a file.
+type Describer interface {
+	// DescribeFile sends file content plus relationship context to a local LLM.
+	// The caller truncates fileContent before invocation. Implementations return
+	// one Description per function/type found in the file. If the LLM fails or
+	// returns invalid JSON, DescribeFile returns an empty slice and nil error so
+	// indexing can continue. Only unrecoverable failures such as context
+	// cancellation should produce a non-nil error.
+	DescribeFile(ctx context.Context, fileContent string, relationshipContext string) ([]Description, error)
+}

@@ -9,6 +9,10 @@ type parserStub struct{}
 
 type storeStub struct{}
 
+type embedderStub struct{}
+
+type describerStub struct{}
+
 func (parserStub) Parse(filePath string, content []byte) ([]RawChunk, error) {
 	return []RawChunk{}, nil
 }
@@ -35,6 +39,18 @@ func (storeStub) DeleteByFilePath(ctx context.Context, filePath string) error {
 
 func (storeStub) Close() error {
 	return nil
+}
+
+func (embedderStub) EmbedTexts(ctx context.Context, texts []string) ([][]float32, error) {
+	return [][]float32{{0.1, 0.2}}, nil
+}
+
+func (embedderStub) EmbedQuery(ctx context.Context, query string) ([]float32, error) {
+	return []float32{0.3, 0.4}, nil
+}
+
+func (describerStub) DescribeFile(ctx context.Context, fileContent string, relationshipContext string) ([]Description, error) {
+	return []Description{{Name: "ValidateToken", Description: "Validates a token."}}, nil
 }
 
 func TestParserInterfaceIsSatisfied(t *testing.T) {
@@ -86,5 +102,45 @@ func TestStoreInterfaceIsSatisfied(t *testing.T) {
 	}
 	if err := store.Close(); err != nil {
 		t.Fatalf("Close returned unexpected error: %v", err)
+	}
+}
+
+func TestEmbedderInterfaceIsSatisfied(t *testing.T) {
+	var embedder Embedder = embedderStub{}
+	ctx := context.Background()
+
+	vectors, err := embedder.EmbedTexts(ctx, []string{"func ValidateToken() error\nValidates a token."})
+	if err != nil {
+		t.Fatalf("EmbedTexts returned unexpected error: %v", err)
+	}
+	if len(vectors) != 1 || len(vectors[0]) != 2 {
+		t.Fatalf("EmbedTexts returned %#v, want one embedding vector", vectors)
+	}
+
+	queryVector, err := embedder.EmbedQuery(ctx, "auth middleware")
+	if err != nil {
+		t.Fatalf("EmbedQuery returned unexpected error: %v", err)
+	}
+	if len(queryVector) != 2 {
+		t.Fatalf("EmbedQuery returned %#v, want one embedding vector", queryVector)
+	}
+}
+
+func TestDescriberInterfaceIsSatisfied(t *testing.T) {
+	var describer Describer = describerStub{}
+	ctx := context.Background()
+
+	descriptions, err := describer.DescribeFile(ctx, "func ValidateToken() error { return nil }", "calls: auth.ParseToken")
+	if err != nil {
+		t.Fatalf("DescribeFile returned unexpected error: %v", err)
+	}
+	if len(descriptions) != 1 {
+		t.Fatalf("DescribeFile returned %#v, want one description", descriptions)
+	}
+	if descriptions[0].Name != "ValidateToken" {
+		t.Fatalf("Description name = %q, want %q", descriptions[0].Name, "ValidateToken")
+	}
+	if descriptions[0].Description == "" {
+		t.Fatal("Description text is empty, want semantic summary")
 	}
 }
