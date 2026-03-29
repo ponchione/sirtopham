@@ -18,6 +18,8 @@ const (
 	ChunkTypeClass ChunkType = "class"
 	// ChunkTypeSection represents a markdown heading-delimited section.
 	ChunkTypeSection ChunkType = "section"
+	// ChunkTypeEnum represents an enum declaration.
+	ChunkTypeEnum ChunkType = "enum"
 	// ChunkTypeFallback represents a fallback sliding-window chunk.
 	ChunkTypeFallback ChunkType = "fallback"
 )
