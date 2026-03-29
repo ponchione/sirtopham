@@ -103,3 +103,36 @@ func (c *Client) sendBatch(ctx context.Context, texts []string) ([][]float32, er
 	}
 	return vecs, nil
 }
+
+// EmbedTexts embeds a batch of indexing texts. If the input exceeds the
+// configured batch size, it is automatically split into sub-batches.
+func (c *Client) EmbedTexts(ctx context.Context, texts []string) ([][]float32, error) {
+	if len(texts) == 0 {
+		return nil, nil
+	}
+
+	embeddings := make([][]float32, len(texts))
+
+	for start := 0; start < len(texts); start += c.batchSize {
+		end := min(start+c.batchSize, len(texts))
+
+		vecs, err := c.sendBatch(ctx, texts[start:end])
+		if err != nil {
+			return nil, fmt.Errorf("embed batch [%d:%d]: %w", start, end, err)
+		}
+
+		copy(embeddings[start:end], vecs)
+	}
+
+	return embeddings, nil
+}
+
+// EmbedQuery embeds a single retrieval query. The configured query prefix
+// is prepended before embedding.
+func (c *Client) EmbedQuery(ctx context.Context, query string) ([]float32, error) {
+	vecs, err := c.sendBatch(ctx, []string{c.queryPrefix + query})
+	if err != nil {
+		return nil, fmt.Errorf("embed query: %w", err)
+	}
+	return vecs[0], nil
+}

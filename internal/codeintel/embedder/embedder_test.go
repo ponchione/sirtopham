@@ -203,6 +203,112 @@ func TestSendBatch_ContextCancellation(t *testing.T) {
 	}
 }
 
+func TestEmbedTexts_SubBatching(t *testing.T) {
+	dims := codeintel.DefaultEmbeddingDims
+	var batchCount int
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		batchCount++
+		var req embeddingRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		resp := embeddingResponse{Data: make([]embeddingData, len(req.Input))}
+		for i := range req.Input {
+			resp.Data[i] = embeddingData{
+				Embedding: makeVec(dims, float32(i+1)*0.1),
+				Index:     i,
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+
+	c := New(config.Embedding{
+		BaseURL:        srv.URL,
+		Model:          "test-model",
+		BatchSize:      2, // force sub-batching with 3 texts
+		TimeoutSeconds: 5,
+	})
+
+	vecs, err := c.EmbedTexts(context.Background(), []string{"a", "b", "c"})
+	if err != nil {
+		t.Fatalf("EmbedTexts error: %v", err)
+	}
+	if len(vecs) != 3 {
+		t.Fatalf("vecs len = %d, want 3", len(vecs))
+	}
+	if batchCount != 2 {
+		t.Fatalf("batch requests = %d, want 2 (batch size 2, 3 texts)", batchCount)
+	}
+}
+
+func TestEmbedTexts_Empty(t *testing.T) {
+	c := New(config.Embedding{
+		BaseURL:        "http://unused",
+		Model:          "test-model",
+		BatchSize:      32,
+		TimeoutSeconds: 5,
+	})
+
+	vecs, err := c.EmbedTexts(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("EmbedTexts error: %v", err)
+	}
+	if vecs != nil {
+		t.Fatalf("expected nil for empty input, got %v", vecs)
+	}
+}
+
+func TestEmbedQuery_PrependPrefix(t *testing.T) {
+	dims := codeintel.DefaultEmbeddingDims
+	var gotInput []string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req embeddingRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		gotInput = req.Input
+		resp := embeddingResponse{
+			Data: []embeddingData{
+				{Embedding: makeVec(dims, 0.5), Index: 0},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+
+	c := New(config.Embedding{
+		BaseURL:        srv.URL,
+		Model:          "test-model",
+		BatchSize:      32,
+		TimeoutSeconds: 5,
+		QueryPrefix:    "search_query: ",
+	})
+
+	vec, err := c.EmbedQuery(context.Background(), "find auth handler")
+	if err != nil {
+		t.Fatalf("EmbedQuery error: %v", err)
+	}
+	if len(vec) != dims {
+		t.Fatalf("vec len = %d, want %d", len(vec), dims)
+	}
+	if len(gotInput) != 1 {
+		t.Fatalf("input len = %d, want 1", len(gotInput))
+	}
+	want := "search_query: find auth handler"
+	if gotInput[0] != want {
+		t.Fatalf("input[0] = %q, want %q", gotInput[0], want)
+	}
+}
+
+func TestClientImplementsEmbedder(t *testing.T) {
+	var _ codeintel.Embedder = (*Client)(nil)
+}
+
 // makeVec returns a float32 slice of the given length filled with val.
 func makeVec(dims int, val float32) []float32 {
 	v := make([]float32, dims)
