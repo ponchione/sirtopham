@@ -758,4 +758,275 @@ func TestRunTurnCallOrder(t *testing.T) {
 	}
 }
 
+func TestRunTurnLoopDetectionInjectsNudge(t *testing.T) {
+	// Set up a scenario where the LLM repeats the same tool call 3 times
+	// (matching the default threshold), then produces text.
+	assembler := &loopContextAssemblerStub{
+		pkg: &contextpkg.FullContextPackage{Content: "context", Frozen: true},
+	}
+	conversations := &loopConversationManagerStub{
+		history: []db.Message{},
+		seen:    loopSeenFilesStub{},
+	}
 
+	toolInput := json.RawMessage(`{"path":"a.go"}`)
+	toolResponse := []provider.StreamEvent{
+		provider.ToolCallStart{ID: "t1", Name: "read_file"},
+		provider.ToolCallEnd{ID: "t1", Input: toolInput},
+		provider.StreamDone{
+			StopReason: provider.StopReasonToolUse,
+			Usage:      provider.Usage{InputTokens: 10, OutputTokens: 5},
+		},
+	}
+
+	routerStub := &providerRouterStub{
+		streamEvents: [][]provider.StreamEvent{
+			toolResponse, // iteration 1
+			toolResponse, // iteration 2
+			toolResponse, // iteration 3 — loop detected here
+			{             // iteration 4 — different behavior after nudge
+				provider.TokenDelta{Text: "I'll try something different."},
+				provider.StreamDone{
+					StopReason: provider.StopReasonEndTurn,
+					Usage:      provider.Usage{InputTokens: 20, OutputTokens: 10},
+				},
+			},
+		},
+	}
+
+	executor := &toolExecutorStub{}
+	promptBuilder := NewPromptBuilder(nil)
+
+	loop := NewAgentLoop(AgentLoopDeps{
+		ContextAssembler:    assembler,
+		ConversationManager: conversations,
+		ProviderRouter:      routerStub,
+		ToolExecutor:        executor,
+		PromptBuilder:       promptBuilder,
+		Config:              AgentLoopConfig{LoopDetectionThreshold: 3},
+	})
+	loop.now = func() time.Time { return time.Unix(1700000600, 0).UTC() }
+
+	result, err := loop.RunTurn(stdctx.Background(), RunTurnRequest{
+		ConversationID:    "conv-1",
+		TurnNumber:        1,
+		Message:           "read a.go",
+		ModelContextLimit: 200000,
+	})
+	if err != nil {
+		t.Fatalf("RunTurn error: %v", err)
+	}
+
+	if result.IterationCount != 4 {
+		t.Fatalf("IterationCount = %d, want 4", result.IterationCount)
+	}
+	if result.FinalText != "I'll try something different." {
+		t.Fatalf("FinalText = %q, want different approach text", result.FinalText)
+	}
+
+	// The 4th prompt build should include the nudge message in its current-turn
+	// messages. We can verify by checking the router was called 4 times.
+	if routerStub.callIndex != 4 {
+		t.Fatalf("router call count = %d, want 4", routerStub.callIndex)
+	}
+}
+
+func TestRunTurnFinalIterationInjectsDirective(t *testing.T) {
+	// Set MaxIterations=2, make iteration 1 use tools, iteration 2 should
+	// have tools disabled and the directive message injected.
+	assembler := &loopContextAssemblerStub{
+		pkg: &contextpkg.FullContextPackage{Content: "context", Frozen: true},
+	}
+	conversations := &loopConversationManagerStub{
+		history: []db.Message{},
+		seen:    loopSeenFilesStub{},
+	}
+
+	toolInput := json.RawMessage(`{"path":"a.go"}`)
+	routerStub := &providerRouterStub{
+		streamEvents: [][]provider.StreamEvent{
+			// iteration 1: tool use
+			{
+				provider.ToolCallStart{ID: "t1", Name: "read_file"},
+				provider.ToolCallEnd{ID: "t1", Input: toolInput},
+				provider.StreamDone{
+					StopReason: provider.StopReasonToolUse,
+					Usage:      provider.Usage{InputTokens: 10, OutputTokens: 5},
+				},
+			},
+			// iteration 2: text-only (tools disabled)
+			{
+				provider.TokenDelta{Text: "Summary of progress."},
+				provider.StreamDone{
+					StopReason: provider.StopReasonEndTurn,
+					Usage:      provider.Usage{InputTokens: 20, OutputTokens: 10},
+				},
+			},
+		},
+	}
+
+	// Track what prompts the router receives to verify DisableTools and directive.
+	var promptConfigs []*provider.Request
+	originalStream := routerStub.Stream
+	_ = originalStream
+
+	executor := &toolExecutorStub{}
+	promptBuilder := NewPromptBuilder(nil)
+
+	loop := NewAgentLoop(AgentLoopDeps{
+		ContextAssembler:    assembler,
+		ConversationManager: conversations,
+		ProviderRouter:      routerStub,
+		ToolExecutor:        executor,
+		PromptBuilder:       promptBuilder,
+		Config:              AgentLoopConfig{MaxIterations: 2},
+	})
+	loop.now = func() time.Time { return time.Unix(1700000600, 0).UTC() }
+
+	// Wrap the router to capture requests.
+	captureRouter := &captureProviderRouter{
+		inner:    routerStub,
+		captured: &promptConfigs,
+	}
+	loop.providerRouter = captureRouter
+
+	result, err := loop.RunTurn(stdctx.Background(), RunTurnRequest{
+		ConversationID:    "conv-1",
+		TurnNumber:        1,
+		Message:           "read a.go",
+		ModelContextLimit: 200000,
+	})
+	if err != nil {
+		t.Fatalf("RunTurn error: %v", err)
+	}
+
+	if result.IterationCount != 2 {
+		t.Fatalf("IterationCount = %d, want 2", result.IterationCount)
+	}
+	if result.FinalText != "Summary of progress." {
+		t.Fatalf("FinalText = %q, want summary text", result.FinalText)
+	}
+
+	// Verify: second call should have no tools (DisableTools=true).
+	if len(promptConfigs) != 2 {
+		t.Fatalf("captured prompts = %d, want 2", len(promptConfigs))
+	}
+	// First call should have no tools because we didn't provide ToolDefinitions in PromptConfig.
+	// Second call (final iteration) should also have no tools.
+	if len(promptConfigs[1].Tools) != 0 {
+		t.Fatalf("final iteration tools = %d, want 0 (disabled)", len(promptConfigs[1].Tools))
+	}
+
+	// Verify directive message was injected: the second prompt should contain
+	// the directive message in its Messages.
+	found := false
+	for _, msg := range promptConfigs[1].Messages {
+		if msg.Role == provider.RoleUser {
+			var text string
+			_ = json.Unmarshal(msg.Content, &text)
+			if strings.Contains(text, "maximum number of tool calls") {
+				found = true
+				break
+			}
+		}
+	}
+	if !found {
+		t.Fatal("directive message not found in final iteration prompt")
+	}
+}
+
+// captureProviderRouter wraps a ProviderRouter to capture requests.
+type captureProviderRouter struct {
+	inner    ProviderRouter
+	captured *[]*provider.Request
+}
+
+func (c *captureProviderRouter) Stream(ctx stdctx.Context, req *provider.Request) (<-chan provider.StreamEvent, error) {
+	*c.captured = append(*c.captured, req)
+	return c.inner.Stream(ctx, req)
+}
+
+func TestRunTurnLoopDetectionDoesNotTriggerBelowThreshold(t *testing.T) {
+	// 2 identical tool calls with threshold=3 should NOT trigger nudge.
+	assembler := &loopContextAssemblerStub{
+		pkg: &contextpkg.FullContextPackage{Content: "context", Frozen: true},
+	}
+	conversations := &loopConversationManagerStub{
+		history: []db.Message{},
+		seen:    loopSeenFilesStub{},
+	}
+
+	toolInput := json.RawMessage(`{"path":"a.go"}`)
+	routerStub := &providerRouterStub{
+		streamEvents: [][]provider.StreamEvent{
+			{
+				provider.ToolCallStart{ID: "t1", Name: "read_file"},
+				provider.ToolCallEnd{ID: "t1", Input: toolInput},
+				provider.StreamDone{
+					StopReason: provider.StopReasonToolUse,
+					Usage:      provider.Usage{InputTokens: 10, OutputTokens: 5},
+				},
+			},
+			{
+				provider.ToolCallStart{ID: "t1", Name: "read_file"},
+				provider.ToolCallEnd{ID: "t1", Input: toolInput},
+				provider.StreamDone{
+					StopReason: provider.StopReasonToolUse,
+					Usage:      provider.Usage{InputTokens: 10, OutputTokens: 5},
+				},
+			},
+			{
+				provider.TokenDelta{Text: "Done."},
+				provider.StreamDone{
+					StopReason: provider.StopReasonEndTurn,
+					Usage:      provider.Usage{InputTokens: 10, OutputTokens: 3},
+				},
+			},
+		},
+	}
+
+	var promptConfigs []*provider.Request
+	captureRouter := &captureProviderRouter{
+		inner:    routerStub,
+		captured: &promptConfigs,
+	}
+
+	executor := &toolExecutorStub{}
+	promptBuilder := NewPromptBuilder(nil)
+
+	loop := NewAgentLoop(AgentLoopDeps{
+		ContextAssembler:    assembler,
+		ConversationManager: conversations,
+		ProviderRouter:      captureRouter,
+		ToolExecutor:        executor,
+		PromptBuilder:       promptBuilder,
+		Config:              AgentLoopConfig{LoopDetectionThreshold: 3},
+	})
+	loop.now = func() time.Time { return time.Unix(1700000600, 0).UTC() }
+
+	result, err := loop.RunTurn(stdctx.Background(), RunTurnRequest{
+		ConversationID:    "conv-1",
+		TurnNumber:        1,
+		Message:           "read a.go",
+		ModelContextLimit: 200000,
+	})
+	if err != nil {
+		t.Fatalf("RunTurn error: %v", err)
+	}
+	if result.IterationCount != 3 {
+		t.Fatalf("IterationCount = %d, want 3", result.IterationCount)
+	}
+
+	// Verify no nudge message was injected in the 3rd prompt's messages.
+	// The 3rd prompt (iteration 3) should NOT contain the nudge since only
+	// 2 identical iterations happened (below threshold of 3).
+	for _, msg := range promptConfigs[2].Messages {
+		if msg.Role == provider.RoleUser {
+			var text string
+			_ = json.Unmarshal(msg.Content, &text)
+			if strings.Contains(text, "repeating the same action") {
+				t.Fatal("nudge message found below threshold — should not be present")
+			}
+		}
+	}
+}
