@@ -2,8 +2,13 @@ package openai
 
 import (
 	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
+
+	"github.com/ponchione/sirtopham/internal/provider"
 )
 
 func TestNewOpenAIProvider_DirectAPIKey(t *testing.T) {
@@ -207,5 +212,125 @@ func TestOpenAIProvider_ContextLength(t *testing.T) {
 	})
 	if p.ContextLength() != 16384 {
 		t.Errorf("expected 16384, got %d", p.ContextLength())
+	}
+}
+
+func TestComplete_ReturnsProviderError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(429)
+		w.Write([]byte(`{"error":"rate limited"}`))
+	}))
+	defer srv.Close()
+
+	p, _ := NewOpenAIProvider(OpenAIConfig{
+		Name:          "test",
+		BaseURL:       srv.URL,
+		Model:         "test-model",
+		ContextLength: 4096,
+	})
+
+	_, err := p.Complete(context.Background(), &provider.Request{MaxTokens: 100})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	var pe *provider.ProviderError
+	if !errors.As(err, &pe) {
+		t.Fatalf("expected *provider.ProviderError, got %T: %v", err, err)
+	}
+	if pe.StatusCode != 429 {
+		t.Errorf("expected status 429, got %d", pe.StatusCode)
+	}
+	if !pe.Retriable {
+		t.Error("expected Retriable=true for 429")
+	}
+}
+
+func TestComplete_ReturnsProviderError_AuthFailure(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(401)
+		w.Write([]byte(`{"error":"unauthorized"}`))
+	}))
+	defer srv.Close()
+
+	p, _ := NewOpenAIProvider(OpenAIConfig{
+		Name:          "test",
+		BaseURL:       srv.URL,
+		Model:         "test-model",
+		ContextLength: 4096,
+	})
+
+	_, err := p.Complete(context.Background(), &provider.Request{MaxTokens: 100})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	var pe *provider.ProviderError
+	if !errors.As(err, &pe) {
+		t.Fatalf("expected *provider.ProviderError, got %T: %v", err, err)
+	}
+	if pe.StatusCode != 401 {
+		t.Errorf("expected status 401, got %d", pe.StatusCode)
+	}
+	if pe.Retriable {
+		t.Error("expected Retriable=false for 401")
+	}
+}
+
+func TestComplete_ReturnsProviderError_ServerError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(500)
+		w.Write([]byte(`{"error":"internal server error"}`))
+	}))
+	defer srv.Close()
+
+	p, _ := NewOpenAIProvider(OpenAIConfig{
+		Name:          "test",
+		BaseURL:       srv.URL,
+		Model:         "test-model",
+		ContextLength: 4096,
+	})
+
+	_, err := p.Complete(context.Background(), &provider.Request{MaxTokens: 100})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	var pe *provider.ProviderError
+	if !errors.As(err, &pe) {
+		t.Fatalf("expected *provider.ProviderError, got %T: %v", err, err)
+	}
+	if pe.StatusCode != 500 {
+		t.Errorf("expected status 500, got %d", pe.StatusCode)
+	}
+	if !pe.Retriable {
+		t.Error("expected Retriable=true for 500")
+	}
+}
+
+func TestStream_ReturnsProviderError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(429)
+		w.Write([]byte(`{"error":"rate limited"}`))
+	}))
+	defer srv.Close()
+
+	p, _ := NewOpenAIProvider(OpenAIConfig{
+		Name:          "test",
+		BaseURL:       srv.URL,
+		Model:         "test-model",
+		ContextLength: 4096,
+	})
+
+	_, err := p.Stream(context.Background(), &provider.Request{MaxTokens: 100})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	var pe *provider.ProviderError
+	if !errors.As(err, &pe) {
+		t.Fatalf("expected *provider.ProviderError, got %T: %v", err, err)
+	}
+	if pe.StatusCode != 429 {
+		t.Errorf("expected status 429, got %d", pe.StatusCode)
+	}
+	if !pe.Retriable {
+		t.Error("expected Retriable=true for 429")
 	}
 }

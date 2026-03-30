@@ -79,12 +79,30 @@ func (p *OpenAIProvider) Stream(ctx context.Context, req *provider.Request) (<-c
 	resp, err := p.client.Do(httpReq)
 	if err != nil {
 		if isConnectionError(err) {
-			return nil, fmt.Errorf("OpenAI-compatible provider '%s' at %s is not reachable. Is the model server running?", p.name, p.baseURL)
+			return nil, &provider.ProviderError{
+				Provider:   p.name,
+				StatusCode: 0,
+				Message:    fmt.Sprintf("OpenAI-compatible provider '%s' at %s is not reachable. Is the model server running?", p.name, p.baseURL),
+				Retriable:  false,
+				Err:        err,
+			}
 		}
 		if ctx.Err() != nil {
-			return nil, ctx.Err()
+			return nil, &provider.ProviderError{
+				Provider:   p.name,
+				StatusCode: 0,
+				Message:    ctx.Err().Error(),
+				Retriable:  false,
+				Err:        ctx.Err(),
+			}
 		}
-		return nil, fmt.Errorf("OpenAI-compatible provider '%s': request failed: %w", p.name, err)
+		return nil, &provider.ProviderError{
+			Provider:   p.name,
+			StatusCode: 0,
+			Message:    fmt.Sprintf("OpenAI-compatible provider '%s': request failed: %s", p.name, err),
+			Retriable:  true,
+			Err:        err,
+		}
 	}
 
 	// Handle non-200 responses before streaming.
@@ -92,13 +110,33 @@ func (p *OpenAIProvider) Stream(ctx context.Context, req *provider.Request) (<-c
 		resp.Body.Close()
 		switch resp.StatusCode {
 		case 401, 403:
-			return nil, fmt.Errorf("OpenAI-compatible provider '%s' authentication failed. Check API key configuration.", p.name)
+			return nil, &provider.ProviderError{
+				Provider:   p.name,
+				StatusCode: resp.StatusCode,
+				Message:    fmt.Sprintf("OpenAI-compatible provider '%s' authentication failed. Check API key configuration.", p.name),
+				Retriable:  false,
+			}
 		case 429:
-			return nil, fmt.Errorf("OpenAI-compatible provider '%s': rate limited", p.name)
+			return nil, &provider.ProviderError{
+				Provider:   p.name,
+				StatusCode: resp.StatusCode,
+				Message:    fmt.Sprintf("OpenAI-compatible provider '%s': rate limited", p.name),
+				Retriable:  true,
+			}
 		case 500, 502, 503:
-			return nil, fmt.Errorf("OpenAI-compatible provider '%s': server error (HTTP %d)", p.name, resp.StatusCode)
+			return nil, &provider.ProviderError{
+				Provider:   p.name,
+				StatusCode: resp.StatusCode,
+				Message:    fmt.Sprintf("OpenAI-compatible provider '%s': server error (HTTP %d)", p.name, resp.StatusCode),
+				Retriable:  true,
+			}
 		default:
-			return nil, fmt.Errorf("OpenAI-compatible provider '%s': unexpected HTTP status %d", p.name, resp.StatusCode)
+			return nil, &provider.ProviderError{
+				Provider:   p.name,
+				StatusCode: resp.StatusCode,
+				Message:    fmt.Sprintf("OpenAI-compatible provider '%s': unexpected HTTP status %d", p.name, resp.StatusCode),
+				Retriable:  false,
+			}
 		}
 	}
 

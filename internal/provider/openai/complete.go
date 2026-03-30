@@ -71,20 +71,44 @@ func (p *OpenAIProvider) Complete(ctx context.Context, req *provider.Request) (*
 		if err != nil {
 			// Check for connection refused / unreachable errors.
 			if isConnectionError(err) {
-				return nil, fmt.Errorf("OpenAI-compatible provider '%s' at %s is not reachable. Is the model server running?", p.name, p.baseURL)
+				return nil, &provider.ProviderError{
+					Provider:   p.name,
+					StatusCode: 0,
+					Message:    fmt.Sprintf("OpenAI-compatible provider '%s' at %s is not reachable. Is the model server running?", p.name, p.baseURL),
+					Retriable:  false,
+					Err:        err,
+				}
 			}
 			// Context cancellation.
 			if ctx.Err() != nil {
-				return nil, ctx.Err()
+				return nil, &provider.ProviderError{
+					Provider:   p.name,
+					StatusCode: 0,
+					Message:    ctx.Err().Error(),
+					Retriable:  false,
+					Err:        ctx.Err(),
+				}
 			}
-			lastErr = fmt.Errorf("OpenAI-compatible provider '%s': request failed: %w", p.name, err)
+			lastErr = &provider.ProviderError{
+				Provider:   p.name,
+				StatusCode: 0,
+				Message:    fmt.Sprintf("OpenAI-compatible provider '%s': request failed: %s", p.name, err),
+				Retriable:  true,
+				Err:        err,
+			}
 			continue
 		}
 
 		respBody, readErr := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		if readErr != nil {
-			lastErr = fmt.Errorf("OpenAI-compatible provider '%s': failed to read response: %w", p.name, readErr)
+			lastErr = &provider.ProviderError{
+				Provider:   p.name,
+				StatusCode: 0,
+				Message:    fmt.Sprintf("OpenAI-compatible provider '%s': failed to read response: %s", p.name, readErr),
+				Retriable:  true,
+				Err:        readErr,
+			}
 			continue
 		}
 
@@ -92,23 +116,48 @@ func (p *OpenAIProvider) Complete(ctx context.Context, req *provider.Request) (*
 		case 200:
 			var chatResp chatResponse
 			if err := json.Unmarshal(respBody, &chatResp); err != nil {
-				return nil, fmt.Errorf("OpenAI-compatible provider '%s': failed to parse response JSON: %s", p.name, err)
+				return nil, &provider.ProviderError{
+					Provider:   p.name,
+					StatusCode: resp.StatusCode,
+					Message:    fmt.Sprintf("OpenAI-compatible provider '%s': failed to parse response JSON: %s", p.name, err),
+					Retriable:  false,
+				}
 			}
 			return translateResponse(p.name, &chatResp)
 
 		case 401, 403:
-			return nil, fmt.Errorf("OpenAI-compatible provider '%s' authentication failed. Check API key configuration.", p.name)
+			return nil, &provider.ProviderError{
+				Provider:   p.name,
+				StatusCode: resp.StatusCode,
+				Message:    fmt.Sprintf("OpenAI-compatible provider '%s' authentication failed. Check API key configuration.", p.name),
+				Retriable:  false,
+			}
 
 		case 429:
-			lastErr = fmt.Errorf("OpenAI-compatible provider '%s': rate limited after %d attempts", p.name, maxRetryAttempts)
+			lastErr = &provider.ProviderError{
+				Provider:   p.name,
+				StatusCode: resp.StatusCode,
+				Message:    fmt.Sprintf("OpenAI-compatible provider '%s': rate limited after %d attempts", p.name, maxRetryAttempts),
+				Retriable:  true,
+			}
 			continue
 
 		case 500, 502, 503:
-			lastErr = fmt.Errorf("OpenAI-compatible provider '%s': server error (HTTP %d) after %d attempts", p.name, resp.StatusCode, maxRetryAttempts)
+			lastErr = &provider.ProviderError{
+				Provider:   p.name,
+				StatusCode: resp.StatusCode,
+				Message:    fmt.Sprintf("OpenAI-compatible provider '%s': server error (HTTP %d) after %d attempts", p.name, resp.StatusCode, maxRetryAttempts),
+				Retriable:  true,
+			}
 			continue
 
 		default:
-			return nil, fmt.Errorf("OpenAI-compatible provider '%s': unexpected HTTP status %d", p.name, resp.StatusCode)
+			return nil, &provider.ProviderError{
+				Provider:   p.name,
+				StatusCode: resp.StatusCode,
+				Message:    fmt.Sprintf("OpenAI-compatible provider '%s': unexpected HTTP status %d", p.name, resp.StatusCode),
+				Retriable:  false,
+			}
 		}
 	}
 
