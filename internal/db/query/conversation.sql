@@ -53,6 +53,29 @@ FROM messages
 WHERE conversation_id = ?
 ORDER BY sequence;
 
+-- name: InsertIterationMessage :exec
+INSERT INTO messages (
+    conversation_id,
+    role,
+    content,
+    tool_use_id,
+    tool_name,
+    turn_number,
+    iteration,
+    sequence,
+    created_at
+) VALUES (
+    ?,
+    ?,
+    ?,
+    ?,
+    ?,
+    ?,
+    ?,
+    ?,
+    ?
+);
+
 -- name: SearchConversations :many
 SELECT c.id, c.title, c.updated_at, snippet(messages_fts, 0, '<b>', '</b>', '...', 32) AS snippet
 FROM messages_fts

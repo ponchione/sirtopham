@@ -10,6 +10,57 @@ import (
 	"database/sql"
 )
 
+const insertIterationMessage = `-- name: InsertIterationMessage :exec
+INSERT INTO messages (
+    conversation_id,
+    role,
+    content,
+    tool_use_id,
+    tool_name,
+    turn_number,
+    iteration,
+    sequence,
+    created_at
+) VALUES (
+    ?,
+    ?,
+    ?,
+    ?,
+    ?,
+    ?,
+    ?,
+    ?,
+    ?
+)
+`
+
+type InsertIterationMessageParams struct {
+	ConversationID string         `json:"conversation_id"`
+	Role           string         `json:"role"`
+	Content        sql.NullString `json:"content"`
+	ToolUseID      sql.NullString `json:"tool_use_id"`
+	ToolName       sql.NullString `json:"tool_name"`
+	TurnNumber     int64          `json:"turn_number"`
+	Iteration      int64          `json:"iteration"`
+	Sequence       float64        `json:"sequence"`
+	CreatedAt      string         `json:"created_at"`
+}
+
+func (q *Queries) InsertIterationMessage(ctx context.Context, arg InsertIterationMessageParams) error {
+	_, err := q.db.ExecContext(ctx, insertIterationMessage,
+		arg.ConversationID,
+		arg.Role,
+		arg.Content,
+		arg.ToolUseID,
+		arg.ToolName,
+		arg.TurnNumber,
+		arg.Iteration,
+		arg.Sequence,
+		arg.CreatedAt,
+	)
+	return err
+}
+
 const insertUserMessage = `-- name: InsertUserMessage :exec
 INSERT INTO messages (
     conversation_id,

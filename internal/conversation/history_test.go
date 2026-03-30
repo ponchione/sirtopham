@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -54,6 +55,212 @@ func TestHistoryManagerPersistUserMessageAssignsSequenceAndTouchesConversation(t
 	wantUpdatedAt := manager.now().Format(time.RFC3339)
 	if updatedAt != wantUpdatedAt {
 		t.Fatalf("updated_at = %q, want %q", updatedAt, wantUpdatedAt)
+	}
+}
+
+func TestHistoryManagerPersistIterationInsertsAssistantAndToolMessages(t *testing.T) {
+	ctx := context.Background()
+	database := newHistoryTestDB(t)
+	queries := db.New(database)
+	conversationID := seedHistoryConversation(t, database)
+
+	manager := NewHistoryManager(database, nil)
+	manager.now = func() time.Time { return time.Unix(1700000850, 0).UTC() }
+
+	// First persist a user message to establish sequence baseline.
+	if err := manager.PersistUserMessage(ctx, conversationID, 1, "fix auth"); err != nil {
+		t.Fatalf("PersistUserMessage returned error: %v", err)
+	}
+
+	// Now persist the first iteration: assistant + two tool results.
+	iterMsgs := []IterationMessage{
+		{
+			Role:    "assistant",
+			Content: `[{"type":"text","text":"I'll check the auth code."},{"type":"tool_use","id":"tc1","name":"file_read","input":{"path":"auth.go"}},{"type":"tool_use","id":"tc2","name":"search_text","input":{"pattern":"ValidateToken"}}]`,
+		},
+		{
+			Role:      "tool",
+			Content:   "package auth\n\nfunc ValidateToken...",
+			ToolUseID: "tc1",
+			ToolName:  "file_read",
+		},
+		{
+			Role:      "tool",
+			Content:   "auth.go:15: func ValidateToken...",
+			ToolUseID: "tc2",
+			ToolName:  "search_text",
+		},
+	}
+	if err := manager.PersistIteration(ctx, conversationID, 1, 1, iterMsgs); err != nil {
+		t.Fatalf("PersistIteration returned error: %v", err)
+	}
+
+	rows, err := queries.ListTurnMessages(ctx, conversationID)
+	if err != nil {
+		t.Fatalf("ListTurnMessages returned error: %v", err)
+	}
+	// 1 user + 3 iteration messages = 4
+	if len(rows) != 4 {
+		t.Fatalf("row count = %d, want 4", len(rows))
+	}
+
+	// Verify sequences are monotonically increasing.
+	for i := 0; i < len(rows); i++ {
+		if rows[i].Sequence != float64(i) {
+			t.Fatalf("rows[%d].Sequence = %v, want %v", i, rows[i].Sequence, float64(i))
+		}
+	}
+
+	// Verify the roles.
+	wantRoles := []string{"user", "assistant", "tool", "tool"}
+	for i, want := range wantRoles {
+		if rows[i].Role != want {
+			t.Fatalf("rows[%d].Role = %q, want %q", i, rows[i].Role, want)
+		}
+	}
+
+	// Verify iteration numbers: user gets iteration=1 (from InsertUserMessage), iteration messages get iteration=1.
+	for i := 1; i < len(rows); i++ {
+		if rows[i].Iteration != 1 {
+			t.Fatalf("rows[%d].Iteration = %d, want 1", i, rows[i].Iteration)
+		}
+	}
+
+	// Verify tool metadata.
+	if rows[2].ToolUseID.String != "tc1" || rows[2].ToolName.String != "file_read" {
+		t.Fatalf("rows[2] tool fields = (%q, %q), want (tc1, file_read)", rows[2].ToolUseID.String, rows[2].ToolName.String)
+	}
+	if rows[3].ToolUseID.String != "tc2" || rows[3].ToolName.String != "search_text" {
+		t.Fatalf("rows[3] tool fields = (%q, %q), want (tc2, search_text)", rows[3].ToolUseID.String, rows[3].ToolName.String)
+	}
+
+	// Verify conversation updated_at was touched.
+	var updatedAt string
+	if err := database.QueryRowContext(ctx, `SELECT updated_at FROM conversations WHERE id = ?`, conversationID).Scan(&updatedAt); err != nil {
+		t.Fatalf("query updated_at returned error: %v", err)
+	}
+	wantUpdatedAt := manager.now().Format(time.RFC3339)
+	if updatedAt != wantUpdatedAt {
+		t.Fatalf("updated_at = %q, want %q", updatedAt, wantUpdatedAt)
+	}
+}
+
+func TestHistoryManagerPersistIterationMultipleIterationsIncrementSequence(t *testing.T) {
+	ctx := context.Background()
+	database := newHistoryTestDB(t)
+	queries := db.New(database)
+	conversationID := seedHistoryConversation(t, database)
+
+	manager := NewHistoryManager(database, nil)
+	manager.now = func() time.Time { return time.Unix(1700000900, 0).UTC() }
+
+	if err := manager.PersistUserMessage(ctx, conversationID, 1, "fix auth"); err != nil {
+		t.Fatalf("PersistUserMessage returned error: %v", err)
+	}
+
+	// Iteration 1: assistant + tool
+	iter1 := []IterationMessage{
+		{Role: "assistant", Content: `[{"type":"text","text":"checking..."},{"type":"tool_use","id":"tc1","name":"file_read","input":{}}]`},
+		{Role: "tool", Content: "file contents", ToolUseID: "tc1", ToolName: "file_read"},
+	}
+	if err := manager.PersistIteration(ctx, conversationID, 1, 1, iter1); err != nil {
+		t.Fatalf("PersistIteration(iter1) returned error: %v", err)
+	}
+
+	// Iteration 2: assistant + tool
+	iter2 := []IterationMessage{
+		{Role: "assistant", Content: `[{"type":"text","text":"fixing now"},{"type":"tool_use","id":"tc2","name":"file_edit","input":{}}]`},
+		{Role: "tool", Content: "edit applied", ToolUseID: "tc2", ToolName: "file_edit"},
+	}
+	if err := manager.PersistIteration(ctx, conversationID, 1, 2, iter2); err != nil {
+		t.Fatalf("PersistIteration(iter2) returned error: %v", err)
+	}
+
+	// Iteration 3: final text-only assistant
+	iter3 := []IterationMessage{
+		{Role: "assistant", Content: `[{"type":"text","text":"Done. The issue was..."}]`},
+	}
+	if err := manager.PersistIteration(ctx, conversationID, 1, 3, iter3); err != nil {
+		t.Fatalf("PersistIteration(iter3) returned error: %v", err)
+	}
+
+	rows, err := queries.ListTurnMessages(ctx, conversationID)
+	if err != nil {
+		t.Fatalf("ListTurnMessages returned error: %v", err)
+	}
+	// 1 user + 2 iter1 + 2 iter2 + 1 iter3 = 6
+	if len(rows) != 6 {
+		t.Fatalf("row count = %d, want 6", len(rows))
+	}
+
+	// Verify continuous sequences.
+	for i := 0; i < len(rows); i++ {
+		if rows[i].Sequence != float64(i) {
+			t.Fatalf("rows[%d].Sequence = %v, want %v", i, rows[i].Sequence, float64(i))
+		}
+	}
+
+	// Verify iteration assignments.
+	wantIter := []int64{1, 1, 1, 2, 2, 3}
+	for i, want := range wantIter {
+		if rows[i].Iteration != want {
+			t.Fatalf("rows[%d].Iteration = %d, want %d", i, rows[i].Iteration, want)
+		}
+	}
+}
+
+func TestHistoryManagerPersistIterationRejectsEmptyMessages(t *testing.T) {
+	database := newHistoryTestDB(t)
+	manager := NewHistoryManager(database, nil)
+
+	err := manager.PersistIteration(context.Background(), "conv-1", 1, 1, nil)
+	if err == nil {
+		t.Fatal("PersistIteration(nil messages) error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "no messages provided") {
+		t.Fatalf("error = %q, want 'no messages provided'", err.Error())
+	}
+
+	err = manager.PersistIteration(context.Background(), "conv-1", 1, 1, []IterationMessage{})
+	if err == nil {
+		t.Fatal("PersistIteration(empty messages) error = nil, want error")
+	}
+}
+
+func TestHistoryManagerPersistIterationRollsBackOnInsertFailure(t *testing.T) {
+	ctx := context.Background()
+	database := newHistoryTestDB(t)
+	queries := db.New(database)
+	conversationID := seedHistoryConversation(t, database)
+
+	manager := NewHistoryManager(database, nil)
+	manager.now = func() time.Time { return time.Unix(1700000950, 0).UTC() }
+
+	if err := manager.PersistUserMessage(ctx, conversationID, 1, "hello"); err != nil {
+		t.Fatalf("PersistUserMessage returned error: %v", err)
+	}
+
+	// Insert an iteration message with an invalid role to trigger a CHECK constraint failure.
+	badMsgs := []IterationMessage{
+		{Role: "assistant", Content: `[{"type":"text","text":"ok"}]`},
+		{Role: "invalid_role", Content: "this should fail the CHECK constraint"},
+	}
+	err := manager.PersistIteration(ctx, conversationID, 1, 1, badMsgs)
+	if err == nil {
+		t.Fatal("PersistIteration with bad role error = nil, want CHECK constraint error")
+	}
+
+	// Verify the assistant message from the failed transaction was NOT persisted.
+	rows, err := queries.ListTurnMessages(ctx, conversationID)
+	if err != nil {
+		t.Fatalf("ListTurnMessages returned error: %v", err)
+	}
+	// Only the original user message should exist.
+	if len(rows) != 1 {
+		t.Fatalf("row count = %d, want 1 (only user message after rollback)", len(rows))
+	}
+	if rows[0].Role != "user" {
+		t.Fatalf("rows[0].Role = %q, want user", rows[0].Role)
 	}
 }
 
