@@ -203,6 +203,7 @@ func TestNewAgentLoopPrepareTurnContextCallsLayer3AndEmitsEvents(t *testing.T) {
 		ContextAssembler:    assembler,
 		ConversationManager: conversations,
 		EventSink:           sink,
+		Config:              AgentLoopConfig{EmitContextDebug: true},
 	})
 	loop.now = func() time.Time { return time.Unix(1700000500, 0).UTC() }
 
