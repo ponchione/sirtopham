@@ -12,6 +12,8 @@ import (
 	"github.com/ponchione/sirtopham/internal/provider"
 )
 
+const maxResponseSize = 1 << 20
+
 // API response types for the Anthropic Messages API.
 
 type apiResponse struct {
@@ -55,11 +57,11 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *provider.Request)
 		// Check for context cancellation.
 		if ctx.Err() != nil {
 			return nil, &provider.ProviderError{
-				Provider:  "anthropic",
+				Provider:   "anthropic",
 				StatusCode: 0,
-				Message:   "request cancelled",
-				Retriable: false,
-				Err:       ctx.Err(),
+				Message:    "request cancelled",
+				Retriable:  false,
+				Err:        ctx.Err(),
 			}
 		}
 		return nil, err
@@ -68,25 +70,25 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *provider.Request)
 
 	latencyMs := time.Since(start).Milliseconds()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readResponseBody(resp.Body)
 	if err != nil {
 		return nil, &provider.ProviderError{
-			Provider:  "anthropic",
+			Provider:   "anthropic",
 			StatusCode: 0,
-			Message:   fmt.Sprintf("failed to read response body: %s", err),
-			Retriable: false,
-			Err:       err,
+			Message:    fmt.Sprintf("failed to read response body: %s", err),
+			Retriable:  false,
+			Err:        err,
 		}
 	}
 
 	var apiResp apiResponse
 	if err := json.Unmarshal(body, &apiResp); err != nil {
 		return nil, &provider.ProviderError{
-			Provider:  "anthropic",
+			Provider:   "anthropic",
 			StatusCode: 0,
-			Message:   fmt.Sprintf("failed to parse response: %s", err),
-			Retriable: false,
-			Err:       err,
+			Message:    fmt.Sprintf("failed to parse response: %s", err),
+			Retriable:  false,
+			Err:        err,
 		}
 	}
 
@@ -134,6 +136,10 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *provider.Request)
 		StopReason: stopReason,
 		LatencyMs:  latencyMs,
 	}, nil
+}
+
+func readResponseBody(body io.Reader) ([]byte, error) {
+	return io.ReadAll(io.LimitReader(body, maxResponseSize))
 }
 
 // mapStopReason converts an Anthropic stop_reason string to a provider.StopReason.
