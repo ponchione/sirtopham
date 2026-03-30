@@ -4,6 +4,42 @@ FROM messages
 WHERE conversation_id = ? AND is_compressed = 0
 ORDER BY sequence;
 
+-- name: ListActiveMessages :many
+SELECT id, conversation_id, role, content, tool_use_id, tool_name, turn_number, iteration, sequence,
+       is_compressed, is_summary, compressed_turn_start, compressed_turn_end, created_at
+FROM messages
+WHERE conversation_id = ? AND is_compressed = 0
+ORDER BY sequence;
+
+-- name: NextMessageSequence :one
+SELECT COALESCE(MAX(sequence) + 1.0, 0.0)
+FROM messages
+WHERE conversation_id = ?;
+
+-- name: InsertUserMessage :exec
+INSERT INTO messages (
+    conversation_id,
+    role,
+    content,
+    turn_number,
+    iteration,
+    sequence,
+    created_at
+) VALUES (
+    ?,
+    'user',
+    ?,
+    ?,
+    1,
+    ?,
+    ?
+);
+
+-- name: TouchConversationUpdatedAt :exec
+UPDATE conversations
+SET updated_at = ?
+WHERE id = ?;
+
 -- name: ListConversations :many
 SELECT id, title, updated_at
 FROM conversations
