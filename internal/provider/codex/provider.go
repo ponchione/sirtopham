@@ -71,6 +71,9 @@ func (p *CodexProvider) Name() string {
 	return "codex"
 }
 
+// Compile-time assertion that CodexProvider satisfies provider.Provider.
+var _ provider.Provider = (*CodexProvider)(nil)
+
 // Models returns the static list of models supported by the Codex provider.
 func (p *CodexProvider) Models(ctx context.Context) ([]provider.Model, error) {
 	return []provider.Model{
