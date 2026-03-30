@@ -122,7 +122,8 @@ type AgentLoop struct {
 	events              *MultiSink
 	cfg                 AgentLoopConfig
 	logger              *slog.Logger
-	now                 func() time.Time
+	now     func() time.Time
+	sleepFn func(ctx stdctx.Context, d time.Duration) error
 
 	// cancelMu protects cancelFn for thread-safe Cancel() calls.
 	cancelMu sync.Mutex
@@ -331,32 +332,24 @@ func (l *AgentLoop) RunTurn(ctx stdctx.Context, req RunTurnRequest) (*TurnResult
 			return nil, fmt.Errorf("agent loop: build prompt for iteration %d: %w", iteration, err)
 		}
 
-		// 3c: Stream LLM request.
+		// 3c: Stream LLM request with retry for retriable errors.
 		l.emit(StatusEvent{State: StateWaitingForLLM, Time: l.now()})
 
-		streamCh, err := l.providerRouter.Stream(ctx, promptReq)
+		result, err := l.streamWithRetry(ctx, promptReq, iteration, req.ConversationID)
 		if err != nil {
 			if isCancelled(ctx) {
 				return nil, l.handleCancellation(req.ConversationID, req.TurnNumber, iteration, completedIterations, ctx.Err())
 			}
-			return nil, fmt.Errorf("agent loop: stream request for iteration %d: %w", iteration, err)
-		}
-
-		result, err := consumeStream(ctx, streamCh, l.emit, func() string {
-			return l.now().UTC().Format(time.RFC3339)
-		})
-		if err != nil {
-			if isCancelled(ctx) {
-				// Partial assistant message from the in-flight stream is discarded.
-				return nil, l.handleCancellation(req.ConversationID, req.TurnNumber, iteration, completedIterations, ctx.Err())
-			}
-			return nil, fmt.Errorf("agent loop: consume stream for iteration %d: %w", iteration, err)
+			return nil, err
 		}
 
 		totalUsage = totalUsage.Add(result.Usage)
 
+		// Sanitize content blocks (replace invalid tool_use JSON inputs) before serialization.
+		sanitizedBlocks := sanitizeContentBlocks(result.ContentBlocks)
+
 		// Serialize assistant content blocks for persistence.
-		assistantContentJSON, err := contentBlocksToJSON(result.ContentBlocks)
+		assistantContentJSON, err := contentBlocksToJSON(sanitizedBlocks)
 		if err != nil {
 			return nil, fmt.Errorf("agent loop: serialize assistant content for iteration %d: %w", iteration, err)
 		}
@@ -397,7 +390,9 @@ func (l *AgentLoop) RunTurn(ctx stdctx.Context, req RunTurnRequest) (*TurnResult
 			}, nil
 		}
 
-		// 3e: Tool dispatch — execute each tool call.
+		// 3e: Tool dispatch — execute each tool call with error recovery.
+		// Layer 1: tool errors → feed back to LLM as tool result.
+		// Malformed tool calls → synthetic error result with correction guidance.
 		l.emit(StatusEvent{State: StateExecutingTools, Time: l.now()})
 
 		var toolResults []provider.ToolResult
@@ -407,6 +402,39 @@ func (l *AgentLoop) RunTurn(ctx stdctx.Context, req RunTurnRequest) (*TurnResult
 			if isCancelled(ctx) {
 				toolsCancelled = true
 				break
+			}
+
+			// Validate tool call JSON before execution.
+			validation := validateToolCallJSON(tc)
+			if !validation.Valid {
+				// Malformed tool call — do not execute, feed error back to LLM.
+				l.logger.Warn("malformed tool call",
+					"conversation_id", req.ConversationID,
+					"turn", req.TurnNumber,
+					"iteration", iteration,
+					"tool_name", tc.Name,
+					"tool_call_id", tc.ID,
+					"error", validation.ErrorMessage,
+				)
+				l.emit(ErrorEvent{
+					ErrorCode:   ErrorCodeMalformedToolCall,
+					Message:     validation.ErrorMessage,
+					Recoverable: true,
+					Time:        l.now(),
+				})
+				toolResults = append(toolResults, provider.ToolResult{
+					ToolUseID: tc.ID,
+					Content:   validation.ErrorMessage,
+					IsError:   true,
+				})
+				l.emit(ToolCallEndEvent{
+					ToolCallID: tc.ID,
+					Result:     validation.ErrorMessage,
+					Duration:   0,
+					Success:    false,
+					Time:       l.now(),
+				})
+				continue
 			}
 
 			l.emit(ToolCallStartEvent{
@@ -427,12 +455,21 @@ func (l *AgentLoop) RunTurn(ctx stdctx.Context, req RunTurnRequest) (*TurnResult
 			}
 
 			if toolErr != nil {
-				// Tool execution failed — create an error result.
+				// Layer 1: tool execution failed — enrich the error message
+				// and feed it back to the LLM as a tool result so it can
+				// self-correct. Tool errors are NOT turn-ending.
+				enrichedMsg := enrichToolError(tc.Name, toolErr)
 				toolResult = &provider.ToolResult{
 					ToolUseID: tc.ID,
-					Content:   fmt.Sprintf("Error: %s", toolErr.Error()),
+					Content:   enrichedMsg,
 					IsError:   true,
 				}
+				l.emit(ErrorEvent{
+					ErrorCode:   ErrorCodeToolExecution,
+					Message:     enrichedMsg,
+					Recoverable: true,
+					Time:        l.now(),
+				})
 			}
 
 			toolResults = append(toolResults, *toolResult)

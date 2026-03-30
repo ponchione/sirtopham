@@ -184,3 +184,25 @@ func contentBlocksToJSON(blocks []provider.ContentBlock) (string, error) {
 	}
 	return string(data), nil
 }
+
+// sanitizeContentBlocks fixes any content blocks that contain invalid JSON in
+// their Input fields (from malformed LLM tool calls). Invalid Input is replaced
+// with a JSON-serialized error placeholder so that contentBlocksToJSON won't
+// fail during serialization.
+func sanitizeContentBlocks(blocks []provider.ContentBlock) []provider.ContentBlock {
+	sanitized := make([]provider.ContentBlock, len(blocks))
+	copy(sanitized, blocks)
+	for i := range sanitized {
+		if sanitized[i].Type == "tool_use" && len(sanitized[i].Input) > 0 {
+			var parsed interface{}
+			if err := json.Unmarshal(sanitized[i].Input, &parsed); err != nil {
+				// Replace invalid Input with a JSON string describing the error.
+				sanitized[i].Input = json.RawMessage(fmt.Sprintf(
+					`{"_error":"malformed input","_raw":%q}`,
+					string(sanitized[i].Input),
+				))
+			}
+		}
+	}
+	return sanitized
+}

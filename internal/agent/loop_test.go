@@ -638,8 +638,8 @@ func TestRunTurnStreamError(t *testing.T) {
 	if err == nil {
 		t.Fatal("RunTurn error = nil, want stream error")
 	}
-	if !strings.Contains(err.Error(), "stream request") {
-		t.Fatalf("error = %q, want stream request error", err)
+	if !strings.Contains(err.Error(), "stream for iteration") {
+		t.Fatalf("error = %q, want stream error", err)
 	}
 }
 
@@ -1449,5 +1449,294 @@ func TestRunTurnCancelWithDeadlineExceeded(t *testing.T) {
 	}
 	if !foundCancelled {
 		t.Fatal("TurnCancelledEvent not emitted")
+	}
+}
+
+// --- Error recovery integration tests ---
+
+func TestRunTurnMalformedToolCallFeedsBackError(t *testing.T) {
+	sink := NewChannelSink(64)
+	assembler := &loopContextAssemblerStub{
+		pkg: &contextpkg.FullContextPackage{Content: "context", Frozen: true},
+	}
+	conversations := &loopConversationManagerStub{
+		history: []db.Message{},
+		seen:    loopSeenFilesStub{},
+	}
+
+	// Iteration 1: LLM returns a tool call with invalid JSON.
+	// Iteration 2: LLM produces text response after seeing the validation error.
+	routerStub := &providerRouterStub{
+		streamEvents: [][]provider.StreamEvent{
+			// Iteration 1: tool call with invalid JSON args.
+			{
+				provider.ToolCallStart{ID: "tool_bad", Name: "file_read"},
+				provider.ToolCallEnd{ID: "tool_bad", Input: json.RawMessage(`{invalid}`)},
+				provider.StreamDone{
+					StopReason: provider.StopReasonToolUse,
+					Usage:      provider.Usage{InputTokens: 30, OutputTokens: 15},
+				},
+			},
+			// Iteration 2: text-only response.
+			{
+				provider.TokenDelta{Text: "I fixed the JSON."},
+				provider.StreamDone{
+					StopReason: provider.StopReasonEndTurn,
+					Usage:      provider.Usage{InputTokens: 60, OutputTokens: 10},
+				},
+			},
+		},
+	}
+
+	executor := &toolExecutorStub{}
+	loop := NewAgentLoop(AgentLoopDeps{
+		ContextAssembler:    assembler,
+		ConversationManager: conversations,
+		ProviderRouter:      routerStub,
+		ToolExecutor:        executor,
+		PromptBuilder:       NewPromptBuilder(nil),
+		EventSink:           sink,
+	})
+	loop.now = func() time.Time { return time.Unix(1700000800, 0).UTC() }
+
+	result, err := loop.RunTurn(stdctx.Background(), RunTurnRequest{
+		ConversationID:    "conv-malformed-1",
+		TurnNumber:        1,
+		Message:           "read a file",
+		ModelContextLimit: 200000,
+	})
+	if err != nil {
+		t.Fatalf("RunTurn error: %v", err)
+	}
+
+	// Turn should complete successfully — malformed tool call is NOT turn-ending.
+	if result.FinalText != "I fixed the JSON." {
+		t.Fatalf("FinalText = %q, want %q", result.FinalText, "I fixed the JSON.")
+	}
+	if result.IterationCount != 2 {
+		t.Fatalf("IterationCount = %d, want 2", result.IterationCount)
+	}
+
+	// The tool executor should NOT have been called (malformed call skips execution).
+	if len(executor.calls) != 0 {
+		t.Fatalf("executor.calls = %d, want 0 (malformed tool calls should not be executed)", len(executor.calls))
+	}
+
+	// The persisted iteration 1 should have an error tool result.
+	iter1 := conversations.persistIterCalls[0]
+	if len(iter1.messages) < 2 {
+		t.Fatalf("iteration 1 messages = %d, want >= 2", len(iter1.messages))
+	}
+	toolMsg := iter1.messages[1]
+	if toolMsg.Role != "tool" {
+		t.Fatalf("tool msg role = %q, want tool", toolMsg.Role)
+	}
+	if !strings.Contains(toolMsg.Content, "invalid JSON") {
+		t.Fatalf("tool error content = %q, want containing 'invalid JSON'", toolMsg.Content)
+	}
+
+	// Check that a malformed_tool_call ErrorEvent was emitted.
+	var foundMalformed bool
+	for i := 0; i < 50; i++ {
+		select {
+		case e := <-sink.Events():
+			if errEvt, ok := e.(ErrorEvent); ok && errEvt.ErrorCode == ErrorCodeMalformedToolCall {
+				foundMalformed = true
+				if !errEvt.Recoverable {
+					t.Fatal("malformed tool call ErrorEvent.Recoverable = false, want true")
+				}
+			}
+		default:
+		}
+		if foundMalformed {
+			break
+		}
+	}
+	if !foundMalformed {
+		t.Fatal("ErrorEvent with ErrorCodeMalformedToolCall not emitted")
+	}
+}
+
+func TestRunTurnEmptyToolCallArgsFeedsBackError(t *testing.T) {
+	assembler := &loopContextAssemblerStub{
+		pkg: &contextpkg.FullContextPackage{Content: "context", Frozen: true},
+	}
+	conversations := &loopConversationManagerStub{
+		history: []db.Message{},
+		seen:    loopSeenFilesStub{},
+	}
+
+	routerStub := &providerRouterStub{
+		streamEvents: [][]provider.StreamEvent{
+			// Iteration 1: tool call with empty input.
+			{
+				provider.ToolCallStart{ID: "tool_empty", Name: "git_status"},
+				provider.ToolCallEnd{ID: "tool_empty", Input: json.RawMessage(``)},
+				provider.StreamDone{
+					StopReason: provider.StopReasonToolUse,
+					Usage:      provider.Usage{InputTokens: 20, OutputTokens: 10},
+				},
+			},
+			// Iteration 2: text response.
+			{
+				provider.TokenDelta{Text: "Done."},
+				provider.StreamDone{
+					StopReason: provider.StopReasonEndTurn,
+					Usage:      provider.Usage{InputTokens: 40, OutputTokens: 5},
+				},
+			},
+		},
+	}
+
+	executor := &toolExecutorStub{}
+	loop := NewAgentLoop(AgentLoopDeps{
+		ContextAssembler:    assembler,
+		ConversationManager: conversations,
+		ProviderRouter:      routerStub,
+		ToolExecutor:        executor,
+		PromptBuilder:       NewPromptBuilder(nil),
+	})
+	loop.now = func() time.Time { return time.Unix(1700000900, 0).UTC() }
+
+	result, err := loop.RunTurn(stdctx.Background(), RunTurnRequest{
+		ConversationID:    "conv-empty-args",
+		TurnNumber:        1,
+		Message:           "check status",
+		ModelContextLimit: 200000,
+	})
+	if err != nil {
+		t.Fatalf("RunTurn error: %v", err)
+	}
+	if result.FinalText != "Done." {
+		t.Fatalf("FinalText = %q, want %q", result.FinalText, "Done.")
+	}
+
+	// Tool executor should not have been called.
+	if len(executor.calls) != 0 {
+		t.Fatalf("executor.calls = %d, want 0", len(executor.calls))
+	}
+
+	// Persisted tool result should contain "empty arguments".
+	iter1 := conversations.persistIterCalls[0]
+	toolMsg := iter1.messages[1]
+	if !strings.Contains(toolMsg.Content, "empty arguments") {
+		t.Fatalf("tool error content = %q, want containing 'empty arguments'", toolMsg.Content)
+	}
+}
+
+func TestRunTurnToolErrorEnrichment(t *testing.T) {
+	assembler := &loopContextAssemblerStub{
+		pkg: &contextpkg.FullContextPackage{Content: "context", Frozen: true},
+	}
+	conversations := &loopConversationManagerStub{
+		history: []db.Message{},
+		seen:    loopSeenFilesStub{},
+	}
+
+	toolInput := json.RawMessage(`{"path":"missing.go"}`)
+	routerStub := &providerRouterStub{
+		streamEvents: [][]provider.StreamEvent{
+			{
+				provider.ToolCallStart{ID: "tool_1", Name: "file_read"},
+				provider.ToolCallEnd{ID: "tool_1", Input: toolInput},
+				provider.StreamDone{
+					StopReason: provider.StopReasonToolUse,
+					Usage:      provider.Usage{InputTokens: 30, OutputTokens: 15},
+				},
+			},
+			{
+				provider.TokenDelta{Text: "File not found, let me try another path."},
+				provider.StreamDone{
+					StopReason: provider.StopReasonEndTurn,
+					Usage:      provider.Usage{InputTokens: 60, OutputTokens: 20},
+				},
+			},
+		},
+	}
+
+	executor := &toolExecutorStub{
+		err: errors.New("file not found: missing.go"),
+	}
+
+	loop := NewAgentLoop(AgentLoopDeps{
+		ContextAssembler:    assembler,
+		ConversationManager: conversations,
+		ProviderRouter:      routerStub,
+		ToolExecutor:        executor,
+		PromptBuilder:       NewPromptBuilder(nil),
+	})
+	loop.now = func() time.Time { return time.Unix(1700001000, 0).UTC() }
+
+	result, err := loop.RunTurn(stdctx.Background(), RunTurnRequest{
+		ConversationID:    "conv-enrich",
+		TurnNumber:        1,
+		Message:           "read missing.go",
+		ModelContextLimit: 200000,
+	})
+	if err != nil {
+		t.Fatalf("RunTurn error: %v", err)
+	}
+	if result.FinalText != "File not found, let me try another path." {
+		t.Fatalf("FinalText = %q", result.FinalText)
+	}
+
+	// The persisted tool result should contain the enriched hint.
+	iter1 := conversations.persistIterCalls[0]
+	toolMsg := iter1.messages[1]
+	if !strings.Contains(toolMsg.Content, "Hint:") {
+		t.Fatalf("tool error = %q, want containing 'Hint:'", toolMsg.Content)
+	}
+	if !strings.Contains(toolMsg.Content, "file not found") {
+		t.Fatalf("tool error = %q, want containing original error", toolMsg.Content)
+	}
+}
+
+func TestRunTurnRetriableStreamErrorRecoversInRunTurn(t *testing.T) {
+	assembler := &loopContextAssemblerStub{
+		pkg: &contextpkg.FullContextPackage{Content: "context", Frozen: true},
+	}
+	conversations := &loopConversationManagerStub{
+		history: []db.Message{},
+		seen:    loopSeenFilesStub{},
+	}
+
+	rateLimitErr := &provider.ProviderError{
+		Provider:   "anthropic",
+		StatusCode: 429,
+		Message:    "rate limited",
+		Retriable:  true,
+	}
+	router := &retryProviderRouterStub{
+		responses: []retryResponse{
+			{err: rateLimitErr},
+			{events: textOnlyStreamEvents("recovered after retry")},
+		},
+	}
+
+	sink := NewChannelSink(32)
+	loop := NewAgentLoop(AgentLoopDeps{
+		ContextAssembler:    assembler,
+		ConversationManager: conversations,
+		ProviderRouter:      router,
+		ToolExecutor:        &toolExecutorStub{},
+		PromptBuilder:       NewPromptBuilder(nil),
+		EventSink:           sink,
+	})
+	loop.now = func() time.Time { return time.Unix(1700001100, 0).UTC() }
+	loop.sleepFn = func(ctx stdctx.Context, d time.Duration) error {
+		return nil
+	}
+
+	result, err := loop.RunTurn(stdctx.Background(), RunTurnRequest{
+		ConversationID:    "conv-retry-runturn",
+		TurnNumber:        1,
+		Message:           "hello",
+		ModelContextLimit: 200000,
+	})
+	if err != nil {
+		t.Fatalf("RunTurn error: %v (should have recovered via retry)", err)
+	}
+	if result.FinalText != "recovered after retry" {
+		t.Fatalf("FinalText = %q, want %q", result.FinalText, "recovered after retry")
 	}
 }
