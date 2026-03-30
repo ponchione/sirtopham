@@ -38,8 +38,8 @@ type streamDelta struct {
 // streamToolCall is an incremental tool call fragment in a streaming delta.
 type streamToolCall struct {
 	Index    int                `json:"index"`
-	ID       string             `json:"id,omitempty"`        // present only in the first chunk for this call
-	Type     string             `json:"type,omitempty"`      // "function", present only in first chunk
+	ID       string             `json:"id,omitempty"`   // present only in the first chunk for this call
+	Type     string             `json:"type,omitempty"` // "function", present only in first chunk
 	Function streamFunctionCall `json:"function,omitempty"`
 }
 
@@ -156,9 +156,22 @@ func (p *OpenAIProvider) Stream(ctx context.Context, req *provider.Request) (<-c
 func (p *OpenAIProvider) processStream(ctx context.Context, resp *http.Response, ch chan<- provider.StreamEvent) {
 	accumulated := make(map[int]*accumulatedToolCall)
 	scanner := bufio.NewScanner(resp.Body)
+	var dataLines []string
+
+	flushEvent := func() bool {
+		if len(dataLines) == 0 {
+			return true
+		}
+		payload := strings.Join(dataLines, "\n")
+		dataLines = dataLines[:0]
+		if payload == "[DONE]" {
+			return false
+		}
+		p.handleStreamPayload(ctx, payload, accumulated, ch)
+		return true
+	}
 
 	for scanner.Scan() {
-		// Check context between lines.
 		if ctx.Err() != nil {
 			sendEvent(ctx, ch, provider.StreamError{
 				Err:     ctx.Err(),
@@ -169,99 +182,52 @@ func (p *OpenAIProvider) processStream(ctx context.Context, resp *http.Response,
 		}
 
 		line := scanner.Text()
-
-		// Skip empty lines.
 		if strings.TrimSpace(line) == "" {
+			if !flushEvent() {
+				return
+			}
 			continue
 		}
-
-		// Skip SSE comments.
 		if strings.HasPrefix(line, ":") {
 			continue
 		}
 
-		// Only process data lines.
-		if !strings.HasPrefix(line, "data: ") {
+		field, value, ok := strings.Cut(line, ":")
+		if !ok {
 			continue
 		}
-
-		payload := strings.TrimPrefix(line, "data: ")
-
-		// Check for end-of-stream sentinel.
-		if payload == "[DONE]" {
-			return
-		}
-
-		// Parse the chunk.
-		var chunk streamChunk
-		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
-			sendEvent(ctx, ch, provider.StreamError{
-				Err:     err,
-				Fatal:   false,
-				Message: fmt.Sprintf("OpenAI-compatible provider '%s': failed to parse stream chunk: %s", p.name, err),
-			})
+		value = strings.TrimPrefix(value, " ")
+		if field != "data" {
 			continue
 		}
+		dataLines = append(dataLines, value)
+	}
 
-		if len(chunk.Choices) == 0 {
-			// Usage-only chunk at the end.
-			if chunk.Usage != nil {
-				sendEvent(ctx, ch, provider.StreamUsage{
-					Usage: provider.Usage{
-						InputTokens:         chunk.Usage.PromptTokens,
-						OutputTokens:        chunk.Usage.CompletionTokens,
-						CacheReadTokens:     0,
-						CacheCreationTokens: 0,
-					},
-				})
-			}
-			continue
-		}
+	if !flushEvent() {
+		return
+	}
+	if err := scanner.Err(); err != nil {
+		sendEvent(ctx, ch, provider.StreamError{
+			Err:     err,
+			Fatal:   true,
+			Message: fmt.Sprintf("OpenAI-compatible provider '%s': stream read error: %s", p.name, err),
+		})
+	}
+}
 
-		choice := chunk.Choices[0]
+// handleStreamPayload parses one SSE event payload and emits StreamEvents.
+func (p *OpenAIProvider) handleStreamPayload(ctx context.Context, payload string, accumulated map[int]*accumulatedToolCall, ch chan<- provider.StreamEvent) {
+	var chunk streamChunk
+	if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
+		sendEvent(ctx, ch, provider.StreamError{
+			Err:     err,
+			Fatal:   false,
+			Message: fmt.Sprintf("OpenAI-compatible provider '%s': failed to parse stream chunk: %s", p.name, err),
+		})
+		return
+	}
 
-		// Emit text content.
-		if choice.Delta.Content != "" {
-			sendEvent(ctx, ch, provider.TokenDelta{Text: choice.Delta.Content})
-		}
-
-		// Accumulate tool calls.
-		for _, tc := range choice.Delta.ToolCalls {
-			acc, exists := accumulated[tc.Index]
-			if !exists {
-				acc = &accumulatedToolCall{
-					ID:   tc.ID,
-					Name: tc.Function.Name,
-				}
-				accumulated[tc.Index] = acc
-			} else {
-				// Update ID and Name if provided (first chunk for this index).
-				if tc.ID != "" {
-					acc.ID = tc.ID
-				}
-				if tc.Function.Name != "" {
-					acc.Name = tc.Function.Name
-				}
-			}
-			acc.Arguments.WriteString(tc.Function.Arguments)
-		}
-
-		// Handle finish reason.
-		if choice.FinishReason != nil {
-			reason := *choice.FinishReason
-
-			if reason == "tool_calls" {
-				// Emit accumulated tool calls in index order.
-				emitToolCalls(ctx, ch, accumulated)
-			}
-
-			stopReason := mapFinishReason(reason)
-			sendEvent(ctx, ch, provider.StreamDone{
-				StopReason: stopReason,
-			})
-		}
-
-		// Handle usage in chunk.
+	if len(chunk.Choices) == 0 {
 		if chunk.Usage != nil {
 			sendEvent(ctx, ch, provider.StreamUsage{
 				Usage: provider.Usage{
@@ -272,13 +238,46 @@ func (p *OpenAIProvider) processStream(ctx context.Context, resp *http.Response,
 				},
 			})
 		}
+		return
 	}
 
-	if err := scanner.Err(); err != nil {
-		sendEvent(ctx, ch, provider.StreamError{
-			Err:     err,
-			Fatal:   true,
-			Message: fmt.Sprintf("OpenAI-compatible provider '%s': stream read error: %s", p.name, err),
+	choice := chunk.Choices[0]
+	if choice.Delta.Content != "" {
+		sendEvent(ctx, ch, provider.TokenDelta{Text: choice.Delta.Content})
+	}
+
+	for _, tc := range choice.Delta.ToolCalls {
+		acc, exists := accumulated[tc.Index]
+		if !exists {
+			acc = &accumulatedToolCall{ID: tc.ID, Name: tc.Function.Name}
+			accumulated[tc.Index] = acc
+		} else {
+			if tc.ID != "" {
+				acc.ID = tc.ID
+			}
+			if tc.Function.Name != "" {
+				acc.Name = tc.Function.Name
+			}
+		}
+		acc.Arguments.WriteString(tc.Function.Arguments)
+	}
+
+	if choice.FinishReason != nil {
+		reason := *choice.FinishReason
+		if reason == "tool_calls" {
+			emitToolCalls(ctx, ch, accumulated)
+		}
+		sendEvent(ctx, ch, provider.StreamDone{StopReason: mapFinishReason(reason)})
+	}
+
+	if chunk.Usage != nil {
+		sendEvent(ctx, ch, provider.StreamUsage{
+			Usage: provider.Usage{
+				InputTokens:         chunk.Usage.PromptTokens,
+				OutputTokens:        chunk.Usage.CompletionTokens,
+				CacheReadTokens:     0,
+				CacheCreationTokens: 0,
+			},
 		})
 	}
 }
