@@ -17,6 +17,14 @@ import (
 const (
 	defaultMaxIterations       = 50
 	defaultLoopDetectThreshold = 3
+
+	// loopNudgeMessage is injected as a user message when the loop detector
+	// identifies repeated identical tool calls across consecutive iterations.
+	loopNudgeMessage = "You appear to be repeating the same action. Please try a different approach or explain what you're trying to accomplish."
+
+	// loopDirectiveMessage is injected as a user message on the final
+	// iteration (when tools are disabled) to guide the LLM toward a summary.
+	loopDirectiveMessage = "You have reached the maximum number of tool calls for this turn. Please provide a text summary of your progress and any remaining work."
 )
 
 // ContextAssembler is the narrow Layer 3 boundary the agent loop needs at turn
@@ -205,6 +213,7 @@ func (l *AgentLoop) RunTurn(ctx stdctx.Context, req RunTurnRequest) (*TurnResult
 	iteration := 1
 	var totalUsage provider.Usage
 	var currentTurnMessages []provider.Message
+	detector := newLoopDetector(l.cfg.LoopDetectionThreshold)
 
 	// Add the user message as the first current-turn message.
 	currentTurnMessages = append(currentTurnMessages, provider.NewUserMessage(req.Message))
@@ -224,6 +233,19 @@ func (l *AgentLoop) RunTurn(ctx stdctx.Context, req RunTurnRequest) (*TurnResult
 
 		// Determine if this is the last allowed iteration — disable tools to force text.
 		disableTools := iteration >= l.cfg.MaxIterations
+
+		// Inject directive on final iteration to guide the LLM toward a summary.
+		if disableTools {
+			currentTurnMessages = append(currentTurnMessages, provider.NewUserMessage(
+				loopDirectiveMessage,
+			))
+			l.logger.Warn("final iteration reached, disabling tools",
+				"conversation_id", req.ConversationID,
+				"turn", req.TurnNumber,
+				"iteration", iteration,
+				"max_iterations", l.cfg.MaxIterations,
+			)
+		}
 
 		// 3b: Build prompt.
 		promptReq, err := l.promptBuilder.BuildPrompt(PromptConfig{
@@ -369,6 +391,20 @@ func (l *AgentLoop) RunTurn(ctx stdctx.Context, req RunTurnRequest) (*TurnResult
 				tr.ToolUseID,
 				toolNameFromResults(result.ToolCalls, tr.ToolUseID),
 				tr.Content,
+			))
+		}
+
+		// 3f: Loop detection — check if the LLM is stuck repeating the same tool calls.
+		detector.record(result.ToolCalls)
+		if detector.isLooping() {
+			l.logger.Warn("loop detected — injecting nudge",
+				"conversation_id", req.ConversationID,
+				"turn", req.TurnNumber,
+				"iteration", iteration,
+				"threshold", l.cfg.LoopDetectionThreshold,
+			)
+			currentTurnMessages = append(currentTurnMessages, provider.NewUserMessage(
+				loopNudgeMessage,
 			))
 		}
 
