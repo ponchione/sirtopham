@@ -33,7 +33,10 @@ func readCredentialFile(path string) (*oauthToken, error) {
 	}
 	defer file.Close()
 
-	// Acquire shared advisory lock.
+	// Acquire a shared advisory lock on the credential file itself. The write path
+	// takes an exclusive lock on a sidecar .lock file before atomically renaming a
+	// fully-written temp file into place, so readers still see either the old file
+	// contents or the new file contents without observing a partial write.
 	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_SH); err != nil {
 		return nil, fmt.Errorf("failed to lock credential file %s: %w", path, err)
 	}
