@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"slices"
 	"time"
 )
 
@@ -73,19 +74,40 @@ func (r *Router) Validate(ctx context.Context) error {
 
 	// After all checks, verify the default provider is still registered.
 	if _, ok := r.providers[r.config.Default.Provider]; !ok {
-		r.logger.Error("configured default provider not available, falling back to first available",
+		r.logger.Error("configured default provider not available, selecting deterministic fallback provider",
 			"configured", r.config.Default.Provider,
 		)
-		found := false
-		for name := range r.providers {
-			r.config.Default.Provider = name
-			found = true
-			break
-		}
-		if !found {
+		fallbackName, ok := r.startupFallbackProvider()
+		if !ok {
 			return fmt.Errorf("no providers available after startup validation; check provider configuration and connectivity")
 		}
+		if r.config.Fallback != nil && fallbackName == r.config.Fallback.Provider {
+			r.logger.Info("configured default provider unavailable after validation, switching startup default to configured fallback",
+				"configured", r.config.Default.Provider,
+				"fallback", fallbackName,
+			)
+		}
+		r.config.Default.Provider = fallbackName
 	}
 
 	return nil
+}
+
+func (r *Router) startupFallbackProvider() (string, bool) {
+	if r.config.Fallback != nil {
+		if _, ok := r.providers[r.config.Fallback.Provider]; ok {
+			return r.config.Fallback.Provider, true
+		}
+	}
+
+	providerNames := make([]string, 0, len(r.providers))
+	for name := range r.providers {
+		providerNames = append(providerNames, name)
+	}
+	if len(providerNames) == 0 {
+		return "", false
+	}
+
+	slices.Sort(providerNames)
+	return providerNames[0], true
 }

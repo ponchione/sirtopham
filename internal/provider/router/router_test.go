@@ -809,6 +809,74 @@ func TestValidate_UnreachableProviderUnregistered(t *testing.T) {
 	}
 }
 
+func TestValidate_DefaultProviderUnavailablePrefersConfiguredFallback(t *testing.T) {
+	cfg := validConfig()
+	cfg.Fallback = &RouteTarget{Provider: "local", Model: "qwen2.5-coder-7b"}
+	r, _ := NewRouter(cfg, nil, nil)
+
+	anthropicMock := &mockProvider{
+		name:      "anthropic",
+		modelsErr: fmt.Errorf("unauthorized"),
+	}
+	localMock := &mockProvider{
+		name:   "local",
+		models: []provider.Model{{ID: "qwen2.5-coder-7b"}},
+	}
+	alphaMock := &mockProvider{
+		name:   "alpha",
+		models: []provider.Model{{ID: "alpha-model"}},
+	}
+
+	_ = r.RegisterProvider(anthropicMock)
+	_ = r.RegisterProvider(alphaMock)
+	_ = r.RegisterProvider(localMock)
+
+	if err := r.Validate(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	r.mu.RLock()
+	defaultProvider := r.config.Default.Provider
+	r.mu.RUnlock()
+
+	if defaultProvider != "local" {
+		t.Fatalf("expected configured fallback provider 'local', got %q", defaultProvider)
+	}
+}
+
+func TestValidate_DefaultProviderUnavailableUsesSortedProviderName(t *testing.T) {
+	r, _ := NewRouter(validConfig(), nil, nil)
+
+	anthropicMock := &mockProvider{
+		name:      "anthropic",
+		modelsErr: fmt.Errorf("unauthorized"),
+	}
+	zetaMock := &mockProvider{
+		name:   "zeta",
+		models: []provider.Model{{ID: "zeta-model"}},
+	}
+	alphaMock := &mockProvider{
+		name:   "alpha",
+		models: []provider.Model{{ID: "alpha-model"}},
+	}
+
+	_ = r.RegisterProvider(anthropicMock)
+	_ = r.RegisterProvider(zetaMock)
+	_ = r.RegisterProvider(alphaMock)
+
+	if err := r.Validate(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	r.mu.RLock()
+	defaultProvider := r.config.Default.Provider
+	r.mu.RUnlock()
+
+	if defaultProvider != "alpha" {
+		t.Fatalf("expected lexically first provider 'alpha', got %q", defaultProvider)
+	}
+}
+
 // --- Helper ---
 
 func contains(s, substr string) bool {
