@@ -149,6 +149,14 @@ BEGIN
     VALUES ('delete', OLD.id, OLD.content);
 END;
 
+CREATE TRIGGER messages_fts_update AFTER UPDATE OF content ON messages
+WHEN NEW.role IN ('user', 'assistant')
+BEGIN
+    INSERT INTO messages_fts(messages_fts, rowid, content)
+    VALUES ('delete', OLD.id, OLD.content);
+    INSERT INTO messages_fts(rowid, content) VALUES (NEW.id, NEW.content);
+END;
+
 CREATE INDEX idx_conversations_project ON conversations(project_id, updated_at DESC);
 CREATE INDEX idx_messages_conversation ON messages(conversation_id, is_compressed, sequence);
 CREATE INDEX idx_messages_turn ON messages(conversation_id, turn_number);

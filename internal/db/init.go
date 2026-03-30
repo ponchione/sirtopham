@@ -13,6 +13,7 @@ var schemaSQL string
 const dropSchemaSQL = `
 DROP TRIGGER IF EXISTS messages_fts_insert;
 DROP TRIGGER IF EXISTS messages_fts_delete;
+DROP TRIGGER IF EXISTS messages_fts_update;
 DROP TABLE IF EXISTS messages_fts;
 DROP TABLE IF EXISTS brain_links;
 DROP TABLE IF EXISTS brain_documents;
