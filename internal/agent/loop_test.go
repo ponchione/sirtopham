@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ponchione/sirtopham/internal/conversation"
 	contextpkg "github.com/ponchione/sirtopham/internal/context"
 	"github.com/ponchione/sirtopham/internal/db"
 )
@@ -27,13 +28,22 @@ type persistedUserMessageCall struct {
 	message        string
 }
 
+type persistedIterationCall struct {
+	conversationID string
+	turnNumber     int
+	iteration      int
+	messages       []conversation.IterationMessage
+}
+
 type loopConversationManagerStub struct {
 	history               []db.Message
 	err                   error
 	persistErr            error
+	persistIterErr        error
 	reconstructCalls      []string
 	seenFilesConversation []string
 	persistCalls          []persistedUserMessageCall
+	persistIterCalls      []persistedIterationCall
 	callOrder             []string
 	seen                  contextpkg.SeenFileLookup
 }
@@ -46,6 +56,17 @@ func (s *loopConversationManagerStub) PersistUserMessage(_ stdctx.Context, conve
 	})
 	s.callOrder = append(s.callOrder, "persist")
 	return s.persistErr
+}
+
+func (s *loopConversationManagerStub) PersistIteration(_ stdctx.Context, conversationID string, turnNumber, iteration int, messages []conversation.IterationMessage) error {
+	s.persistIterCalls = append(s.persistIterCalls, persistedIterationCall{
+		conversationID: conversationID,
+		turnNumber:     turnNumber,
+		iteration:      iteration,
+		messages:       append([]conversation.IterationMessage(nil), messages...),
+	})
+	s.callOrder = append(s.callOrder, "persist_iteration")
+	return s.persistIterErr
 }
 
 func (s *loopConversationManagerStub) ReconstructHistory(_ stdctx.Context, conversationID string) ([]db.Message, error) {

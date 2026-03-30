@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ponchione/sirtopham/internal/conversation"
 	contextpkg "github.com/ponchione/sirtopham/internal/context"
 	"github.com/ponchione/sirtopham/internal/db"
 )
@@ -31,9 +32,10 @@ type ContextAssembler interface {
 }
 
 // ConversationManager is the narrow Layer 5 conversation boundary needed for
-// turn-start persistence and context-assembly wiring.
+// turn-start persistence, per-iteration persistence, and context-assembly wiring.
 type ConversationManager interface {
 	PersistUserMessage(ctx stdctx.Context, conversationID string, turnNumber int, message string) error
+	PersistIteration(ctx stdctx.Context, conversationID string, turnNumber, iteration int, messages []conversation.IterationMessage) error
 	ReconstructHistory(ctx stdctx.Context, conversationID string) ([]db.Message, error)
 	SeenFiles(conversationID string) contextpkg.SeenFileLookup
 }
