@@ -51,13 +51,13 @@ type Router struct {
 	health    map[string]*ProviderHealth
 	mu        sync.RWMutex
 	logger    *slog.Logger
-	tracker   *tracking.TrackedProvider
+	store     tracking.SubCallStore
 }
 
-// NewRouter creates a Router from the given configuration. The tracker may be
-// nil if sub-call tracking is not enabled. The logger may be nil, in which case
-// a no-op logger is used.
-func NewRouter(config RouterConfig, tracker *tracking.TrackedProvider, logger *slog.Logger) (*Router, error) {
+// NewRouter creates a Router from the given configuration. The store may be nil
+// if sub-call tracking is not enabled. The logger may be nil, in which case a
+// no-op logger is used.
+func NewRouter(config RouterConfig, store tracking.SubCallStore, logger *slog.Logger) (*Router, error) {
 	if config.Default.Provider == "" {
 		return nil, errors.New("routing.default.provider is required in configuration")
 	}
@@ -72,7 +72,7 @@ func NewRouter(config RouterConfig, tracker *tracking.TrackedProvider, logger *s
 		config:    config,
 		health:    make(map[string]*ProviderHealth),
 		logger:    logger,
-		tracker:   tracker,
+		store:     store,
 	}, nil
 }
 
@@ -89,6 +89,11 @@ func (r *Router) RegisterProvider(p provider.Provider) error {
 	if _, exists := r.providers[name]; exists {
 		return fmt.Errorf("provider already registered: %s", name)
 	}
+	// Wrap with sub-call tracking if a store is configured.
+	if r.store != nil {
+		p = tracking.NewTrackedProvider(p, r.store, r.logger)
+	}
+
 	r.providers[name] = p
 	r.health[name] = &ProviderHealth{Healthy: true}
 	r.logger.Info("provider registered", "provider", name)

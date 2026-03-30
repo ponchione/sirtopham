@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ponchione/sirtopham/internal/provider"
+	"github.com/ponchione/sirtopham/internal/provider/tracking"
 )
 
 // mockProvider implements provider.Provider with controllable behavior.
@@ -688,6 +689,62 @@ func TestName(t *testing.T) {
 	r, _ := NewRouter(validConfig(), nil, nil)
 	if r.Name() != "router" {
 		t.Fatalf("expected 'router', got %s", r.Name())
+	}
+}
+
+// --- Sub-call tracking tests ---
+
+// mockSubCallStore implements tracking.SubCallStore for testing.
+type mockSubCallStore struct {
+	mu    sync.Mutex
+	calls []tracking.InsertSubCallParams
+}
+
+func (s *mockSubCallStore) InsertSubCall(_ context.Context, params tracking.InsertSubCallParams) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls = append(s.calls, params)
+	return nil
+}
+
+func (s *mockSubCallStore) getCalls() []tracking.InsertSubCallParams {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]tracking.InsertSubCallParams{}, s.calls...)
+}
+
+func TestComplete_TracksSubCalls(t *testing.T) {
+	store := &mockSubCallStore{}
+	cfg := validConfig()
+	r, _ := NewRouter(cfg, store, nil)
+
+	mock := &mockProvider{
+		name: "anthropic",
+		completeResp: &provider.Response{
+			Model: "claude-sonnet-4-6",
+			Usage: provider.Usage{InputTokens: 100, OutputTokens: 50},
+		},
+	}
+	_ = r.RegisterProvider(mock)
+
+	req := &provider.Request{Purpose: "chat"}
+	_, err := r.Complete(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	calls := store.getCalls()
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 tracked call, got %d", len(calls))
+	}
+	if calls[0].Provider != "anthropic" {
+		t.Errorf("expected provider 'anthropic', got %q", calls[0].Provider)
+	}
+	if calls[0].Purpose != "chat" {
+		t.Errorf("expected purpose 'chat', got %q", calls[0].Purpose)
+	}
+	if calls[0].TokensIn != 100 {
+		t.Errorf("expected 100 input tokens, got %d", calls[0].TokensIn)
 	}
 }
 
