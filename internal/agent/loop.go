@@ -4,6 +4,7 @@ import (
 	stdctx "context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	contextpkg "github.com/ponchione/sirtopham/internal/context"
@@ -30,8 +31,9 @@ type ContextAssembler interface {
 }
 
 // ConversationManager is the narrow Layer 5 conversation boundary needed for
-// turn-start context assembly wiring.
+// turn-start persistence and context-assembly wiring.
 type ConversationManager interface {
+	PersistUserMessage(ctx stdctx.Context, conversationID string, turnNumber int, message string) error
 	ReconstructHistory(ctx stdctx.Context, conversationID string) ([]db.Message, error)
 	SeenFiles(conversationID string) contextpkg.SeenFileLookup
 }
@@ -52,6 +54,17 @@ type AgentLoopDeps struct {
 	EventSink           EventSink
 	Config              AgentLoopConfig
 	Logger              *slog.Logger
+}
+
+// RunTurnRequest is the bootstrap request shape for the first persistence-aware
+// RunTurn slice. Later slices can shrink or replace it once model routing and
+// turn metadata are owned elsewhere in Layer 5.
+type RunTurnRequest struct {
+	ConversationID    string `json:"conversation_id"`
+	TurnNumber        int    `json:"turn_number"`
+	Message           string `json:"message"`
+	ModelContextLimit int    `json:"model_context_limit"`
+	HistoryTokenCount int    `json:"history_token_count,omitempty"`
 }
 
 // TurnStartResult holds the frozen per-turn context package plus the history
@@ -116,6 +129,40 @@ func (l *AgentLoop) Close() {
 		return
 	}
 	l.events.Close()
+}
+
+// RunTurn is the first persistence-aware bootstrap entrypoint. This narrow
+// slice persists the user message, then delegates to PrepareTurnContext.
+func (l *AgentLoop) RunTurn(ctx stdctx.Context, req RunTurnRequest) (*TurnStartResult, error) {
+	if ctx == nil {
+		ctx = stdctx.Background()
+	}
+	if err := l.validate(); err != nil {
+		return nil, err
+	}
+	if err := validateRunTurnRequest(req); err != nil {
+		return nil, err
+	}
+
+	if err := l.conversationManager.PersistUserMessage(ctx, req.ConversationID, req.TurnNumber, req.Message); err != nil {
+		wrapped := fmt.Errorf("agent loop: persist user message: %w", err)
+		l.emit(ErrorEvent{
+			ErrorCode:   "persist_user_message_failed",
+			Message:     wrapped.Error(),
+			Recoverable: false,
+			Time:        l.now(),
+		})
+		return nil, wrapped
+	}
+
+	return l.PrepareTurnContext(
+		ctx,
+		req.ConversationID,
+		req.TurnNumber,
+		req.Message,
+		req.ModelContextLimit,
+		req.HistoryTokenCount,
+	)
 }
 
 // PrepareTurnContext reconstructs persisted history, builds the Layer 3
@@ -190,6 +237,22 @@ func (l *AgentLoop) emit(event Event) {
 		return
 	}
 	l.events.Emit(event)
+}
+
+func validateRunTurnRequest(req RunTurnRequest) error {
+	if strings.TrimSpace(req.ConversationID) == "" {
+		return fmt.Errorf("agent loop: conversation ID is required")
+	}
+	if req.TurnNumber <= 0 {
+		return fmt.Errorf("agent loop: turn number must be positive")
+	}
+	if strings.TrimSpace(req.Message) == "" {
+		return fmt.Errorf("agent loop: message is required")
+	}
+	if req.ModelContextLimit <= 0 {
+		return fmt.Errorf("agent loop: model context limit must be positive")
+	}
+	return nil
 }
 
 func withDefaultConfig(cfg AgentLoopConfig) AgentLoopConfig {
