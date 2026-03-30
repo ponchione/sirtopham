@@ -164,12 +164,12 @@ func TestIntegration_CompleteToolCallResponse(t *testing.T) {
 		t.Fatalf("expected 3 content blocks, got %d", len(resp.Content))
 	}
 
-	// Block 0: reasoning
-	if resp.Content[0].Type != "reasoning" {
-		t.Errorf("block 0: expected type %q, got %q", "reasoning", resp.Content[0].Type)
+	// Block 0: thinking
+	if resp.Content[0].Type != "thinking" {
+		t.Errorf("block 0: expected type %q, got %q", "thinking", resp.Content[0].Type)
 	}
-	if resp.Content[0].Text != "base64encrypteddata" {
-		t.Errorf("block 0: expected text %q, got %q", "base64encrypteddata", resp.Content[0].Text)
+	if resp.Content[0].Thinking != "base64encrypteddata" {
+		t.Errorf("block 0: expected thinking %q, got %q", "base64encrypteddata", resp.Content[0].Thinking)
 	}
 
 	// Block 1: text

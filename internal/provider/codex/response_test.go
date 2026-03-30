@@ -98,12 +98,12 @@ func TestParseOutputItems_MixedWithReasoning(t *testing.T) {
 		t.Fatalf("expected 3 blocks, got %d", len(blocks))
 	}
 
-	// Block 0: reasoning
-	if blocks[0].Type != "reasoning" {
-		t.Errorf("block 0: expected type %q, got %q", "reasoning", blocks[0].Type)
+	// Block 0: thinking
+	if blocks[0].Type != "thinking" {
+		t.Errorf("block 0: expected type %q, got %q", "thinking", blocks[0].Type)
 	}
-	if blocks[0].Text != "base64encrypteddata" {
-		t.Errorf("block 0: expected text %q, got %q", "base64encrypteddata", blocks[0].Text)
+	if blocks[0].Thinking != "base64encrypteddata" {
+		t.Errorf("block 0: expected thinking %q, got %q", "base64encrypteddata", blocks[0].Thinking)
 	}
 
 	// Block 1: text

@@ -14,16 +14,16 @@ import (
 
 // responsesResponse is the top-level Responses API JSON response.
 type responsesResponse struct {
-	ID     string               `json:"id"`
-	Object string               `json:"object"`
-	Model  string               `json:"model"`
+	ID     string                `json:"id"`
+	Object string                `json:"object"`
+	Model  string                `json:"model"`
 	Output []responsesOutputItem `json:"output"`
-	Usage  responsesUsage       `json:"usage"`
+	Usage  responsesUsage        `json:"usage"`
 }
 
 // responsesOutputItem represents one item in the output array.
 type responsesOutputItem struct {
-	Type             string                   `json:"type"`                        // "message", "function_call", "reasoning"
+	Type             string                   `json:"type"` // "message", "function_call", "reasoning"
 	ID               string                   `json:"id"`
 	Role             string                   `json:"role,omitempty"`              // "assistant" for type="message"
 	Content          []responsesOutputContent `json:"content,omitempty"`           // for type="message"
@@ -280,10 +280,7 @@ func parseOutputItems(items []responsesOutputItem) ([]provider.ContentBlock, pro
 				Input: json.RawMessage(item.Arguments),
 			})
 		case "reasoning":
-			blocks = append(blocks, provider.ContentBlock{
-				Type: "reasoning",
-				Text: item.EncryptedContent,
-			})
+			blocks = append(blocks, provider.NewThinkingBlock(item.EncryptedContent))
 		default:
 			// Unknown output item type; skip with warning
 			// (In production, this would be logged)
