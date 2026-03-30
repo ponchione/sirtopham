@@ -144,6 +144,7 @@ BEGIN
 END;
 
 CREATE TRIGGER messages_fts_delete AFTER DELETE ON messages
+WHEN OLD.role IN ('user', 'assistant')
 BEGIN
     INSERT INTO messages_fts(messages_fts, rowid, content)
     VALUES ('delete', OLD.id, OLD.content);

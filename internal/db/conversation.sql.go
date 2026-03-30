@@ -10,6 +10,54 @@ import (
 	"database/sql"
 )
 
+const deleteIterationMessages = `-- name: DeleteIterationMessages :exec
+DELETE FROM messages
+WHERE conversation_id = ? AND turn_number = ? AND iteration = ?
+`
+
+type DeleteIterationMessagesParams struct {
+	ConversationID string `json:"conversation_id"`
+	TurnNumber     int64  `json:"turn_number"`
+	Iteration      int64  `json:"iteration"`
+}
+
+func (q *Queries) DeleteIterationMessages(ctx context.Context, arg DeleteIterationMessagesParams) error {
+	_, err := q.db.ExecContext(ctx, deleteIterationMessages, arg.ConversationID, arg.TurnNumber, arg.Iteration)
+	return err
+}
+
+const deleteIterationSubCalls = `-- name: DeleteIterationSubCalls :exec
+DELETE FROM sub_calls
+WHERE conversation_id = ? AND turn_number = ? AND iteration = ?
+`
+
+type DeleteIterationSubCallsParams struct {
+	ConversationID sql.NullString `json:"conversation_id"`
+	TurnNumber     sql.NullInt64  `json:"turn_number"`
+	Iteration      sql.NullInt64  `json:"iteration"`
+}
+
+func (q *Queries) DeleteIterationSubCalls(ctx context.Context, arg DeleteIterationSubCallsParams) error {
+	_, err := q.db.ExecContext(ctx, deleteIterationSubCalls, arg.ConversationID, arg.TurnNumber, arg.Iteration)
+	return err
+}
+
+const deleteIterationToolExecutions = `-- name: DeleteIterationToolExecutions :exec
+DELETE FROM tool_executions
+WHERE conversation_id = ? AND turn_number = ? AND iteration = ?
+`
+
+type DeleteIterationToolExecutionsParams struct {
+	ConversationID string `json:"conversation_id"`
+	TurnNumber     int64  `json:"turn_number"`
+	Iteration      int64  `json:"iteration"`
+}
+
+func (q *Queries) DeleteIterationToolExecutions(ctx context.Context, arg DeleteIterationToolExecutionsParams) error {
+	_, err := q.db.ExecContext(ctx, deleteIterationToolExecutions, arg.ConversationID, arg.TurnNumber, arg.Iteration)
+	return err
+}
+
 const insertIterationMessage = `-- name: InsertIterationMessage :exec
 INSERT INTO messages (
     conversation_id,
