@@ -1,0 +1,391 @@
+package agent
+
+import (
+	stdctx "context"
+	"errors"
+	"strings"
+	"testing"
+	"time"
+
+	contextpkg "github.com/ponchione/sirtopham/internal/context"
+	"github.com/ponchione/sirtopham/internal/provider"
+)
+
+// retryProviderRouterStub allows per-call error/success configuration.
+type retryProviderRouterStub struct {
+	// responses is a list of (events, error) pairs, one per call.
+	responses []retryResponse
+	callIndex int
+}
+
+type retryResponse struct {
+	events []provider.StreamEvent
+	err    error
+}
+
+func (s *retryProviderRouterStub) Stream(_ stdctx.Context, req *provider.Request) (<-chan provider.StreamEvent, error) {
+	idx := s.callIndex
+	if idx >= len(s.responses) {
+		idx = len(s.responses) - 1
+	}
+	s.callIndex++
+
+	resp := s.responses[idx]
+	if resp.err != nil {
+		return nil, resp.err
+	}
+
+	ch := make(chan provider.StreamEvent, len(resp.events))
+	for _, e := range resp.events {
+		ch <- e
+	}
+	close(ch)
+	return ch, nil
+}
+
+func newRetryTestLoop(router ProviderRouter, sink EventSink) *AgentLoop {
+	loop := NewAgentLoop(AgentLoopDeps{
+		ContextAssembler: &loopContextAssemblerStub{
+			pkg: &contextpkg.FullContextPackage{Content: "ctx", Frozen: true},
+		},
+		ConversationManager: &loopConversationManagerStub{
+			seen: loopSeenFilesStub{},
+		},
+		ProviderRouter: router,
+		ToolExecutor:   &toolExecutorStub{},
+		PromptBuilder:  NewPromptBuilder(nil),
+		EventSink:      sink,
+	})
+	loop.now = func() time.Time { return time.Unix(1700000700, 0).UTC() }
+	// Use a no-op sleep for fast tests.
+	loop.sleepFn = func(ctx stdctx.Context, d time.Duration) error {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			return nil
+		}
+	}
+	return loop
+}
+
+func textOnlyStreamEvents(text string) []provider.StreamEvent {
+	return []provider.StreamEvent{
+		provider.TokenDelta{Text: text},
+		provider.StreamDone{
+			StopReason: provider.StopReasonEndTurn,
+			Usage:      provider.Usage{InputTokens: 10, OutputTokens: 5},
+		},
+	}
+}
+
+// --- streamWithRetry tests ---
+
+func TestStreamWithRetry_SuccessOnFirstAttempt(t *testing.T) {
+	router := &retryProviderRouterStub{
+		responses: []retryResponse{
+			{events: textOnlyStreamEvents("hello")},
+		},
+	}
+	loop := newRetryTestLoop(router, nil)
+
+	result, err := loop.streamWithRetry(
+		stdctx.Background(),
+		&provider.Request{},
+		1,
+		"conv-retry-1",
+	)
+	if err != nil {
+		t.Fatalf("streamWithRetry error: %v", err)
+	}
+	if result.TextContent != "hello" {
+		t.Fatalf("TextContent = %q, want %q", result.TextContent, "hello")
+	}
+	if router.callIndex != 1 {
+		t.Fatalf("callIndex = %d, want 1 (single attempt)", router.callIndex)
+	}
+}
+
+func TestStreamWithRetry_RetriableErrorRecoversOnSecondAttempt(t *testing.T) {
+	rateLimitErr := &provider.ProviderError{
+		Provider:   "anthropic",
+		StatusCode: 429,
+		Message:    "rate limited",
+		Retriable:  true,
+	}
+	router := &retryProviderRouterStub{
+		responses: []retryResponse{
+			{err: rateLimitErr},
+			{events: textOnlyStreamEvents("recovered")},
+		},
+	}
+	sink := NewChannelSink(16)
+	loop := newRetryTestLoop(router, sink)
+
+	result, err := loop.streamWithRetry(
+		stdctx.Background(),
+		&provider.Request{},
+		1,
+		"conv-retry-2",
+	)
+	if err != nil {
+		t.Fatalf("streamWithRetry error: %v", err)
+	}
+	if result.TextContent != "recovered" {
+		t.Fatalf("TextContent = %q, want %q", result.TextContent, "recovered")
+	}
+	if router.callIndex != 2 {
+		t.Fatalf("callIndex = %d, want 2 (retry succeeded)", router.callIndex)
+	}
+
+	// Should have emitted a recoverable ErrorEvent for the first attempt.
+	event := drainUntilType(t, sink.Events(), "error")
+	errEvt, ok := event.(ErrorEvent)
+	if !ok {
+		t.Fatalf("expected ErrorEvent, got %T", event)
+	}
+	if !errEvt.Recoverable {
+		t.Fatal("first retry ErrorEvent.Recoverable = false, want true")
+	}
+	if errEvt.ErrorCode != ErrorCodeRateLimit {
+		t.Fatalf("ErrorCode = %q, want %q", errEvt.ErrorCode, ErrorCodeRateLimit)
+	}
+}
+
+func TestStreamWithRetry_AllRetriesExhausted(t *testing.T) {
+	serverErr := &provider.ProviderError{
+		Provider:   "openai",
+		StatusCode: 500,
+		Message:    "internal error",
+		Retriable:  true,
+	}
+	router := &retryProviderRouterStub{
+		responses: []retryResponse{
+			{err: serverErr},
+			{err: serverErr},
+			{err: serverErr},
+		},
+	}
+	sink := NewChannelSink(32)
+	loop := newRetryTestLoop(router, sink)
+
+	_, err := loop.streamWithRetry(
+		stdctx.Background(),
+		&provider.Request{},
+		1,
+		"conv-retry-3",
+	)
+	if err == nil {
+		t.Fatal("streamWithRetry error = nil, want exhausted retries error")
+	}
+	if !strings.Contains(err.Error(), "all 3 attempts exhausted") {
+		t.Fatalf("error = %q, want containing 'all 3 attempts exhausted'", err)
+	}
+	if router.callIndex != 3 {
+		t.Fatalf("callIndex = %d, want 3 (all attempts used)", router.callIndex)
+	}
+
+	// Should have emitted recoverable events for attempts 1 and 2, then a
+	// non-recoverable event when all retries exhausted.
+	events := drainAllErrorEvents(t, sink.Events())
+	if len(events) < 3 {
+		t.Fatalf("got %d error events, want at least 3", len(events))
+	}
+	// Last one should be non-recoverable.
+	last := events[len(events)-1]
+	if last.Recoverable {
+		t.Fatal("final ErrorEvent.Recoverable = true, want false")
+	}
+}
+
+func TestStreamWithRetry_AuthFailureNoRetry(t *testing.T) {
+	authErr := &provider.ProviderError{
+		Provider:   "anthropic",
+		StatusCode: 401,
+		Message:    "invalid api key",
+		Retriable:  false,
+	}
+	router := &retryProviderRouterStub{
+		responses: []retryResponse{
+			{err: authErr},
+		},
+	}
+	sink := NewChannelSink(16)
+	loop := newRetryTestLoop(router, sink)
+
+	_, err := loop.streamWithRetry(
+		stdctx.Background(),
+		&provider.Request{},
+		1,
+		"conv-retry-4",
+	)
+	if err == nil {
+		t.Fatal("streamWithRetry error = nil, want auth failure error")
+	}
+	if router.callIndex != 1 {
+		t.Fatalf("callIndex = %d, want 1 (no retry for auth failure)", router.callIndex)
+	}
+
+	// Should emit a non-recoverable ErrorEvent.
+	event := drainUntilType(t, sink.Events(), "error")
+	errEvt := event.(ErrorEvent)
+	if errEvt.Recoverable {
+		t.Fatal("ErrorEvent.Recoverable = true, want false for auth failure")
+	}
+	if errEvt.ErrorCode != ErrorCodeAuthFailure {
+		t.Fatalf("ErrorCode = %q, want %q", errEvt.ErrorCode, ErrorCodeAuthFailure)
+	}
+}
+
+func TestStreamWithRetry_ContextOverflowNoRetry(t *testing.T) {
+	overflowErr := &provider.ProviderError{
+		Provider:   "anthropic",
+		StatusCode: 400,
+		Message:    "context_length_exceeded",
+		Retriable:  false,
+	}
+	router := &retryProviderRouterStub{
+		responses: []retryResponse{
+			{err: overflowErr},
+		},
+	}
+	loop := newRetryTestLoop(router, nil)
+
+	_, err := loop.streamWithRetry(
+		stdctx.Background(),
+		&provider.Request{},
+		1,
+		"conv-retry-5",
+	)
+	if err == nil {
+		t.Fatal("streamWithRetry error = nil, want context overflow error")
+	}
+	if router.callIndex != 1 {
+		t.Fatalf("callIndex = %d, want 1 (no retry for context overflow)", router.callIndex)
+	}
+}
+
+func TestStreamWithRetry_CancellationDuringSleep(t *testing.T) {
+	serverErr := &provider.ProviderError{
+		Provider:   "openai",
+		StatusCode: 502,
+		Message:    "bad gateway",
+		Retriable:  true,
+	}
+	router := &retryProviderRouterStub{
+		responses: []retryResponse{
+			{err: serverErr},
+			{events: textOnlyStreamEvents("should not reach")},
+		},
+	}
+
+	ctx, cancel := stdctx.WithCancel(stdctx.Background())
+	loop := newRetryTestLoop(router, nil)
+
+	// Override sleep to cancel the context during the sleep.
+	loop.sleepFn = func(ctx stdctx.Context, d time.Duration) error {
+		cancel()
+		return ctx.Err()
+	}
+
+	_, err := loop.streamWithRetry(ctx, &provider.Request{}, 1, "conv-retry-6")
+	if err == nil {
+		t.Fatal("streamWithRetry error = nil, want cancellation error")
+	}
+	if !errors.Is(err, stdctx.Canceled) {
+		t.Fatalf("error = %v, want context.Canceled", err)
+	}
+}
+
+func TestStreamWithRetry_RetriableRecoveryOnThirdAttempt(t *testing.T) {
+	serverErr := &provider.ProviderError{
+		Provider:   "openai",
+		StatusCode: 503,
+		Message:    "service unavailable",
+		Retriable:  true,
+	}
+	router := &retryProviderRouterStub{
+		responses: []retryResponse{
+			{err: serverErr},
+			{err: serverErr},
+			{events: textOnlyStreamEvents("finally")},
+		},
+	}
+	loop := newRetryTestLoop(router, nil)
+
+	result, err := loop.streamWithRetry(
+		stdctx.Background(),
+		&provider.Request{},
+		1,
+		"conv-retry-7",
+	)
+	if err != nil {
+		t.Fatalf("streamWithRetry error: %v", err)
+	}
+	if result.TextContent != "finally" {
+		t.Fatalf("TextContent = %q, want %q", result.TextContent, "finally")
+	}
+	if router.callIndex != 3 {
+		t.Fatalf("callIndex = %d, want 3", router.callIndex)
+	}
+}
+
+func TestStreamWithRetry_NonProviderErrorNoRetry(t *testing.T) {
+	router := &retryProviderRouterStub{
+		responses: []retryResponse{
+			{err: errors.New("network timeout")},
+		},
+	}
+	loop := newRetryTestLoop(router, nil)
+
+	_, err := loop.streamWithRetry(
+		stdctx.Background(),
+		&provider.Request{},
+		1,
+		"conv-retry-8",
+	)
+	if err == nil {
+		t.Fatal("streamWithRetry error = nil, want error")
+	}
+	// Non-ProviderError => not retriable => no retry.
+	if router.callIndex != 1 {
+		t.Fatalf("callIndex = %d, want 1 (no retry for non-provider error)", router.callIndex)
+	}
+}
+
+// --- helpers ---
+
+// drainUntilType reads events from the channel until it finds one with the
+// given event type, or fails the test.
+func drainUntilType(t *testing.T, ch <-chan Event, eventType string) Event {
+	t.Helper()
+	for i := 0; i < 50; i++ {
+		select {
+		case e := <-ch:
+			if e.EventType() == eventType {
+				return e
+			}
+		default:
+			t.Fatalf("no %q event found in channel", eventType)
+		}
+	}
+	t.Fatalf("no %q event found after 50 drains", eventType)
+	return nil
+}
+
+// drainAllErrorEvents reads all currently available events from the channel
+// and collects ErrorEvents.
+func drainAllErrorEvents(t *testing.T, ch <-chan Event) []ErrorEvent {
+	t.Helper()
+	var result []ErrorEvent
+	for {
+		select {
+		case e := <-ch:
+			if errEvt, ok := e.(ErrorEvent); ok {
+				result = append(result, errEvt)
+			}
+		default:
+			return result
+		}
+	}
+}
