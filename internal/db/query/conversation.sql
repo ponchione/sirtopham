@@ -76,6 +76,18 @@ INSERT INTO messages (
     ?
 );
 
+-- name: DeleteIterationMessages :exec
+DELETE FROM messages
+WHERE conversation_id = ? AND turn_number = ? AND iteration = ?;
+
+-- name: DeleteIterationToolExecutions :exec
+DELETE FROM tool_executions
+WHERE conversation_id = ? AND turn_number = ? AND iteration = ?;
+
+-- name: DeleteIterationSubCalls :exec
+DELETE FROM sub_calls
+WHERE conversation_id = ? AND turn_number = ? AND iteration = ?;
+
 -- name: SearchConversations :many
 SELECT c.id, c.title, c.updated_at, snippet(messages_fts, 0, '<b>', '</b>', '...', 32) AS snippet
 FROM messages_fts

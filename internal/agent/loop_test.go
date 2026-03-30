@@ -35,15 +35,23 @@ type persistedIterationCall struct {
 	messages       []conversation.IterationMessage
 }
 
+type cancelledIterationCall struct {
+	conversationID string
+	turnNumber     int
+	iteration      int
+}
+
 type loopConversationManagerStub struct {
 	history               []db.Message
 	err                   error
 	persistErr            error
 	persistIterErr        error
+	cancelIterErr         error
 	reconstructCalls      []string
 	seenFilesConversation []string
 	persistCalls          []persistedUserMessageCall
 	persistIterCalls      []persistedIterationCall
+	cancelIterCalls       []cancelledIterationCall
 	callOrder             []string
 	seen                  contextpkg.SeenFileLookup
 }
@@ -67,6 +75,16 @@ func (s *loopConversationManagerStub) PersistIteration(_ stdctx.Context, convers
 	})
 	s.callOrder = append(s.callOrder, "persist_iteration")
 	return s.persistIterErr
+}
+
+func (s *loopConversationManagerStub) CancelIteration(_ stdctx.Context, conversationID string, turnNumber, iteration int) error {
+	s.cancelIterCalls = append(s.cancelIterCalls, cancelledIterationCall{
+		conversationID: conversationID,
+		turnNumber:     turnNumber,
+		iteration:      iteration,
+	})
+	s.callOrder = append(s.callOrder, "cancel_iteration")
+	return s.cancelIterErr
 }
 
 func (s *loopConversationManagerStub) ReconstructHistory(_ stdctx.Context, conversationID string) ([]db.Message, error) {

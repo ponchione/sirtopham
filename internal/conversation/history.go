@@ -182,6 +182,61 @@ func (m *HistoryManager) PersistIteration(ctx context.Context, conversationID st
 	return nil
 }
 
+// CancelIteration atomically deletes all messages, tool_execution records,
+// and sub_call records for a specific in-flight iteration. Completed iterations
+// from earlier in the same turn are not affected. The user's initial message
+// (persisted before iterations begin) is also preserved because it uses
+// iteration=1 with role=user, while CancelIteration targets the assistant/tool
+// iteration data.
+//
+// This is called when the user cancels a turn mid-iteration or when error
+// recovery needs to discard a partial iteration before retrying.
+func (m *HistoryManager) CancelIteration(ctx context.Context, conversationID string, turnNumber, iteration int) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := m.validate(); err != nil {
+		return err
+	}
+
+	tx, err := m.database.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("conversation history: begin cancel iteration tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	q := m.queries.WithTx(tx)
+
+	if err := q.DeleteIterationMessages(ctx, db.DeleteIterationMessagesParams{
+		ConversationID: conversationID,
+		TurnNumber:     int64(turnNumber),
+		Iteration:      int64(iteration),
+	}); err != nil {
+		return fmt.Errorf("conversation history: cancel iteration: delete messages: %w", err)
+	}
+
+	if err := q.DeleteIterationToolExecutions(ctx, db.DeleteIterationToolExecutionsParams{
+		ConversationID: conversationID,
+		TurnNumber:     int64(turnNumber),
+		Iteration:      int64(iteration),
+	}); err != nil {
+		return fmt.Errorf("conversation history: cancel iteration: delete tool executions: %w", err)
+	}
+
+	if err := q.DeleteIterationSubCalls(ctx, db.DeleteIterationSubCallsParams{
+		ConversationID: sql.NullString{String: conversationID, Valid: true},
+		TurnNumber:     sql.NullInt64{Int64: int64(turnNumber), Valid: true},
+		Iteration:      sql.NullInt64{Int64: int64(iteration), Valid: true},
+	}); err != nil {
+		return fmt.Errorf("conversation history: cancel iteration: delete sub calls: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("conversation history: commit cancel iteration tx: %w", err)
+	}
+	return nil
+}
+
 // SeenFiles exposes the session-scoped seen-files tracker used by Layer 3.
 func (m *HistoryManager) SeenFiles(string) contextpkg.SeenFileLookup {
 	if m == nil {

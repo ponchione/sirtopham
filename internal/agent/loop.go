@@ -32,10 +32,12 @@ type ContextAssembler interface {
 }
 
 // ConversationManager is the narrow Layer 5 conversation boundary needed for
-// turn-start persistence, per-iteration persistence, and context-assembly wiring.
+// turn-start persistence, per-iteration persistence, cancellation, and
+// context-assembly wiring.
 type ConversationManager interface {
 	PersistUserMessage(ctx stdctx.Context, conversationID string, turnNumber int, message string) error
 	PersistIteration(ctx stdctx.Context, conversationID string, turnNumber, iteration int, messages []conversation.IterationMessage) error
+	CancelIteration(ctx stdctx.Context, conversationID string, turnNumber, iteration int) error
 	ReconstructHistory(ctx stdctx.Context, conversationID string) ([]db.Message, error)
 	SeenFiles(conversationID string) contextpkg.SeenFileLookup
 }
