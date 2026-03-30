@@ -10,6 +10,91 @@ import (
 	"database/sql"
 )
 
+const insertUserMessage = `-- name: InsertUserMessage :exec
+INSERT INTO messages (
+    conversation_id,
+    role,
+    content,
+    turn_number,
+    iteration,
+    sequence,
+    created_at
+) VALUES (
+    ?,
+    'user',
+    ?,
+    ?,
+    1,
+    ?,
+    ?
+)
+`
+
+type InsertUserMessageParams struct {
+	ConversationID string         `json:"conversation_id"`
+	Content        sql.NullString `json:"content"`
+	TurnNumber     int64          `json:"turn_number"`
+	Sequence       float64        `json:"sequence"`
+	CreatedAt      string         `json:"created_at"`
+}
+
+func (q *Queries) InsertUserMessage(ctx context.Context, arg InsertUserMessageParams) error {
+	_, err := q.db.ExecContext(ctx, insertUserMessage,
+		arg.ConversationID,
+		arg.Content,
+		arg.TurnNumber,
+		arg.Sequence,
+		arg.CreatedAt,
+	)
+	return err
+}
+
+const listActiveMessages = `-- name: ListActiveMessages :many
+SELECT id, conversation_id, role, content, tool_use_id, tool_name, turn_number, iteration, sequence,
+       is_compressed, is_summary, compressed_turn_start, compressed_turn_end, created_at
+FROM messages
+WHERE conversation_id = ? AND is_compressed = 0
+ORDER BY sequence
+`
+
+func (q *Queries) ListActiveMessages(ctx context.Context, conversationID string) ([]Message, error) {
+	rows, err := q.db.QueryContext(ctx, listActiveMessages, conversationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Message
+	for rows.Next() {
+		var i Message
+		if err := rows.Scan(
+			&i.ID,
+			&i.ConversationID,
+			&i.Role,
+			&i.Content,
+			&i.ToolUseID,
+			&i.ToolName,
+			&i.TurnNumber,
+			&i.Iteration,
+			&i.Sequence,
+			&i.IsCompressed,
+			&i.IsSummary,
+			&i.CompressedTurnStart,
+			&i.CompressedTurnEnd,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listConversations = `-- name: ListConversations :many
 SELECT id, title, updated_at
 FROM conversations
@@ -103,6 +188,19 @@ func (q *Queries) ListTurnMessages(ctx context.Context, conversationID string) (
 	return items, nil
 }
 
+const nextMessageSequence = `-- name: NextMessageSequence :one
+SELECT COALESCE(MAX(sequence) + 1.0, 0.0)
+FROM messages
+WHERE conversation_id = ?
+`
+
+func (q *Queries) NextMessageSequence(ctx context.Context, conversationID string) (interface{}, error) {
+	row := q.db.QueryRowContext(ctx, nextMessageSequence, conversationID)
+	var coalesce interface{}
+	err := row.Scan(&coalesce)
+	return coalesce, err
+}
+
 const reconstructConversationHistory = `-- name: ReconstructConversationHistory :many
 SELECT role, content, tool_use_id, tool_name
 FROM messages
@@ -188,4 +286,20 @@ func (q *Queries) SearchConversations(ctx context.Context, content string) ([]Se
 		return nil, err
 	}
 	return items, nil
+}
+
+const touchConversationUpdatedAt = `-- name: TouchConversationUpdatedAt :exec
+UPDATE conversations
+SET updated_at = ?
+WHERE id = ?
+`
+
+type TouchConversationUpdatedAtParams struct {
+	UpdatedAt string `json:"updated_at"`
+	ID        string `json:"id"`
+}
+
+func (q *Queries) TouchConversationUpdatedAt(ctx context.Context, arg TouchConversationUpdatedAtParams) error {
+	_, err := q.db.ExecContext(ctx, touchConversationUpdatedAt, arg.UpdatedAt, arg.ID)
+	return err
 }
