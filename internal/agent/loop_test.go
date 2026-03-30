@@ -3,6 +3,7 @@ package agent
 import (
 	stdctx "context"
 	"database/sql"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -20,16 +21,36 @@ func (loopSeenFilesStub) Contains(path string) (bool, int) {
 	return false, 0
 }
 
+type persistedUserMessageCall struct {
+	conversationID string
+	turnNumber     int
+	message        string
+}
+
 type loopConversationManagerStub struct {
 	history               []db.Message
 	err                   error
+	persistErr            error
 	reconstructCalls      []string
 	seenFilesConversation []string
+	persistCalls          []persistedUserMessageCall
+	callOrder             []string
 	seen                  contextpkg.SeenFileLookup
+}
+
+func (s *loopConversationManagerStub) PersistUserMessage(_ stdctx.Context, conversationID string, turnNumber int, message string) error {
+	s.persistCalls = append(s.persistCalls, persistedUserMessageCall{
+		conversationID: conversationID,
+		turnNumber:     turnNumber,
+		message:        message,
+	})
+	s.callOrder = append(s.callOrder, "persist")
+	return s.persistErr
 }
 
 func (s *loopConversationManagerStub) ReconstructHistory(_ stdctx.Context, conversationID string) ([]db.Message, error) {
 	s.reconstructCalls = append(s.reconstructCalls, conversationID)
+	s.callOrder = append(s.callOrder, "reconstruct")
 	if s.err != nil {
 		return nil, s.err
 	}
@@ -176,5 +197,108 @@ func TestPrepareTurnContextBubblesHistoryErrors(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "reconstruct history") {
 		t.Fatalf("error = %q, want reconstruct history context", err)
+	}
+}
+
+func TestRunTurnPersistsUserMessageBeforePreparingContext(t *testing.T) {
+	sink := NewChannelSink(8)
+	report := &contextpkg.ContextAssemblyReport{TurnNumber: 4}
+	assembler := &loopContextAssemblerStub{
+		pkg: &contextpkg.FullContextPackage{Content: "assembled", Report: report, Frozen: true},
+	}
+	conversations := &loopConversationManagerStub{
+		history: []db.Message{{ConversationID: "conversation-1", Role: "user", TurnNumber: 4, Sequence: 0}},
+		seen:    loopSeenFilesStub{},
+	}
+	loop := NewAgentLoop(AgentLoopDeps{
+		ContextAssembler:    assembler,
+		ConversationManager: conversations,
+		EventSink:           sink,
+	})
+	loop.now = func() time.Time { return time.Unix(1700000600, 0).UTC() }
+
+	result, err := loop.RunTurn(stdctx.Background(), RunTurnRequest{
+		ConversationID:    "conversation-1",
+		TurnNumber:        4,
+		Message:           "fix auth",
+		ModelContextLimit: 200000,
+		HistoryTokenCount: 4096,
+	})
+	if err != nil {
+		t.Fatalf("RunTurn returned error: %v", err)
+	}
+	if result == nil || result.ContextPackage == nil || result.ContextPackage.Report != report {
+		t.Fatalf("RunTurn result = %#v, want preserved TurnStartResult", result)
+	}
+	if len(conversations.persistCalls) != 1 {
+		t.Fatalf("PersistUserMessage call count = %d, want 1", len(conversations.persistCalls))
+	}
+	persist := conversations.persistCalls[0]
+	if persist.conversationID != "conversation-1" || persist.turnNumber != 4 || persist.message != "fix auth" {
+		t.Fatalf("PersistUserMessage call = %#v, want conversation-1/4/fix auth", persist)
+	}
+	if got := strings.Join(conversations.callOrder, ","); got != "persist,reconstruct" {
+		t.Fatalf("call order = %q, want persist,reconstruct", got)
+	}
+
+	first := readEvent(t, sink.Events())
+	if got := first.EventType(); got != "status" {
+		t.Fatalf("first event type = %q, want status", got)
+	}
+}
+
+func TestRunTurnReturnsErrorEventWhenPersistenceFails(t *testing.T) {
+	sink := NewChannelSink(4)
+	persistErr := errors.New("db write failed")
+	loop := NewAgentLoop(AgentLoopDeps{
+		ContextAssembler: &loopContextAssemblerStub{},
+		ConversationManager: &loopConversationManagerStub{
+			persistErr: persistErr,
+		},
+		EventSink: sink,
+	})
+	loop.now = func() time.Time { return time.Unix(1700000700, 0).UTC() }
+
+	_, err := loop.RunTurn(stdctx.Background(), RunTurnRequest{
+		ConversationID:    "conversation-1",
+		TurnNumber:        1,
+		Message:           "hello",
+		ModelContextLimit: 200000,
+	})
+	if err == nil {
+		t.Fatal("RunTurn error = nil, want persistence error")
+	}
+	if !strings.Contains(err.Error(), "persist user message") {
+		t.Fatalf("error = %q, want persist user message context", err)
+	}
+
+	event := readEvent(t, sink.Events())
+	if got := event.EventType(); got != "error" {
+		t.Fatalf("event type = %q, want error", got)
+	}
+	errEvent, ok := event.(ErrorEvent)
+	if !ok {
+		t.Fatalf("event = %#v, want ErrorEvent", event)
+	}
+	if errEvent.Recoverable {
+		t.Fatal("ErrorEvent.Recoverable = true, want false")
+	}
+	if errEvent.ErrorCode != "persist_user_message_failed" {
+		t.Fatalf("ErrorCode = %q, want persist_user_message_failed", errEvent.ErrorCode)
+	}
+}
+
+func TestRunTurnValidatesRequest(t *testing.T) {
+	loop := NewAgentLoop(AgentLoopDeps{
+		ContextAssembler:    &loopContextAssemblerStub{},
+		ConversationManager: &loopConversationManagerStub{},
+	})
+
+	_, err := loop.RunTurn(stdctx.Background(), RunTurnRequest{Message: "hello", TurnNumber: 1, ModelContextLimit: 200000})
+	if err == nil {
+		t.Fatal("RunTurn error = nil, want validation error")
+	}
+	if !strings.Contains(err.Error(), "conversation ID") {
+		t.Fatalf("error = %q, want conversation ID validation", err)
 	}
 }
