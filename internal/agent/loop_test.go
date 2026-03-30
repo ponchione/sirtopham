@@ -1030,3 +1030,424 @@ func TestRunTurnLoopDetectionDoesNotTriggerBelowThreshold(t *testing.T) {
 		}
 	}
 }
+
+// --- Cancellation tests ---
+
+// blockingProviderRouter blocks on Stream until context is cancelled.
+type blockingProviderRouter struct {
+	started chan struct{} // closed when Stream is called
+}
+
+func (b *blockingProviderRouter) Stream(ctx stdctx.Context, req *provider.Request) (<-chan provider.StreamEvent, error) {
+	if b.started != nil {
+		close(b.started)
+	}
+	// Block until context is cancelled.
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// blockingToolExecutor blocks on Execute until context is cancelled.
+type blockingToolExecutor struct {
+	started chan struct{}
+}
+
+func (b *blockingToolExecutor) Execute(ctx stdctx.Context, call provider.ToolCall) (*provider.ToolResult, error) {
+	if b.started != nil {
+		close(b.started)
+	}
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestRunTurnCancelDuringStream(t *testing.T) {
+	sink := NewChannelSink(32)
+	assembler := &loopContextAssemblerStub{
+		pkg: &contextpkg.FullContextPackage{Content: "context", Frozen: true},
+	}
+	conversations := &loopConversationManagerStub{
+		history: []db.Message{},
+		seen:    loopSeenFilesStub{},
+	}
+
+	streamStarted := make(chan struct{})
+	router := &blockingProviderRouter{started: streamStarted}
+
+	loop := NewAgentLoop(AgentLoopDeps{
+		ContextAssembler:    assembler,
+		ConversationManager: conversations,
+		ProviderRouter:      router,
+		ToolExecutor:        &toolExecutorStub{},
+		PromptBuilder:       NewPromptBuilder(nil),
+		EventSink:           sink,
+	})
+	loop.now = func() time.Time { return time.Unix(1700000600, 0).UTC() }
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := loop.RunTurn(stdctx.Background(), RunTurnRequest{
+			ConversationID:    "conv-1",
+			TurnNumber:        1,
+			Message:           "hello",
+			ModelContextLimit: 200000,
+		})
+		errCh <- err
+	}()
+
+	// Wait for the stream to start, then cancel.
+	<-streamStarted
+	loop.Cancel()
+
+	err := <-errCh
+	if err == nil {
+		t.Fatal("RunTurn error = nil, want cancellation error")
+	}
+	if !errors.Is(err, ErrTurnCancelled) {
+		t.Fatalf("error = %v, want ErrTurnCancelled", err)
+	}
+
+	// Should have emitted TurnCancelledEvent + StatusEvent(StateIdle).
+	var foundCancelled, foundIdle bool
+	for i := 0; i < 20; i++ {
+		select {
+		case e := <-sink.Events():
+			if tc, ok := e.(TurnCancelledEvent); ok {
+				foundCancelled = true
+				if tc.TurnNumber != 1 {
+					t.Fatalf("TurnCancelled.TurnNumber = %d, want 1", tc.TurnNumber)
+				}
+				if tc.Reason != "user_cancelled" {
+					t.Fatalf("TurnCancelled.Reason = %q, want user_cancelled", tc.Reason)
+				}
+			}
+			if se, ok := e.(StatusEvent); ok && se.State == StateIdle {
+				foundIdle = true
+			}
+		default:
+		}
+	}
+	if !foundCancelled {
+		t.Fatal("TurnCancelledEvent not emitted")
+	}
+	if !foundIdle {
+		t.Fatal("StatusEvent(StateIdle) not emitted after cancellation")
+	}
+}
+
+func TestRunTurnCancelDuringToolExecution(t *testing.T) {
+	sink := NewChannelSink(64)
+	assembler := &loopContextAssemblerStub{
+		pkg: &contextpkg.FullContextPackage{Content: "context", Frozen: true},
+	}
+	conversations := &loopConversationManagerStub{
+		history: []db.Message{},
+		seen:    loopSeenFilesStub{},
+	}
+
+	// First iteration: tool call that will block.
+	toolInput := json.RawMessage(`{"cmd":"sleep 100"}`)
+	routerStub := &providerRouterStub{
+		streamEvents: [][]provider.StreamEvent{
+			{
+				provider.ToolCallStart{ID: "t1", Name: "shell"},
+				provider.ToolCallEnd{ID: "t1", Input: toolInput},
+				provider.StreamDone{
+					StopReason: provider.StopReasonToolUse,
+					Usage:      provider.Usage{InputTokens: 10, OutputTokens: 5},
+				},
+			},
+		},
+	}
+
+	toolStarted := make(chan struct{})
+	executor := &blockingToolExecutor{started: toolStarted}
+
+	loop := NewAgentLoop(AgentLoopDeps{
+		ContextAssembler:    assembler,
+		ConversationManager: conversations,
+		ProviderRouter:      routerStub,
+		ToolExecutor:        executor,
+		PromptBuilder:       NewPromptBuilder(nil),
+		EventSink:           sink,
+	})
+	loop.now = func() time.Time { return time.Unix(1700000600, 0).UTC() }
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := loop.RunTurn(stdctx.Background(), RunTurnRequest{
+			ConversationID:    "conv-1",
+			TurnNumber:        1,
+			Message:           "run command",
+			ModelContextLimit: 200000,
+		})
+		errCh <- err
+	}()
+
+	// Wait for tool execution to start, then cancel.
+	<-toolStarted
+	loop.Cancel()
+
+	err := <-errCh
+	if err == nil {
+		t.Fatal("RunTurn error = nil, want cancellation error")
+	}
+	if !errors.Is(err, ErrTurnCancelled) {
+		t.Fatalf("error = %v, want ErrTurnCancelled", err)
+	}
+
+	// CancelIteration should have been called for the in-flight iteration.
+	if len(conversations.cancelIterCalls) != 1 {
+		t.Fatalf("CancelIteration calls = %d, want 1", len(conversations.cancelIterCalls))
+	}
+	ci := conversations.cancelIterCalls[0]
+	if ci.conversationID != "conv-1" || ci.turnNumber != 1 || ci.iteration != 1 {
+		t.Fatalf("CancelIteration call = %+v, want conv-1/1/1", ci)
+	}
+}
+
+func TestRunTurnCtxCancellation(t *testing.T) {
+	// Cancel via the context passed to RunTurn (simulating HTTP disconnect).
+	assembler := &loopContextAssemblerStub{
+		pkg: &contextpkg.FullContextPackage{Content: "context", Frozen: true},
+	}
+	conversations := &loopConversationManagerStub{
+		history: []db.Message{},
+		seen:    loopSeenFilesStub{},
+	}
+
+	streamStarted := make(chan struct{})
+	router := &blockingProviderRouter{started: streamStarted}
+
+	loop := NewAgentLoop(AgentLoopDeps{
+		ContextAssembler:    assembler,
+		ConversationManager: conversations,
+		ProviderRouter:      router,
+		ToolExecutor:        &toolExecutorStub{},
+		PromptBuilder:       NewPromptBuilder(nil),
+	})
+	loop.now = func() time.Time { return time.Unix(1700000600, 0).UTC() }
+
+	ctx, cancel := stdctx.WithCancel(stdctx.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := loop.RunTurn(ctx, RunTurnRequest{
+			ConversationID:    "conv-1",
+			TurnNumber:        1,
+			Message:           "hello",
+			ModelContextLimit: 200000,
+		})
+		errCh <- err
+	}()
+
+	<-streamStarted
+	cancel() // Cancel the external context.
+
+	err := <-errCh
+	if err == nil {
+		t.Fatal("RunTurn error = nil, want cancellation error")
+	}
+	if !errors.Is(err, ErrTurnCancelled) {
+		t.Fatalf("error = %v, want ErrTurnCancelled", err)
+	}
+}
+
+func TestRunTurnCancelIdempotent(t *testing.T) {
+	loop := NewAgentLoop(AgentLoopDeps{
+		ContextAssembler:    &loopContextAssemblerStub{},
+		ConversationManager: &loopConversationManagerStub{},
+		ProviderRouter:      &providerRouterStub{},
+		ToolExecutor:        &toolExecutorStub{},
+		PromptBuilder:       NewPromptBuilder(nil),
+	})
+
+	// Cancel when no turn is running — should be no-op.
+	loop.Cancel()
+	loop.Cancel()
+	loop.Cancel()
+	// No panic = pass.
+}
+
+func TestRunTurnCancelNilLoop(t *testing.T) {
+	var loop *AgentLoop
+	// Cancel on nil loop — should be no-op, no panic.
+	loop.Cancel()
+}
+
+func TestRunTurnCancelPreservesCompletedIterations(t *testing.T) {
+	// Iteration 1 completes (tool use + persist), iteration 2 gets cancelled
+	// during streaming. Completed iteration should be preserved, in-flight
+	// iteration should be cleaned up.
+	sink := NewChannelSink(64)
+	assembler := &loopContextAssemblerStub{
+		pkg: &contextpkg.FullContextPackage{Content: "context", Frozen: true},
+	}
+	conversations := &loopConversationManagerStub{
+		history: []db.Message{},
+		seen:    loopSeenFilesStub{},
+	}
+
+	toolInput := json.RawMessage(`{"path":"a.go"}`)
+	streamStarted := make(chan struct{})
+
+	// Custom router: first call returns tool use, second call blocks.
+	callCount := 0
+	customRouter := &funcProviderRouter{
+		streamFn: func(ctx stdctx.Context, req *provider.Request) (<-chan provider.StreamEvent, error) {
+			callCount++
+			if callCount == 1 {
+				events := []provider.StreamEvent{
+					provider.ToolCallStart{ID: "t1", Name: "read_file"},
+					provider.ToolCallEnd{ID: "t1", Input: toolInput},
+					provider.StreamDone{
+						StopReason: provider.StopReasonToolUse,
+						Usage:      provider.Usage{InputTokens: 10, OutputTokens: 5},
+					},
+				}
+				ch := make(chan provider.StreamEvent, len(events))
+				for _, e := range events {
+					ch <- e
+				}
+				close(ch)
+				return ch, nil
+			}
+			// Second call: signal and block.
+			close(streamStarted)
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+	}
+
+	executor := &toolExecutorStub{}
+
+	loop := NewAgentLoop(AgentLoopDeps{
+		ContextAssembler:    assembler,
+		ConversationManager: conversations,
+		ProviderRouter:      customRouter,
+		ToolExecutor:        executor,
+		PromptBuilder:       NewPromptBuilder(nil),
+		EventSink:           sink,
+	})
+	loop.now = func() time.Time { return time.Unix(1700000600, 0).UTC() }
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := loop.RunTurn(stdctx.Background(), RunTurnRequest{
+			ConversationID:    "conv-1",
+			TurnNumber:        1,
+			Message:           "read a.go",
+			ModelContextLimit: 200000,
+		})
+		errCh <- err
+	}()
+
+	// Wait for iteration 2 streaming to start.
+	<-streamStarted
+	loop.Cancel()
+
+	err := <-errCh
+	if !errors.Is(err, ErrTurnCancelled) {
+		t.Fatalf("error = %v, want ErrTurnCancelled", err)
+	}
+
+	// Iteration 1 should have been persisted.
+	if len(conversations.persistIterCalls) != 1 {
+		t.Fatalf("PersistIteration calls = %d, want 1 (completed iteration)", len(conversations.persistIterCalls))
+	}
+	if conversations.persistIterCalls[0].iteration != 1 {
+		t.Fatalf("persisted iteration = %d, want 1", conversations.persistIterCalls[0].iteration)
+	}
+
+	// CancelIteration should have been called for iteration 2.
+	if len(conversations.cancelIterCalls) != 1 {
+		t.Fatalf("CancelIteration calls = %d, want 1", len(conversations.cancelIterCalls))
+	}
+	if conversations.cancelIterCalls[0].iteration != 2 {
+		t.Fatalf("cancelled iteration = %d, want 2", conversations.cancelIterCalls[0].iteration)
+	}
+
+	// TurnCancelledEvent should show 1 completed iteration.
+	var foundCancelled bool
+	for i := 0; i < 30; i++ {
+		select {
+		case e := <-sink.Events():
+			if tc, ok := e.(TurnCancelledEvent); ok {
+				foundCancelled = true
+				if tc.CompletedIterations != 1 {
+					t.Fatalf("TurnCancelled.CompletedIterations = %d, want 1", tc.CompletedIterations)
+				}
+			}
+		default:
+		}
+	}
+	if !foundCancelled {
+		t.Fatal("TurnCancelledEvent not emitted")
+	}
+}
+
+// funcProviderRouter allows custom Stream behavior via a function.
+type funcProviderRouter struct {
+	streamFn func(ctx stdctx.Context, req *provider.Request) (<-chan provider.StreamEvent, error)
+}
+
+func (f *funcProviderRouter) Stream(ctx stdctx.Context, req *provider.Request) (<-chan provider.StreamEvent, error) {
+	return f.streamFn(ctx, req)
+}
+
+func TestRunTurnCancelWithDeadlineExceeded(t *testing.T) {
+	sink := NewChannelSink(32)
+	assembler := &loopContextAssemblerStub{
+		pkg: &contextpkg.FullContextPackage{Content: "context", Frozen: true},
+	}
+	conversations := &loopConversationManagerStub{
+		history: []db.Message{},
+		seen:    loopSeenFilesStub{},
+	}
+
+	streamStarted := make(chan struct{})
+	router := &blockingProviderRouter{started: streamStarted}
+
+	loop := NewAgentLoop(AgentLoopDeps{
+		ContextAssembler:    assembler,
+		ConversationManager: conversations,
+		ProviderRouter:      router,
+		ToolExecutor:        &toolExecutorStub{},
+		PromptBuilder:       NewPromptBuilder(nil),
+		EventSink:           sink,
+	})
+	loop.now = func() time.Time { return time.Unix(1700000600, 0).UTC() }
+
+	// Use a very short deadline to trigger DeadlineExceeded.
+	ctx, cancel := stdctx.WithTimeout(stdctx.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	_, err := loop.RunTurn(ctx, RunTurnRequest{
+		ConversationID:    "conv-1",
+		TurnNumber:        1,
+		Message:           "hello",
+		ModelContextLimit: 200000,
+	})
+	if err == nil {
+		t.Fatal("RunTurn error = nil, want cancellation error")
+	}
+	if !errors.Is(err, ErrTurnCancelled) {
+		t.Fatalf("error = %v, want ErrTurnCancelled", err)
+	}
+
+	// Reason should be context_deadline_exceeded.
+	var foundCancelled bool
+	for i := 0; i < 20; i++ {
+		select {
+		case e := <-sink.Events():
+			if tc, ok := e.(TurnCancelledEvent); ok {
+				foundCancelled = true
+				if tc.Reason != "context_deadline_exceeded" {
+					t.Fatalf("Reason = %q, want context_deadline_exceeded", tc.Reason)
+				}
+			}
+		default:
+		}
+	}
+	if !foundCancelled {
+		t.Fatal("TurnCancelledEvent not emitted")
+	}
+}

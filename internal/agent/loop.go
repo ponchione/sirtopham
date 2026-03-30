@@ -3,9 +3,11 @@ package agent
 import (
 	stdctx "context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ponchione/sirtopham/internal/conversation"
@@ -13,6 +15,10 @@ import (
 	"github.com/ponchione/sirtopham/internal/db"
 	"github.com/ponchione/sirtopham/internal/provider"
 )
+
+// ErrTurnCancelled is returned by RunTurn when the turn is cancelled via
+// Cancel() or context cancellation.
+var ErrTurnCancelled = errors.New("agent loop: turn cancelled")
 
 const (
 	defaultMaxIterations       = 50
@@ -117,6 +123,11 @@ type AgentLoop struct {
 	cfg                 AgentLoopConfig
 	logger              *slog.Logger
 	now                 func() time.Time
+
+	// cancelMu protects cancelFn for thread-safe Cancel() calls.
+	cancelMu sync.Mutex
+	// cancelFn cancels the in-flight turn's derived context. Nil when idle.
+	cancelFn stdctx.CancelFunc
 }
 
 // NewAgentLoop constructs the agent loop and applies default config values.
@@ -166,11 +177,44 @@ func (l *AgentLoop) Close() {
 	l.events.Close()
 }
 
+// Cancel triggers cancellation of the in-progress turn. It is safe to call
+// from any goroutine and is idempotent — calling Cancel() multiple times or
+// when no turn is running is a no-op.
+func (l *AgentLoop) Cancel() {
+	if l == nil {
+		return
+	}
+	l.cancelMu.Lock()
+	defer l.cancelMu.Unlock()
+	if l.cancelFn != nil {
+		l.cancelFn()
+	}
+}
+
+// setCancel stores the cancel function for the in-flight turn.
+func (l *AgentLoop) setCancel(fn stdctx.CancelFunc) {
+	l.cancelMu.Lock()
+	defer l.cancelMu.Unlock()
+	l.cancelFn = fn
+}
+
+// clearCancel clears the stored cancel function (turn is done).
+func (l *AgentLoop) clearCancel() {
+	l.cancelMu.Lock()
+	defer l.cancelMu.Unlock()
+	l.cancelFn = nil
+}
+
 // RunTurn executes a full turn: persist user message → context assembly →
 // iteration loop until text-only response or max iterations reached.
 //
 // The method is blocking — it returns only when the turn is complete,
 // cancelled, or fails. Events stream via EventSink throughout.
+//
+// Cancellation is supported via the ctx parameter and the Cancel() method.
+// On cancellation, completed iterations are preserved and the in-flight
+// iteration is cleaned up via CancelIteration. RunTurn returns
+// ErrTurnCancelled (wrapping the underlying context error).
 func (l *AgentLoop) RunTurn(ctx stdctx.Context, req RunTurnRequest) (*TurnResult, error) {
 	if ctx == nil {
 		ctx = stdctx.Background()
@@ -182,10 +226,19 @@ func (l *AgentLoop) RunTurn(ctx stdctx.Context, req RunTurnRequest) (*TurnResult
 		return nil, err
 	}
 
+	// Derive a cancelable context so Cancel() can stop this turn.
+	ctx, cancel := stdctx.WithCancel(ctx)
+	defer cancel()
+	l.setCancel(cancel)
+	defer l.clearCancel()
+
 	turnStart := l.now()
 
 	// Step 1: Persist user message.
 	if err := l.conversationManager.PersistUserMessage(ctx, req.ConversationID, req.TurnNumber, req.Message); err != nil {
+		if isCancelled(ctx) {
+			return nil, l.handleCancellation(req.ConversationID, req.TurnNumber, 0, 0, ctx.Err())
+		}
 		wrapped := fmt.Errorf("agent loop: persist user message: %w", err)
 		l.emit(ErrorEvent{
 			ErrorCode:   "persist_user_message_failed",
@@ -206,11 +259,15 @@ func (l *AgentLoop) RunTurn(ctx stdctx.Context, req RunTurnRequest) (*TurnResult
 		req.HistoryTokenCount,
 	)
 	if err != nil {
+		if isCancelled(ctx) {
+			return nil, l.handleCancellation(req.ConversationID, req.TurnNumber, 0, 0, ctx.Err())
+		}
 		return nil, err
 	}
 
 	// Step 3: Iteration loop.
 	iteration := 1
+	completedIterations := 0
 	var totalUsage provider.Usage
 	var currentTurnMessages []provider.Message
 	detector := newLoopDetector(l.cfg.LoopDetectionThreshold)
@@ -225,9 +282,17 @@ func (l *AgentLoop) RunTurn(ctx stdctx.Context, req RunTurnRequest) (*TurnResult
 			"iteration", iteration,
 		)
 
+		// Check for cancellation before each iteration.
+		if isCancelled(ctx) {
+			return nil, l.handleCancellation(req.ConversationID, req.TurnNumber, iteration, completedIterations, ctx.Err())
+		}
+
 		// 3a: Reconstruct history (includes persisted messages from prior iterations).
 		history, err := l.conversationManager.ReconstructHistory(ctx, req.ConversationID)
 		if err != nil {
+			if isCancelled(ctx) {
+				return nil, l.handleCancellation(req.ConversationID, req.TurnNumber, iteration, completedIterations, ctx.Err())
+			}
 			return nil, fmt.Errorf("agent loop: reconstruct history for iteration %d: %w", iteration, err)
 		}
 
@@ -271,6 +336,9 @@ func (l *AgentLoop) RunTurn(ctx stdctx.Context, req RunTurnRequest) (*TurnResult
 
 		streamCh, err := l.providerRouter.Stream(ctx, promptReq)
 		if err != nil {
+			if isCancelled(ctx) {
+				return nil, l.handleCancellation(req.ConversationID, req.TurnNumber, iteration, completedIterations, ctx.Err())
+			}
 			return nil, fmt.Errorf("agent loop: stream request for iteration %d: %w", iteration, err)
 		}
 
@@ -278,6 +346,10 @@ func (l *AgentLoop) RunTurn(ctx stdctx.Context, req RunTurnRequest) (*TurnResult
 			return l.now().UTC().Format(time.RFC3339)
 		})
 		if err != nil {
+			if isCancelled(ctx) {
+				// Partial assistant message from the in-flight stream is discarded.
+				return nil, l.handleCancellation(req.ConversationID, req.TurnNumber, iteration, completedIterations, ctx.Err())
+			}
 			return nil, fmt.Errorf("agent loop: consume stream for iteration %d: %w", iteration, err)
 		}
 
@@ -299,6 +371,9 @@ func (l *AgentLoop) RunTurn(ctx stdctx.Context, req RunTurnRequest) (*TurnResult
 				},
 			}
 			if err := l.conversationManager.PersistIteration(ctx, req.ConversationID, req.TurnNumber, iteration, persistMessages); err != nil {
+				if isCancelled(ctx) {
+					return nil, l.handleCancellation(req.ConversationID, req.TurnNumber, iteration, completedIterations, ctx.Err())
+				}
 				return nil, fmt.Errorf("agent loop: persist final iteration %d: %w", iteration, err)
 			}
 
@@ -314,11 +389,11 @@ func (l *AgentLoop) RunTurn(ctx stdctx.Context, req RunTurnRequest) (*TurnResult
 			})
 
 			return &TurnResult{
-				TurnStartResult:   *turnCtx,
-				FinalText:         result.TextContent,
-				IterationCount:    iteration,
-				TotalUsage:        totalUsage,
-				Duration:          turnDuration,
+				TurnStartResult: *turnCtx,
+				FinalText:       result.TextContent,
+				IterationCount:  iteration,
+				TotalUsage:      totalUsage,
+				Duration:        turnDuration,
 			}, nil
 		}
 
@@ -326,7 +401,14 @@ func (l *AgentLoop) RunTurn(ctx stdctx.Context, req RunTurnRequest) (*TurnResult
 		l.emit(StatusEvent{State: StateExecutingTools, Time: l.now()})
 
 		var toolResults []provider.ToolResult
+		toolsCancelled := false
 		for _, tc := range result.ToolCalls {
+			// Check for cancellation before each tool call.
+			if isCancelled(ctx) {
+				toolsCancelled = true
+				break
+			}
+
 			l.emit(ToolCallStartEvent{
 				ToolCallID: tc.ID,
 				ToolName:   tc.Name,
@@ -337,6 +419,12 @@ func (l *AgentLoop) RunTurn(ctx stdctx.Context, req RunTurnRequest) (*TurnResult
 			toolStart := l.now()
 			toolResult, toolErr := l.toolExecutor.Execute(ctx, tc)
 			toolDuration := l.now().Sub(toolStart)
+
+			// Check if tool execution was cancelled.
+			if isCancelled(ctx) {
+				toolsCancelled = true
+				break
+			}
 
 			if toolErr != nil {
 				// Tool execution failed — create an error result.
@@ -358,6 +446,10 @@ func (l *AgentLoop) RunTurn(ctx stdctx.Context, req RunTurnRequest) (*TurnResult
 			})
 		}
 
+		if toolsCancelled {
+			return nil, l.handleCancellation(req.ConversationID, req.TurnNumber, iteration, completedIterations, ctx.Err())
+		}
+
 		// Build the iteration messages for persistence: assistant + tool results.
 		persistMessages := []conversation.IterationMessage{
 			{
@@ -375,8 +467,13 @@ func (l *AgentLoop) RunTurn(ctx stdctx.Context, req RunTurnRequest) (*TurnResult
 		}
 
 		if err := l.conversationManager.PersistIteration(ctx, req.ConversationID, req.TurnNumber, iteration, persistMessages); err != nil {
+			if isCancelled(ctx) {
+				return nil, l.handleCancellation(req.ConversationID, req.TurnNumber, iteration, completedIterations, ctx.Err())
+			}
 			return nil, fmt.Errorf("agent loop: persist iteration %d: %w", iteration, err)
 		}
+
+		completedIterations = iteration
 
 		// Build tool result messages for the next iteration's current-turn messages.
 		// We need to build the assistant message as a provider.Message plus tool result messages.
@@ -416,6 +513,51 @@ func (l *AgentLoop) RunTurn(ctx stdctx.Context, req RunTurnRequest) (*TurnResult
 	// but the model still produced tool calls on the last allowed iteration
 	// (which shouldn't happen since tools are disabled).
 	return nil, fmt.Errorf("agent loop: exceeded max iterations (%d)", l.cfg.MaxIterations)
+}
+
+// handleCancellation performs post-cancellation cleanup: calls CancelIteration
+// for the in-flight iteration, emits TurnCancelledEvent and StatusEvent(StateIdle),
+// and returns ErrTurnCancelled wrapping the underlying cause.
+func (l *AgentLoop) handleCancellation(conversationID string, turnNumber, currentIteration, completedIterations int, cause error) error {
+	reason := "user_cancelled"
+	if errors.Is(cause, stdctx.DeadlineExceeded) {
+		reason = "context_deadline_exceeded"
+	}
+
+	l.logger.Warn("turn cancelled",
+		"conversation_id", conversationID,
+		"turn", turnNumber,
+		"current_iteration", currentIteration,
+		"completed_iterations", completedIterations,
+		"reason", reason,
+	)
+
+	// Clean up the in-flight iteration if one was started.
+	if currentIteration > 0 && currentIteration > completedIterations {
+		// Use a fresh background context for cleanup — the original is cancelled.
+		cleanupCtx := stdctx.Background()
+		if err := l.conversationManager.CancelIteration(cleanupCtx, conversationID, turnNumber, currentIteration); err != nil {
+			l.logger.Error("failed to cancel in-flight iteration",
+				"conversation_id", conversationID,
+				"turn", turnNumber,
+				"iteration", currentIteration,
+				"error", err,
+			)
+		}
+	}
+
+	l.emit(TurnCancelledEvent{
+		TurnNumber:          turnNumber,
+		CompletedIterations: completedIterations,
+		Reason:              reason,
+		Time:                l.now(),
+	})
+	l.emit(StatusEvent{State: StateIdle, Time: l.now()})
+
+	if cause != nil {
+		return fmt.Errorf("%w: %v", ErrTurnCancelled, cause)
+	}
+	return ErrTurnCancelled
 }
 
 // TurnResult holds the complete output of a turn.
@@ -539,6 +681,16 @@ func withDefaultConfig(cfg AgentLoopConfig) AgentLoopConfig {
 		cfg.BasePrompt = "You are a helpful AI assistant."
 	}
 	return cfg
+}
+
+// isCancelled checks if the context has been cancelled.
+func isCancelled(ctx stdctx.Context) bool {
+	select {
+	case <-ctx.Done():
+		return true
+	default:
+		return false
+	}
 }
 
 // toolNameFromResults looks up the tool name for a tool_use ID from the tool calls list.
