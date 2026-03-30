@@ -74,13 +74,14 @@ type ToolExecutor interface {
 // AgentLoopConfig carries the initial state-machine knobs for the future full
 // RunTurn implementation.
 type AgentLoopConfig struct {
-	MaxIterations          int                 `json:"max_iterations,omitempty"`
-	LoopDetectionThreshold int                 `json:"loop_detection_threshold,omitempty"`
-	ExtendedThinking       bool                `json:"extended_thinking,omitempty"`
-	BasePrompt             string              `json:"base_prompt,omitempty"`
-	ProviderName           string              `json:"provider_name,omitempty"`
-	ModelName              string              `json:"model_name,omitempty"`
-	ContextConfig          config.ContextConfig `json:"context_config,omitempty"`
+	MaxIterations          int                  `json:"max_iterations,omitempty"`
+	LoopDetectionThreshold int                  `json:"loop_detection_threshold,omitempty"`
+	ExtendedThinking       bool                 `json:"extended_thinking,omitempty"`
+	BasePrompt             string               `json:"base_prompt,omitempty"`
+	ProviderName           string               `json:"provider_name,omitempty"`
+	ModelName              string               `json:"model_name,omitempty"`
+	EmitContextDebug       bool                 `json:"emit_context_debug,omitempty"`
+	ContextConfig          config.ContextConfig  `json:"context_config,omitempty"`
 }
 
 // AgentLoopDeps carries the dependencies needed by the agent loop.
@@ -542,6 +543,11 @@ func (l *AgentLoop) RunTurn(ctx stdctx.Context, req RunTurnRequest) (*TurnResult
 
 			toolResults = append(toolResults, *toolResult)
 
+			l.emit(ToolCallOutputEvent{
+				ToolCallID: tc.ID,
+				Output:     toolResult.Content,
+				Time:       l.now(),
+			})
 			l.emit(ToolCallEndEvent{
 				ToolCallID: tc.ID,
 				Result:     toolResult.Content,
@@ -716,11 +722,13 @@ func (l *AgentLoop) PrepareTurnContext(
 		return nil, fmt.Errorf("agent loop: assemble turn context: %w", err)
 	}
 
-	var report *contextpkg.ContextAssemblyReport
-	if pkg != nil {
-		report = pkg.Report
+	if l.cfg.EmitContextDebug {
+		var report *contextpkg.ContextAssemblyReport
+		if pkg != nil {
+			report = pkg.Report
+		}
+		l.emit(ContextDebugEvent{Report: report, Time: l.now()})
 	}
-	l.emit(ContextDebugEvent{Report: report, Time: l.now()})
 	l.emit(StatusEvent{State: StateWaitingForLLM, Time: l.now()})
 
 	return &TurnStartResult{
