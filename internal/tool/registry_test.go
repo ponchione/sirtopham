@@ -109,6 +109,132 @@ func TestRegistrySchemas(t *testing.T) {
 	}
 }
 
+func TestRegistryToolDefinitions(t *testing.T) {
+	reg := NewRegistry()
+
+	// Register tools with proper Anthropic-style Schema() JSON.
+	readTool := &mockTool{
+		name:        "file_read",
+		description: "Read a file",
+		purity:      Pure,
+		schema: json.RawMessage(`{
+			"name": "file_read",
+			"description": "Read file contents",
+			"input_schema": {
+				"type": "object",
+				"properties": {
+					"path": {"type": "string"}
+				},
+				"required": ["path"]
+			}
+		}`),
+	}
+	shellTool := &mockTool{
+		name:        "shell",
+		description: "Run a shell command",
+		purity:      Mutating,
+		schema: json.RawMessage(`{
+			"name": "shell",
+			"description": "Execute a shell command",
+			"input_schema": {
+				"type": "object",
+				"properties": {
+					"command": {"type": "string"}
+				},
+				"required": ["command"]
+			}
+		}`),
+	}
+
+	reg.Register(readTool)
+	reg.Register(shellTool)
+
+	defs := reg.ToolDefinitions()
+	if len(defs) != 2 {
+		t.Fatalf("ToolDefinitions() returned %d, want 2", len(defs))
+	}
+
+	// Verify first tool.
+	if defs[0].Name != "file_read" {
+		t.Errorf("defs[0].Name = %q, want file_read", defs[0].Name)
+	}
+	if defs[0].Description != "Read file contents" {
+		t.Errorf("defs[0].Description = %q, want 'Read file contents'", defs[0].Description)
+	}
+	if defs[0].InputSchema == nil {
+		t.Error("defs[0].InputSchema is nil")
+	}
+
+	// Verify second tool.
+	if defs[1].Name != "shell" {
+		t.Errorf("defs[1].Name = %q, want shell", defs[1].Name)
+	}
+
+	// Verify InputSchema is valid JSON with expected structure.
+	var schema map[string]interface{}
+	if err := json.Unmarshal(defs[0].InputSchema, &schema); err != nil {
+		t.Fatalf("defs[0].InputSchema is not valid JSON: %v", err)
+	}
+	if schema["type"] != "object" {
+		t.Errorf("InputSchema type = %v, want object", schema["type"])
+	}
+}
+
+func TestRegistryToolDefinitionsMalformedSchema(t *testing.T) {
+	reg := NewRegistry()
+
+	// Tool with valid schema.
+	goodTool := &mockTool{
+		name:   "good",
+		purity: Pure,
+		schema: json.RawMessage(`{"name":"good","description":"A good tool","input_schema":{"type":"object"}}`),
+	}
+	// Tool with malformed JSON schema.
+	badTool := &mockTool{
+		name:   "bad",
+		purity: Pure,
+		schema: json.RawMessage(`{not valid json`),
+	}
+
+	reg.Register(goodTool)
+	reg.Register(badTool)
+
+	defs := reg.ToolDefinitions()
+	if len(defs) != 1 {
+		t.Fatalf("ToolDefinitions() returned %d, want 1 (bad tool should be skipped)", len(defs))
+	}
+	if defs[0].Name != "good" {
+		t.Errorf("defs[0].Name = %q, want good", defs[0].Name)
+	}
+}
+
+func TestRegistryToolDefinitionsWithRealTools(t *testing.T) {
+	// Verify that the actual tool implementations produce valid ToolDefinitions.
+	reg := NewRegistry()
+	RegisterFileTools(reg)
+
+	defs := reg.ToolDefinitions()
+	if len(defs) != 3 {
+		t.Fatalf("ToolDefinitions() with file tools returned %d, want 3", len(defs))
+	}
+
+	// All definitions should have non-empty names and descriptions.
+	for i, d := range defs {
+		if d.Name == "" {
+			t.Errorf("defs[%d].Name is empty", i)
+		}
+		if d.Description == "" {
+			t.Errorf("defs[%d].Description is empty", i)
+		}
+		if d.InputSchema == nil {
+			t.Errorf("defs[%d].InputSchema is nil", i)
+		}
+		if !json.Valid(d.InputSchema) {
+			t.Errorf("defs[%d].InputSchema is not valid JSON", i)
+		}
+	}
+}
+
 func TestRegistryNames(t *testing.T) {
 	reg := NewRegistry()
 	reg.Register(newMockTool("shell", Mutating))
