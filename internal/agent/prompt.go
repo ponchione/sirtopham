@@ -10,6 +10,7 @@ import (
 	contextpkg "github.com/ponchione/sirtopham/internal/context"
 	"github.com/ponchione/sirtopham/internal/db"
 	"github.com/ponchione/sirtopham/internal/provider"
+	"github.com/ponchione/sirtopham/internal/tool"
 )
 
 const (
@@ -69,6 +70,17 @@ type PromptConfig struct {
 
 	// Iteration is passed through for tracking/persistence metadata.
 	Iteration int
+
+	// CompressHistoricalResults enables Phase 2 history compression.
+	// When true, historical tool results from prior turns are compressed
+	// to reduce token usage: line-number stripping, JSON re-minification,
+	// duplicate result elision, and stale result summarization.
+	CompressHistoricalResults bool
+
+	// HistorySummarizeAfterTurns controls stale result summarization.
+	// Tool results older than this many turns are replaced with a one-line
+	// summary. Set to 0 to disable summarization (other transforms still apply).
+	HistorySummarizeAfterTurns int
 }
 
 // PromptBuilder constructs provider.Request objects from PromptConfig inputs.
@@ -173,13 +185,25 @@ func (b *PromptBuilder) buildSystemBlocks(config PromptConfig, wantCache bool) [
 //
 // History messages (Block 3) come first, with a cache marker on the last
 // history message for Anthropic. Current turn messages follow with no markers.
+//
+// When CompressHistoricalResults is enabled, Phase 2 history compression is
+// applied to tool results from prior turns before conversion to provider
+// messages. This reduces token usage by stripping line numbers, minifying
+// JSON, eliding duplicate file reads, and summarizing stale results.
 func (b *PromptBuilder) buildMessages(config PromptConfig, wantCache bool) []provider.Message {
-	historyLen := len(config.History)
+	history := config.History
+
+	// Phase 2: Apply history compression if enabled.
+	if config.CompressHistoricalResults && len(history) > 0 {
+		history = b.compressHistory(history, config)
+	}
+
+	historyLen := len(history)
 	currentLen := len(config.CurrentTurnMessages)
 	messages := make([]provider.Message, 0, historyLen+currentLen)
 
 	// Block 3: history prefix.
-	for _, dbMsg := range config.History {
+	for _, dbMsg := range history {
 		messages = append(messages, dbMessageToProviderMessage(dbMsg))
 	}
 
@@ -233,6 +257,39 @@ func dbMessageToProviderMessage(msg db.Message) provider.Message {
 	}
 
 	return pm
+}
+
+// compressHistory applies Phase 2 history compression to db.Messages,
+// converting to tool.HistoryMessage for the compressor and patching the
+// content back into the original db.Message slice.
+func (b *PromptBuilder) compressHistory(messages []db.Message, config PromptConfig) []db.Message {
+	// Convert to tool.HistoryMessage for the compressor.
+	histMsgs := make([]tool.HistoryMessage, len(messages))
+	for i, msg := range messages {
+		histMsgs[i] = tool.HistoryMessage{
+			Role:       msg.Role,
+			Content:    msg.Content,
+			ToolName:   msg.ToolName,
+			ToolUseID:  msg.ToolUseID,
+			TurnNumber: msg.TurnNumber,
+		}
+	}
+
+	compressor := &tool.HistoryCompressor{
+		CurrentTurn:         int64(config.TurnNumber),
+		SummarizeAfterTurns: config.HistorySummarizeAfterTurns,
+	}
+
+	compressed := compressor.CompressHistory(histMsgs)
+
+	// Copy the original messages and patch in compressed content.
+	result := make([]db.Message, len(messages))
+	copy(result, messages)
+	for i, hm := range compressed {
+		result[i].Content = hm.Content
+	}
+
+	return result
 }
 
 // ephemeralCacheControl returns the Anthropic cache control marker.

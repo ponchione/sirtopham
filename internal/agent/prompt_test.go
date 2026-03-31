@@ -530,3 +530,80 @@ func TestBuildPromptFullScenarioAnthropicWithAllBlocks(t *testing.T) {
 		t.Fatal("tracking metadata not passed through")
 	}
 }
+
+func TestBuildPromptPhase2HistoryCompression(t *testing.T) {
+	b := NewPromptBuilder(nil)
+
+	// Simulate a history with a file_read from turn 1, then the same file re-read in turn 2.
+	// The current turn is 3. Turn 1 result should be elided, turn 2 should have line numbers stripped.
+	history := []db.Message{
+		{Role: "user", Content: nullStr("read config"), TurnNumber: 1, Iteration: 0, Sequence: 1},
+		{Role: "tool", Content: nullStr("File: config.go (3 lines)\n 1\tpackage config\n 2\t\n 3\tvar x = 1\n"), ToolName: nullStr("file_read"), ToolUseID: nullStr("t1"), TurnNumber: 1, Iteration: 1, Sequence: 2},
+		{Role: "user", Content: nullStr("read it again"), TurnNumber: 2, Iteration: 0, Sequence: 3},
+		{Role: "tool", Content: nullStr("File: config.go (3 lines)\n 1\tpackage config\n 2\t\n 3\tvar x = 2\n"), ToolName: nullStr("file_read"), ToolUseID: nullStr("t2"), TurnNumber: 2, Iteration: 1, Sequence: 4},
+	}
+
+	req, err := b.BuildPrompt(PromptConfig{
+		BasePrompt:                 "You are helpful.",
+		History:                    history,
+		TurnNumber:                 3,
+		CompressHistoricalResults:  true,
+		HistorySummarizeAfterTurns: 10,
+	})
+	if err != nil {
+		t.Fatalf("BuildPrompt: %v", err)
+	}
+
+	// Should have 4 messages (user + tool + user + tool).
+	if len(req.Messages) != 4 {
+		t.Fatalf("expected 4 messages, got %d", len(req.Messages))
+	}
+
+	// Message 1 (index 1): turn 1 file_read should be elided.
+	var turn1Content string
+	if err := json.Unmarshal(req.Messages[1].Content, &turn1Content); err != nil {
+		t.Fatalf("unmarshal turn1 content: %v", err)
+	}
+	if !strings.Contains(turn1Content, "elided") {
+		t.Errorf("turn 1 file_read should be elided, got: %q", turn1Content)
+	}
+
+	// Message 3 (index 3): turn 2 file_read should have line numbers stripped.
+	var turn2Content string
+	if err := json.Unmarshal(req.Messages[3].Content, &turn2Content); err != nil {
+		t.Fatalf("unmarshal turn2 content: %v", err)
+	}
+	if strings.Contains(turn2Content, " 1\t") {
+		t.Errorf("turn 2 file_read should have line numbers stripped, got: %q", turn2Content)
+	}
+	if !strings.Contains(turn2Content, "package config") {
+		t.Errorf("turn 2 file_read should still have content, got: %q", turn2Content)
+	}
+}
+
+func TestBuildPromptPhase2CompressionDisabled(t *testing.T) {
+	b := NewPromptBuilder(nil)
+
+	history := []db.Message{
+		{Role: "tool", Content: nullStr("File: main.go (2 lines)\n 1\tpackage main\n 2\tfunc main() {}\n"), ToolName: nullStr("file_read"), ToolUseID: nullStr("t1"), TurnNumber: 1, Iteration: 1, Sequence: 1},
+	}
+
+	req, err := b.BuildPrompt(PromptConfig{
+		BasePrompt:                "You are helpful.",
+		History:                   history,
+		TurnNumber:                3,
+		CompressHistoricalResults: false, // Disabled
+	})
+	if err != nil {
+		t.Fatalf("BuildPrompt: %v", err)
+	}
+
+	// Content should be unmodified (line numbers preserved).
+	var content string
+	if err := json.Unmarshal(req.Messages[0].Content, &content); err != nil {
+		t.Fatalf("unmarshal content: %v", err)
+	}
+	if !strings.Contains(content, " 1\t") {
+		t.Errorf("with compression disabled, line numbers should be preserved, got: %q", content)
+	}
+}

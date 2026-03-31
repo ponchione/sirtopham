@@ -82,6 +82,10 @@ type AgentLoopConfig struct {
 	ModelName              string               `json:"model_name,omitempty"`
 	EmitContextDebug       bool                 `json:"emit_context_debug,omitempty"`
 	ContextConfig          config.ContextConfig  `json:"context_config,omitempty"`
+
+	// Phase 2 history compression (spec 11).
+	CompressHistoricalResults  bool `json:"compress_historical_results,omitempty"`
+	HistorySummarizeAfterTurns int  `json:"history_summarize_after_turns,omitempty"`
 }
 
 // AgentLoopDeps carries the dependencies needed by the agent loop.
@@ -330,19 +334,21 @@ func (l *AgentLoop) RunTurn(ctx stdctx.Context, req RunTurnRequest) (*TurnResult
 
 		// 3b: Build prompt.
 		promptReq, err := l.promptBuilder.BuildPrompt(PromptConfig{
-			BasePrompt:          l.cfg.BasePrompt,
-			ContextPackage:      turnCtx.ContextPackage,
-			History:             history,
-			CurrentTurnMessages: currentTurnMessages,
-			ToolDefinitions:     l.toolDefinitions,
-			ProviderName:        l.cfg.ProviderName,
-			ModelName:           l.cfg.ModelName,
-			ContextLimit:        req.ModelContextLimit,
-			DisableTools:        disableTools,
-			Purpose:             "chat",
-			ConversationID:      req.ConversationID,
-			TurnNumber:          req.TurnNumber,
-			Iteration:           iteration,
+			BasePrompt:                 l.cfg.BasePrompt,
+			ContextPackage:             turnCtx.ContextPackage,
+			History:                    history,
+			CurrentTurnMessages:        currentTurnMessages,
+			ToolDefinitions:            l.toolDefinitions,
+			ProviderName:               l.cfg.ProviderName,
+			ModelName:                  l.cfg.ModelName,
+			ContextLimit:               req.ModelContextLimit,
+			DisableTools:               disableTools,
+			Purpose:                    "chat",
+			ConversationID:             req.ConversationID,
+			TurnNumber:                 req.TurnNumber,
+			Iteration:                  iteration,
+			CompressHistoricalResults:  l.cfg.CompressHistoricalResults,
+			HistorySummarizeAfterTurns: l.cfg.HistorySummarizeAfterTurns,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("agent loop: build prompt for iteration %d: %w", iteration, err)
@@ -356,19 +362,21 @@ func (l *AgentLoop) RunTurn(ctx stdctx.Context, req RunTurnRequest) (*TurnResult
 				return nil, fmt.Errorf("agent loop: reconstruct history after compression in iteration %d: %w", iteration, err)
 			}
 			promptReq, err = l.promptBuilder.BuildPrompt(PromptConfig{
-				BasePrompt:          l.cfg.BasePrompt,
-				ContextPackage:      turnCtx.ContextPackage,
-				History:             history,
-				CurrentTurnMessages: currentTurnMessages,
-				ToolDefinitions:     l.toolDefinitions,
-				ProviderName:        l.cfg.ProviderName,
-				ModelName:           l.cfg.ModelName,
-				ContextLimit:        req.ModelContextLimit,
-				DisableTools:        disableTools,
-				Purpose:             "chat",
-				ConversationID:      req.ConversationID,
-				TurnNumber:          req.TurnNumber,
-				Iteration:           iteration,
+				BasePrompt:                 l.cfg.BasePrompt,
+				ContextPackage:             turnCtx.ContextPackage,
+				History:                    history,
+				CurrentTurnMessages:        currentTurnMessages,
+				ToolDefinitions:            l.toolDefinitions,
+				ProviderName:               l.cfg.ProviderName,
+				ModelName:                  l.cfg.ModelName,
+				ContextLimit:               req.ModelContextLimit,
+				DisableTools:               disableTools,
+				Purpose:                    "chat",
+				ConversationID:             req.ConversationID,
+				TurnNumber:                 req.TurnNumber,
+				Iteration:                  iteration,
+				CompressHistoricalResults:  l.cfg.CompressHistoricalResults,
+				HistorySummarizeAfterTurns: l.cfg.HistorySummarizeAfterTurns,
 			})
 			if err != nil {
 				return nil, fmt.Errorf("agent loop: rebuild prompt after compression in iteration %d: %w", iteration, err)
@@ -892,19 +900,21 @@ func (l *AgentLoop) tryEmergencyCompression(
 	}
 
 	promptReq, err := l.promptBuilder.BuildPrompt(PromptConfig{
-		BasePrompt:          l.cfg.BasePrompt,
-		ContextPackage:      turnCtx.ContextPackage,
-		History:             history,
-		CurrentTurnMessages: currentTurnMessages,
-		ToolDefinitions:     l.toolDefinitions,
-		ProviderName:        l.cfg.ProviderName,
-		ModelName:           l.cfg.ModelName,
-		ContextLimit:        req.ModelContextLimit,
-		DisableTools:        disableTools,
-		Purpose:             "chat",
-		ConversationID:      req.ConversationID,
-		TurnNumber:          req.TurnNumber,
-		Iteration:           iteration,
+		BasePrompt:                 l.cfg.BasePrompt,
+		ContextPackage:             turnCtx.ContextPackage,
+		History:                    history,
+		CurrentTurnMessages:        currentTurnMessages,
+		ToolDefinitions:            l.toolDefinitions,
+		ProviderName:               l.cfg.ProviderName,
+		ModelName:                  l.cfg.ModelName,
+		ContextLimit:               req.ModelContextLimit,
+		DisableTools:               disableTools,
+		Purpose:                    "chat",
+		ConversationID:             req.ConversationID,
+		TurnNumber:                 req.TurnNumber,
+		Iteration:                  iteration,
+		CompressHistoricalResults:  l.cfg.CompressHistoricalResults,
+		HistorySummarizeAfterTurns: l.cfg.HistorySummarizeAfterTurns,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("agent loop: rebuild prompt after emergency compression in iteration %d: %w", iteration, err)
