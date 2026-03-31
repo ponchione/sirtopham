@@ -10,6 +10,26 @@ import (
 	"database/sql"
 )
 
+const countConversations = `-- name: CountConversations :one
+SELECT COUNT(*) FROM conversations WHERE project_id = ?
+`
+
+func (q *Queries) CountConversations(ctx context.Context, projectID string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countConversations, projectID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const deleteConversation = `-- name: DeleteConversation :exec
+DELETE FROM conversations WHERE id = ?
+`
+
+func (q *Queries) DeleteConversation(ctx context.Context, id string) error {
+	_, err := q.db.ExecContext(ctx, deleteConversation, id)
+	return err
+}
+
 const deleteIterationMessages = `-- name: DeleteIterationMessages :exec
 DELETE FROM messages
 WHERE conversation_id = ? AND turn_number = ? AND iteration = ?
@@ -55,6 +75,55 @@ type DeleteIterationToolExecutionsParams struct {
 
 func (q *Queries) DeleteIterationToolExecutions(ctx context.Context, arg DeleteIterationToolExecutionsParams) error {
 	_, err := q.db.ExecContext(ctx, deleteIterationToolExecutions, arg.ConversationID, arg.TurnNumber, arg.Iteration)
+	return err
+}
+
+const getConversation = `-- name: GetConversation :one
+SELECT id, project_id, title, model, provider, created_at, updated_at
+FROM conversations
+WHERE id = ?
+`
+
+func (q *Queries) GetConversation(ctx context.Context, id string) (Conversation, error) {
+	row := q.db.QueryRowContext(ctx, getConversation, id)
+	var i Conversation
+	err := row.Scan(
+		&i.ID,
+		&i.ProjectID,
+		&i.Title,
+		&i.Model,
+		&i.Provider,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const insertConversation = `-- name: InsertConversation :exec
+INSERT INTO conversations (id, project_id, title, model, provider, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?)
+`
+
+type InsertConversationParams struct {
+	ID        string         `json:"id"`
+	ProjectID string         `json:"project_id"`
+	Title     sql.NullString `json:"title"`
+	Model     sql.NullString `json:"model"`
+	Provider  sql.NullString `json:"provider"`
+	CreatedAt string         `json:"created_at"`
+	UpdatedAt string         `json:"updated_at"`
+}
+
+func (q *Queries) InsertConversation(ctx context.Context, arg InsertConversationParams) error {
+	_, err := q.db.ExecContext(ctx, insertConversation,
+		arg.ID,
+		arg.ProjectID,
+		arg.Title,
+		arg.Model,
+		arg.Provider,
+		arg.CreatedAt,
+		arg.UpdatedAt,
+	)
 	return err
 }
 
@@ -385,6 +454,23 @@ func (q *Queries) SearchConversations(ctx context.Context, content string) ([]Se
 		return nil, err
 	}
 	return items, nil
+}
+
+const setConversationTitle = `-- name: SetConversationTitle :exec
+UPDATE conversations
+SET title = ?, updated_at = ?
+WHERE id = ?
+`
+
+type SetConversationTitleParams struct {
+	Title     sql.NullString `json:"title"`
+	UpdatedAt string         `json:"updated_at"`
+	ID        string         `json:"id"`
+}
+
+func (q *Queries) SetConversationTitle(ctx context.Context, arg SetConversationTitleParams) error {
+	_, err := q.db.ExecContext(ctx, setConversationTitle, arg.Title, arg.UpdatedAt, arg.ID)
+	return err
 }
 
 const touchConversationUpdatedAt = `-- name: TouchConversationUpdatedAt :exec
