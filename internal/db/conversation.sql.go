@@ -263,6 +263,63 @@ func (q *Queries) ListActiveMessages(ctx context.Context, conversationID string)
 	return items, nil
 }
 
+const listAllMessages = `-- name: ListAllMessages :many
+SELECT id, role, content, tool_use_id, tool_name, turn_number, iteration, sequence,
+       is_compressed, is_summary, created_at
+FROM messages
+WHERE conversation_id = ?
+ORDER BY sequence
+`
+
+type ListAllMessagesRow struct {
+	ID           int64          `json:"id"`
+	Role         string         `json:"role"`
+	Content      sql.NullString `json:"content"`
+	ToolUseID    sql.NullString `json:"tool_use_id"`
+	ToolName     sql.NullString `json:"tool_name"`
+	TurnNumber   int64          `json:"turn_number"`
+	Iteration    int64          `json:"iteration"`
+	Sequence     float64        `json:"sequence"`
+	IsCompressed int64          `json:"is_compressed"`
+	IsSummary    int64          `json:"is_summary"`
+	CreatedAt    string         `json:"created_at"`
+}
+
+func (q *Queries) ListAllMessages(ctx context.Context, conversationID string) ([]ListAllMessagesRow, error) {
+	rows, err := q.db.QueryContext(ctx, listAllMessages, conversationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListAllMessagesRow
+	for rows.Next() {
+		var i ListAllMessagesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Role,
+			&i.Content,
+			&i.ToolUseID,
+			&i.ToolName,
+			&i.TurnNumber,
+			&i.Iteration,
+			&i.Sequence,
+			&i.IsCompressed,
+			&i.IsSummary,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listConversations = `-- name: ListConversations :many
 SELECT id, title, updated_at
 FROM conversations
