@@ -24,6 +24,14 @@ FROM tool_executions
 WHERE conversation_id = ?
 GROUP BY tool_name;
 
+-- name: InsertToolExecution :exec
+INSERT INTO tool_executions (
+    conversation_id, turn_number, iteration,
+    tool_use_id, tool_name, input,
+    output_size, error, success,
+    duration_ms, created_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
 -- name: GetConversationContextQuality :one
 SELECT
     COUNT(*) AS total_turns,
