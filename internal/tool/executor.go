@@ -24,12 +24,14 @@ type ExecutorConfig struct {
 // calls tools directly.
 type Executor struct {
 	registry *Registry
+	recorder *ToolExecutionRecorder
 	config   ExecutorConfig
 	logger   *slog.Logger
 	nowFn    func() time.Time // injectable for testing
 }
 
 // NewExecutor creates an executor backed by the given registry.
+// The recorder is optional — pass nil to skip tool_executions persistence.
 func NewExecutor(registry *Registry, config ExecutorConfig, logger *slog.Logger) *Executor {
 	if logger == nil {
 		logger = slog.Default()
@@ -40,6 +42,12 @@ func NewExecutor(registry *Registry, config ExecutorConfig, logger *slog.Logger)
 		logger:   logger,
 		nowFn:    time.Now,
 	}
+}
+
+// SetRecorder attaches a tool execution recorder for analytics persistence.
+// Safe to call before any Execute calls. Passing nil disables persistence.
+func (e *Executor) SetRecorder(recorder *ToolExecutionRecorder) {
+	e.recorder = recorder
 }
 
 // Execute dispatches a batch of tool calls with purity-based strategy:
@@ -160,4 +168,29 @@ func (e *Executor) executeSingle(ctx context.Context, call ToolCall, t Tool) (re
 	tr.CallID = call.ID
 	tr.DurationMs = duration.Milliseconds()
 	return *tr
+}
+
+// ExecuteWithMeta dispatches tool calls and records analytics for each
+// execution. It delegates to Execute for the actual dispatch, then
+// persists a tool_executions row per call. Database write failures are
+// logged but do not affect the returned results.
+func (e *Executor) ExecuteWithMeta(ctx context.Context, calls []ToolCall, meta ExecutionMeta) []ToolResult {
+	results := e.Execute(ctx, calls)
+
+	if e.recorder == nil {
+		return results
+	}
+
+	now := e.nowFn()
+	for i, call := range calls {
+		if err := e.recorder.Record(ctx, call, results[i], meta, now); err != nil {
+			e.logger.Warn("failed to record tool execution",
+				"tool", call.Name,
+				"call_id", call.ID,
+				"error", err,
+			)
+		}
+	}
+
+	return results
 }

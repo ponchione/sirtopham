@@ -130,3 +130,43 @@ func (q *Queries) GetConversationToolUsage(ctx context.Context, conversationID s
 	}
 	return items, nil
 }
+
+const insertToolExecution = `-- name: InsertToolExecution :exec
+INSERT INTO tool_executions (
+    conversation_id, turn_number, iteration,
+    tool_use_id, tool_name, input,
+    output_size, error, success,
+    duration_ms, created_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`
+
+type InsertToolExecutionParams struct {
+	ConversationID string         `json:"conversation_id"`
+	TurnNumber     int64          `json:"turn_number"`
+	Iteration      int64          `json:"iteration"`
+	ToolUseID      string         `json:"tool_use_id"`
+	ToolName       string         `json:"tool_name"`
+	Input          sql.NullString `json:"input"`
+	OutputSize     sql.NullInt64  `json:"output_size"`
+	Error          sql.NullString `json:"error"`
+	Success        int64          `json:"success"`
+	DurationMs     int64          `json:"duration_ms"`
+	CreatedAt      string         `json:"created_at"`
+}
+
+func (q *Queries) InsertToolExecution(ctx context.Context, arg InsertToolExecutionParams) error {
+	_, err := q.db.ExecContext(ctx, insertToolExecution,
+		arg.ConversationID,
+		arg.TurnNumber,
+		arg.Iteration,
+		arg.ToolUseID,
+		arg.ToolName,
+		arg.Input,
+		arg.OutputSize,
+		arg.Error,
+		arg.Success,
+		arg.DurationMs,
+		arg.CreatedAt,
+	)
+	return err
+}
