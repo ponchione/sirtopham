@@ -93,6 +93,12 @@ type AgentConfig struct {
 	CacheSystemPrompt        bool     `yaml:"cache_system_prompt"`
 	CacheAssembledContext    bool     `yaml:"cache_assembled_context"`
 	CacheConversationHistory bool     `yaml:"cache_conversation_history"`
+
+	// Phase 2: History compression (spec 11).
+	CompressHistoricalResults    bool `yaml:"compress_historical_results"`
+	StripHistoricalLineNumbers   bool `yaml:"strip_historical_line_numbers"`
+	ElideDuplicateReads          bool `yaml:"elide_duplicate_reads"`
+	HistorySummarizeAfterTurns   int  `yaml:"history_summarize_after_turns"`
 }
 
 type ContextConfig struct {
@@ -203,6 +209,11 @@ func Default() *Config {
 			CacheSystemPrompt:        true,
 			CacheAssembledContext:    true,
 			CacheConversationHistory: true,
+
+			CompressHistoricalResults:  true,
+			StripHistoricalLineNumbers: true,
+			ElideDuplicateReads:        true,
+			HistorySummarizeAfterTurns: 10,
 		},
 		Context: ContextConfig{
 			MaxAssembledTokens:      30000,
