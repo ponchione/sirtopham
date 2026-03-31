@@ -1741,3 +1741,255 @@ func TestRunTurnRetriableStreamErrorRecoversInRunTurn(t *testing.T) {
 		t.Fatalf("FinalText = %q, want %q", result.FinalText, "recovered after retry")
 	}
 }
+
+// capturingRouterStub records the provider.Request passed to each Stream call.
+type capturingRouterStub struct {
+	requests     []*provider.Request
+	streamEvents [][]provider.StreamEvent
+	callIndex    int
+}
+
+func (s *capturingRouterStub) Stream(_ stdctx.Context, req *provider.Request) (<-chan provider.StreamEvent, error) {
+	s.requests = append(s.requests, req)
+	idx := s.callIndex
+	if idx >= len(s.streamEvents) {
+		idx = len(s.streamEvents) - 1
+	}
+	s.callIndex++
+
+	events := s.streamEvents[idx]
+	ch := make(chan provider.StreamEvent, len(events))
+	for _, e := range events {
+		ch <- e
+	}
+	close(ch)
+	return ch, nil
+}
+
+func TestRunTurnToolDefinitionsWired(t *testing.T) {
+	// Verify that ToolDefinitions from AgentLoopDeps are included in the
+	// provider.Request sent to the provider router.
+	sink := NewChannelSink(32)
+	assembler := &loopContextAssemblerStub{
+		pkg: &contextpkg.FullContextPackage{Content: "ctx", Frozen: true},
+	}
+	conversations := &loopConversationManagerStub{
+		history: []db.Message{},
+		seen:    loopSeenFilesStub{},
+	}
+
+	router := &capturingRouterStub{
+		streamEvents: [][]provider.StreamEvent{
+			{
+				provider.TokenDelta{Text: "Hello"},
+				provider.StreamDone{
+					StopReason: provider.StopReasonEndTurn,
+					Usage:      provider.Usage{InputTokens: 50, OutputTokens: 5},
+				},
+			},
+		},
+	}
+
+	toolDefs := []provider.ToolDefinition{
+		{
+			Name:        "file_read",
+			Description: "Read file contents",
+			InputSchema: json.RawMessage(`{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}`),
+		},
+		{
+			Name:        "shell",
+			Description: "Execute a shell command",
+			InputSchema: json.RawMessage(`{"type":"object","properties":{"command":{"type":"string"}},"required":["command"]}`),
+		},
+	}
+
+	loop := NewAgentLoop(AgentLoopDeps{
+		ContextAssembler:    assembler,
+		ConversationManager: conversations,
+		ProviderRouter:      router,
+		ToolExecutor:        &toolExecutorStub{},
+		ToolDefinitions:     toolDefs,
+		PromptBuilder:       NewPromptBuilder(nil),
+		EventSink:           sink,
+	})
+	loop.now = func() time.Time { return time.Unix(1700000700, 0).UTC() }
+
+	result, err := loop.RunTurn(stdctx.Background(), RunTurnRequest{
+		ConversationID:    "conv-tools",
+		TurnNumber:        1,
+		Message:           "hello",
+		ModelContextLimit: 200000,
+	})
+	if err != nil {
+		t.Fatalf("RunTurn error: %v", err)
+	}
+	if result.FinalText != "Hello" {
+		t.Fatalf("FinalText = %q, want Hello", result.FinalText)
+	}
+
+	// The router should have received exactly one request with tool definitions.
+	if len(router.requests) != 1 {
+		t.Fatalf("router received %d requests, want 1", len(router.requests))
+	}
+
+	req := router.requests[0]
+	if len(req.Tools) != 2 {
+		t.Fatalf("request has %d tools, want 2", len(req.Tools))
+	}
+	if req.Tools[0].Name != "file_read" {
+		t.Errorf("tools[0].Name = %q, want file_read", req.Tools[0].Name)
+	}
+	if req.Tools[1].Name != "shell" {
+		t.Errorf("tools[1].Name = %q, want shell", req.Tools[1].Name)
+	}
+	if req.Tools[0].InputSchema == nil {
+		t.Error("tools[0].InputSchema is nil")
+	}
+}
+
+func TestRunTurnToolDefinitionsOmittedOnFinalIteration(t *testing.T) {
+	// On the final iteration (max iterations reached), tools should be omitted
+	// from the provider.Request even though tool definitions are configured.
+	sink := NewChannelSink(32)
+	assembler := &loopContextAssemblerStub{
+		pkg: &contextpkg.FullContextPackage{Content: "ctx", Frozen: true},
+	}
+	conversations := &loopConversationManagerStub{
+		history: []db.Message{},
+		seen:    loopSeenFilesStub{},
+	}
+
+	// Two calls: first returns tool use, second (final iteration) returns text.
+	toolInput := json.RawMessage(`{"path":"main.go"}`)
+	router := &capturingRouterStub{
+		streamEvents: [][]provider.StreamEvent{
+			// Iteration 1: tool use response.
+			{
+				provider.TokenDelta{Text: "Reading file."},
+				provider.ToolCallStart{ID: "call_1", Name: "file_read"},
+				provider.ToolCallEnd{ID: "call_1", Input: toolInput},
+				provider.StreamDone{
+					StopReason: provider.StopReasonToolUse,
+					Usage:      provider.Usage{InputTokens: 100, OutputTokens: 20},
+				},
+			},
+			// Iteration 2 (final): text-only response.
+			{
+				provider.TokenDelta{Text: "Done reading."},
+				provider.StreamDone{
+					StopReason: provider.StopReasonEndTurn,
+					Usage:      provider.Usage{InputTokens: 80, OutputTokens: 10},
+				},
+			},
+		},
+	}
+
+	toolDefs := []provider.ToolDefinition{
+		{
+			Name:        "file_read",
+			Description: "Read file contents",
+			InputSchema: json.RawMessage(`{"type":"object"}`),
+		},
+	}
+
+	loop := NewAgentLoop(AgentLoopDeps{
+		ContextAssembler:    assembler,
+		ConversationManager: conversations,
+		ProviderRouter:      router,
+		ToolExecutor: &toolExecutorStub{
+			results: map[string]*provider.ToolResult{
+				"call_1": {ToolUseID: "call_1", Content: "file contents here"},
+			},
+		},
+		ToolDefinitions: toolDefs,
+		PromptBuilder:   NewPromptBuilder(nil),
+		EventSink:       sink,
+		Config: AgentLoopConfig{
+			MaxIterations: 2, // Force final iteration on call 2.
+		},
+	})
+	loop.now = func() time.Time { return time.Unix(1700000800, 0).UTC() }
+
+	result, err := loop.RunTurn(stdctx.Background(), RunTurnRequest{
+		ConversationID:    "conv-final",
+		TurnNumber:        1,
+		Message:           "read main.go",
+		ModelContextLimit: 200000,
+	})
+	if err != nil {
+		t.Fatalf("RunTurn error: %v", err)
+	}
+	if result.FinalText != "Done reading." {
+		t.Fatalf("FinalText = %q, want 'Done reading.'", result.FinalText)
+	}
+
+	// Should have two requests.
+	if len(router.requests) != 2 {
+		t.Fatalf("router received %d requests, want 2", len(router.requests))
+	}
+
+	// First request should have tools.
+	if len(router.requests[0].Tools) != 1 {
+		t.Fatalf("request 1 has %d tools, want 1", len(router.requests[0].Tools))
+	}
+
+	// Second request (final iteration) should have NO tools.
+	if len(router.requests[1].Tools) != 0 {
+		t.Fatalf("request 2 (final iteration) has %d tools, want 0", len(router.requests[1].Tools))
+	}
+}
+
+func TestRunTurnNoToolDefinitions(t *testing.T) {
+	// When no tool definitions are configured, requests should have empty tools.
+	sink := NewChannelSink(32)
+	assembler := &loopContextAssemblerStub{
+		pkg: &contextpkg.FullContextPackage{Content: "ctx", Frozen: true},
+	}
+	conversations := &loopConversationManagerStub{
+		history: []db.Message{},
+		seen:    loopSeenFilesStub{},
+	}
+
+	router := &capturingRouterStub{
+		streamEvents: [][]provider.StreamEvent{
+			{
+				provider.TokenDelta{Text: "no tools here"},
+				provider.StreamDone{
+					StopReason: provider.StopReasonEndTurn,
+					Usage:      provider.Usage{InputTokens: 30, OutputTokens: 5},
+				},
+			},
+		},
+	}
+
+	// No ToolDefinitions provided.
+	loop := NewAgentLoop(AgentLoopDeps{
+		ContextAssembler:    assembler,
+		ConversationManager: conversations,
+		ProviderRouter:      router,
+		ToolExecutor:        &toolExecutorStub{},
+		PromptBuilder:       NewPromptBuilder(nil),
+		EventSink:           sink,
+	})
+	loop.now = func() time.Time { return time.Unix(1700000900, 0).UTC() }
+
+	result, err := loop.RunTurn(stdctx.Background(), RunTurnRequest{
+		ConversationID:    "conv-no-tools",
+		TurnNumber:        1,
+		Message:           "hello",
+		ModelContextLimit: 200000,
+	})
+	if err != nil {
+		t.Fatalf("RunTurn error: %v", err)
+	}
+	if result.FinalText != "no tools here" {
+		t.Fatalf("FinalText = %q, want 'no tools here'", result.FinalText)
+	}
+
+	if len(router.requests) != 1 {
+		t.Fatalf("router received %d requests, want 1", len(router.requests))
+	}
+	if len(router.requests[0].Tools) != 0 {
+		t.Fatalf("request has %d tools, want 0 (no tool definitions configured)", len(router.requests[0].Tools))
+	}
+}

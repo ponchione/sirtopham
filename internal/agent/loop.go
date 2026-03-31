@@ -90,6 +90,7 @@ type AgentLoopDeps struct {
 	ConversationManager ConversationManager
 	ProviderRouter      ProviderRouter
 	ToolExecutor        ToolExecutor
+	ToolDefinitions     []provider.ToolDefinition
 	PromptBuilder       *PromptBuilder
 	EventSink           EventSink
 	CompressionEngine   CompressionEngine
@@ -123,6 +124,7 @@ type AgentLoop struct {
 	conversationManager ConversationManager
 	providerRouter      ProviderRouter
 	toolExecutor        ToolExecutor
+	toolDefinitions     []provider.ToolDefinition
 	promptBuilder       *PromptBuilder
 	events              *MultiSink
 	compressionEngine   CompressionEngine
@@ -154,6 +156,7 @@ func NewAgentLoop(deps AgentLoopDeps) *AgentLoop {
 		conversationManager: deps.ConversationManager,
 		providerRouter:      deps.ProviderRouter,
 		toolExecutor:        deps.ToolExecutor,
+		toolDefinitions:     deps.ToolDefinitions,
 		promptBuilder:       deps.PromptBuilder,
 		events:              events,
 		compressionEngine:   deps.CompressionEngine,
@@ -331,6 +334,7 @@ func (l *AgentLoop) RunTurn(ctx stdctx.Context, req RunTurnRequest) (*TurnResult
 			ContextPackage:      turnCtx.ContextPackage,
 			History:             history,
 			CurrentTurnMessages: currentTurnMessages,
+			ToolDefinitions:     l.toolDefinitions,
 			ProviderName:        l.cfg.ProviderName,
 			ModelName:           l.cfg.ModelName,
 			ContextLimit:        req.ModelContextLimit,
@@ -356,6 +360,7 @@ func (l *AgentLoop) RunTurn(ctx stdctx.Context, req RunTurnRequest) (*TurnResult
 				ContextPackage:      turnCtx.ContextPackage,
 				History:             history,
 				CurrentTurnMessages: currentTurnMessages,
+				ToolDefinitions:     l.toolDefinitions,
 				ProviderName:        l.cfg.ProviderName,
 				ModelName:           l.cfg.ModelName,
 				ContextLimit:        req.ModelContextLimit,
@@ -891,6 +896,7 @@ func (l *AgentLoop) tryEmergencyCompression(
 		ContextPackage:      turnCtx.ContextPackage,
 		History:             history,
 		CurrentTurnMessages: currentTurnMessages,
+		ToolDefinitions:     l.toolDefinitions,
 		ProviderName:        l.cfg.ProviderName,
 		ModelName:           l.cfg.ModelName,
 		ContextLimit:        req.ModelContextLimit,

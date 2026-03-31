@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+
+	"github.com/ponchione/sirtopham/internal/provider"
 )
 
 // Registry holds all registered tools and provides lookup and enumeration.
@@ -61,6 +63,35 @@ func (r *Registry) Schemas() []json.RawMessage {
 	result := make([]json.RawMessage, 0, len(r.order))
 	for _, name := range r.order {
 		result = append(result, r.tools[name].Schema())
+	}
+	return result
+}
+
+// ToolDefinitions converts the registered tools into provider.ToolDefinition
+// values suitable for the prompt builder and LLM request. Each tool's Schema()
+// JSON is destructured into Name, Description, and InputSchema fields.
+//
+// Tools whose Schema() cannot be parsed are silently skipped — this catches
+// malformed schemas at startup rather than at LLM call time.
+func (r *Registry) ToolDefinitions() []provider.ToolDefinition {
+	result := make([]provider.ToolDefinition, 0, len(r.order))
+	for _, name := range r.order {
+		t := r.tools[name]
+		raw := t.Schema()
+		var envelope struct {
+			Name        string          `json:"name"`
+			Description string          `json:"description"`
+			InputSchema json.RawMessage `json:"input_schema"`
+		}
+		if err := json.Unmarshal(raw, &envelope); err != nil {
+			// Malformed schema — skip rather than panic.
+			continue
+		}
+		result = append(result, provider.ToolDefinition{
+			Name:        envelope.Name,
+			Description: envelope.Description,
+			InputSchema: envelope.InputSchema,
+		})
 	}
 	return result
 }
