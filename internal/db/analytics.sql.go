@@ -135,9 +135,9 @@ const insertToolExecution = `-- name: InsertToolExecution :exec
 INSERT INTO tool_executions (
     conversation_id, turn_number, iteration,
     tool_use_id, tool_name, input,
-    output_size, error, success,
+    output_size, normalized_size, error, success,
     duration_ms, created_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type InsertToolExecutionParams struct {
@@ -148,6 +148,7 @@ type InsertToolExecutionParams struct {
 	ToolName       string         `json:"tool_name"`
 	Input          sql.NullString `json:"input"`
 	OutputSize     sql.NullInt64  `json:"output_size"`
+	NormalizedSize sql.NullInt64  `json:"normalized_size"`
 	Error          sql.NullString `json:"error"`
 	Success        int64          `json:"success"`
 	DurationMs     int64          `json:"duration_ms"`
@@ -163,6 +164,7 @@ func (q *Queries) InsertToolExecution(ctx context.Context, arg InsertToolExecuti
 		arg.ToolName,
 		arg.Input,
 		arg.OutputSize,
+		arg.NormalizedSize,
 		arg.Error,
 		arg.Success,
 		arg.DurationMs,

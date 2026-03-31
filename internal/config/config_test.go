@@ -213,6 +213,11 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 			yaml:       "project_root: \"" + projectRoot + "\"\nbrain:\n  vault_path: \"" + projectRoot + "\"\ncontext:\n  max_assembled_tokens: -1\n",
 			wantSubstr: "context.max_assembled_tokens=-1",
 		},
+		{
+			name:       "negative history_summarize_after_turns",
+			yaml:       "project_root: \"" + projectRoot + "\"\nbrain:\n  vault_path: \"" + projectRoot + "\"\nagent:\n  history_summarize_after_turns: -5\n",
+			wantSubstr: "agent.history_summarize_after_turns=-5",
+		},
 	}
 
 	for _, tt := range tests {
