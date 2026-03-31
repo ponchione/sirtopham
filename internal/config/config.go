@@ -486,8 +486,9 @@ func (c *Config) validateNumericFields() error {
 		"context.momentum_lookback_turns":   c.Context.MomentumLookbackTurns,
 		"context.compression_head_preserve": c.Context.CompressionHeadPreserve,
 		"context.compression_tail_preserve": c.Context.CompressionTailPreserve,
-		"brain.max_brain_tokens":            c.Brain.MaxBrainTokens,
-		"brain.graph_hop_depth":             c.Brain.GraphHopDepth,
+		"brain.max_brain_tokens":                c.Brain.MaxBrainTokens,
+		"brain.graph_hop_depth":                 c.Brain.GraphHopDepth,
+		"agent.history_summarize_after_turns":   c.Agent.HistorySummarizeAfterTurns,
 	} {
 		if value < 0 {
 			return fmt.Errorf("invalid field %s=%d (must be >= 0)", field, value)

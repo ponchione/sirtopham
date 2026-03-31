@@ -46,6 +46,7 @@ CREATE TABLE tool_executions (
     tool_name       TEXT    NOT NULL,
     input           TEXT,
     output_size     INTEGER,
+    normalized_size INTEGER,
     error           TEXT,
     success         INTEGER NOT NULL,
     duration_ms     INTEGER NOT NULL,

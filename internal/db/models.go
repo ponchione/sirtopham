@@ -134,6 +134,7 @@ type ToolExecution struct {
 	ToolName       string         `json:"tool_name"`
 	Input          sql.NullString `json:"input"`
 	OutputSize     sql.NullInt64  `json:"output_size"`
+	NormalizedSize sql.NullInt64  `json:"normalized_size"`
 	Error          sql.NullString `json:"error"`
 	Success        int64          `json:"success"`
 	DurationMs     int64          `json:"duration_ms"`

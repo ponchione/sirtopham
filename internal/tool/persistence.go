@@ -52,6 +52,8 @@ func (r *ToolExecutionRecorder) Record(ctx context.Context, call ToolCall, resul
 		success = 1
 	}
 
+	outputSize := sql.NullInt64{Int64: int64(len(result.Content)), Valid: true}
+
 	return r.queries.InsertToolExecution(ctx, db.InsertToolExecutionParams{
 		ConversationID: meta.ConversationID,
 		TurnNumber:     int64(meta.TurnNumber),
@@ -59,7 +61,8 @@ func (r *ToolExecutionRecorder) Record(ctx context.Context, call ToolCall, resul
 		ToolUseID:      call.ID,
 		ToolName:       call.Name,
 		Input:          inputStr,
-		OutputSize:     sql.NullInt64{Int64: int64(len(result.Content)), Valid: true},
+		OutputSize:     outputSize,
+		NormalizedSize: outputSize, // Post-Phase-1 normalization; same as OutputSize until raw tracking is added.
 		Error:          errStr,
 		Success:        success,
 		DurationMs:     result.DurationMs,
