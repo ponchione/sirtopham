@@ -24,15 +24,7 @@ func main() {
 		},
 	}
 
-	serveCmd := &cobra.Command{
-		Use:   "serve",
-		Short: "Start the sirtopham server",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			fmt.Println("not yet implemented")
-			return nil
-		},
-	}
-	serveCmd.Flags().Bool("dev", false, "Enable development mode")
+	rootCmd.PersistentFlags().StringVar(&configPath, "config", "sirtopham.yaml", "Path to config file")
 
 	initCmd := &cobra.Command{
 		Use:   "init",
@@ -57,7 +49,6 @@ func main() {
 			return nil
 		},
 	}
-	initCmd.Flags().StringVar(&configPath, "config", "sirtopham.yaml", "Path to sirtopham config file")
 
 	indexCmd := &cobra.Command{
 		Use:   "index",
@@ -76,6 +67,8 @@ func main() {
 			return nil
 		},
 	}
+
+	serveCmd := newServeCmd(&configPath)
 
 	rootCmd.AddCommand(serveCmd, initCmd, indexCmd, configCmd)
 
