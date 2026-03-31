@@ -96,3 +96,23 @@ JOIN conversations c ON c.id = m.conversation_id
 WHERE messages_fts.content MATCH ?
 ORDER BY rank
 LIMIT 20;
+
+-- name: InsertConversation :exec
+INSERT INTO conversations (id, project_id, title, model, provider, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?);
+
+-- name: GetConversation :one
+SELECT id, project_id, title, model, provider, created_at, updated_at
+FROM conversations
+WHERE id = ?;
+
+-- name: DeleteConversation :exec
+DELETE FROM conversations WHERE id = ?;
+
+-- name: SetConversationTitle :exec
+UPDATE conversations
+SET title = ?, updated_at = ?
+WHERE id = ?;
+
+-- name: CountConversations :one
+SELECT COUNT(*) FROM conversations WHERE project_id = ?;
