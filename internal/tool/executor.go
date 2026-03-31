@@ -120,9 +120,10 @@ func (e *Executor) Execute(ctx context.Context, calls []ToolCall) []ToolResult {
 		results[ic.index] = e.executeSingle(ctx, ic.call, ic.tool)
 	}
 
-	// Apply output truncation to successful results.
+	// Apply Phase 1 normalization then output truncation to successful results.
 	for i := range results {
 		if results[i].Success {
+			results[i].Content = NormalizeToolResult(calls[i].Name, results[i].Content)
 			truncateResult(&results[i], e.config.MaxOutputTokens, calls[i].Name)
 		}
 	}
