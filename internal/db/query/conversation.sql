@@ -97,6 +97,13 @@ WHERE messages_fts.content MATCH ?
 ORDER BY rank
 LIMIT 20;
 
+-- name: ListAllMessages :many
+SELECT id, role, content, tool_use_id, tool_name, turn_number, iteration, sequence,
+       is_compressed, is_summary, created_at
+FROM messages
+WHERE conversation_id = ?
+ORDER BY sequence;
+
 -- name: InsertConversation :exec
 INSERT INTO conversations (id, project_id, title, model, provider, created_at, updated_at)
 VALUES (?, ?, ?, ?, ?, ?, ?);

@@ -221,6 +221,94 @@ func (m *Manager) Count(ctx context.Context, projectID string) (int64, error) {
 	return m.queries.CountConversations(ctx, projectID)
 }
 
+// MessageView is a JSON-friendly representation of a message for the REST API.
+// It includes compression flags for the frontend to render compressed messages
+// differently (greyed out / collapsed).
+type MessageView struct {
+	ID           int64   `json:"id"`
+	Role         string  `json:"role"`
+	Content      *string `json:"content,omitempty"`
+	ToolUseID    *string `json:"tool_use_id,omitempty"`
+	ToolName     *string `json:"tool_name,omitempty"`
+	TurnNumber   int64   `json:"turn_number"`
+	Iteration    int64   `json:"iteration"`
+	Sequence     float64 `json:"sequence"`
+	IsCompressed bool    `json:"is_compressed"`
+	IsSummary    bool    `json:"is_summary"`
+	CreatedAt    string  `json:"created_at"`
+}
+
+// GetMessages returns all messages for a conversation including compressed ones.
+func (m *Manager) GetMessages(ctx context.Context, conversationID string) ([]MessageView, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	rows, err := m.queries.ListAllMessages(ctx, conversationID)
+	if err != nil {
+		return nil, fmt.Errorf("conversation manager: get messages: %w", err)
+	}
+
+	messages := make([]MessageView, 0, len(rows))
+	for _, row := range rows {
+		mv := MessageView{
+			ID:           row.ID,
+			Role:         row.Role,
+			TurnNumber:   row.TurnNumber,
+			Iteration:    row.Iteration,
+			Sequence:     row.Sequence,
+			IsCompressed: row.IsCompressed != 0,
+			IsSummary:    row.IsSummary != 0,
+			CreatedAt:    row.CreatedAt,
+		}
+		if row.Content.Valid {
+			mv.Content = &row.Content.String
+		}
+		if row.ToolUseID.Valid {
+			mv.ToolUseID = &row.ToolUseID.String
+		}
+		if row.ToolName.Valid {
+			mv.ToolName = &row.ToolName.String
+		}
+		messages = append(messages, mv)
+	}
+	return messages, nil
+}
+
+// SearchResult represents a conversation matching a search query.
+type SearchResult struct {
+	ID        string  `json:"id"`
+	Title     *string `json:"title,omitempty"`
+	UpdatedAt string  `json:"updated_at"`
+	Snippet   string  `json:"snippet"`
+}
+
+// Search performs full-text search across conversation messages using FTS5.
+func (m *Manager) Search(ctx context.Context, query string) ([]SearchResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	rows, err := m.queries.SearchConversations(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("conversation manager: search: %w", err)
+	}
+
+	results := make([]SearchResult, 0, len(rows))
+	for _, row := range rows {
+		sr := SearchResult{
+			ID:        row.ID,
+			UpdatedAt: row.UpdatedAt,
+			Snippet:   row.Snippet,
+		}
+		if row.Title.Valid {
+			sr.Title = &row.Title.String
+		}
+		results = append(results, sr)
+	}
+	return results, nil
+}
+
 // dbConversationToConversation converts a sqlc-generated db.Conversation to
 // the application-level Conversation type.
 func dbConversationToConversation(row db.Conversation) *Conversation {
