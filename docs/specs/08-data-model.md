@@ -155,15 +155,20 @@ Corresponding `tool_executions` and `sub_calls` rows for the cancelled iteration
 
 At the start of a turn, the agent loop inserts the user's message as its own `role=user` row before context assembly begins. That write is intentionally outside the per-iteration assistant/tool transaction so the user's message survives mid-turn failures or cancellation.
 
-At the end of each completed iteration, the agent loop persists all new data in a single atomic transaction:
+At the end of each completed iteration, the agent loop persists the canonical conversation history and analytics on two separate paths:
 
+Message transaction (atomic today):
 1. INSERT the assistant message (with content blocks JSON)
 2. INSERT tool result messages (one per tool execution)
-3. INSERT the sub_call record (with `message_id` pointing to the assistant message)
-4. INSERT tool_execution records (one per tool dispatched)
-5. COMMIT
+3. COMMIT
 
-Either the entire iteration is persisted or none of it. If the process crashes mid-iteration, no partial data exists. Completed iterations from earlier in the turn are already committed and survive.
+Analytics writes (best-effort today):
+4. INSERT the `sub_calls` record from the tracked provider path
+5. INSERT `tool_executions` records from the tool executor path
+
+The current guarantee is therefore narrower than the original ideal: message rows for a completed iteration are atomic with each other, but analytics rows are not yet atomic with message persistence. If the process crashes or an analytics write fails after the message transaction commits, the conversation still reconstructs correctly from `messages`, but `sub_calls` or `tool_executions` may be missing for that iteration.
+
+This tradeoff is currently acceptable because `messages` are the user-visible source of truth, while analytics are debugging/observability data. Cancellation cleanup remains fully transactional across all three tables for an in-flight iteration.
 
 Context reports follow a different lifecycle: INSERT at turn start (with retrieval data), UPDATE quality columns (`agent_used_search_tool`, `context_hit_rate`, `agent_read_files_json`) after the turn completes. If the turn crashes, the retrieval data is preserved for debugging — only the quality metrics are missing.
 

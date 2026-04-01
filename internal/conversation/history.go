@@ -117,11 +117,16 @@ type IterationMessage struct {
 	ToolName string
 }
 
-// PersistIteration atomically inserts all messages for a completed iteration
+// PersistIteration atomically inserts the message rows for a completed iteration
 // (the assistant response plus any tool result messages) in a single SQLite
 // transaction. Each message receives the next monotonic sequence number.
 // If any insert fails the entire transaction rolls back — no partial iteration
-// data is left in the database.
+// message data is left in the database.
+//
+// Tool execution analytics (`tool_executions`) and provider analytics
+// (`sub_calls`) are persisted on separate paths today. They are best-effort and
+// intentionally non-atomic with message persistence until a future slice unifies
+// those writes.
 func (m *HistoryManager) PersistIteration(ctx context.Context, conversationID string, turnNumber, iteration int, messages []IterationMessage) error {
 	if ctx == nil {
 		ctx = context.Background()

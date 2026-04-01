@@ -145,18 +145,25 @@ rebuilding the prompt with a different model) would require `FallbackModel` on
 
 ---
 
-### PersistIteration does not atomically persist tool_execution/sub_call records
-**Severity:** Low | **Source:** Layer 5 audit (2026-04-01)
+### Iteration analytics persistence is still non-atomic relative to messages
+**Severity:** Low | **Source:** Layer 5 audit (2026-04-01), revisited 2026-04-01
 
-The spec says PersistIteration should atomically insert assistant messages, tool result
-messages, tool_execution records, and sub_call records in a single transaction. The
-implementation only inserts message rows; tool execution and sub-call records are
-persisted separately.
+The current contract is now explicit: `PersistIteration` is atomic for `messages`
+rows only. `tool_executions` and `sub_calls` are persisted on separate best-effort
+paths (`tool.Executor` and `provider/tracking.TrackedProvider`) and may be missing if
+an analytics write fails after message persistence succeeds.
 
-**Fix direction:** Extend `conversation.IterationMessage` to carry optional
-tool_execution and sub_call data. Have `PersistIteration` insert all three record types
-in its existing transaction. Deferred — crash between message and tool_execution
-insertion is extremely rare and recoverable.
+This is currently tolerated because:
+- the user-visible source of truth is the `messages` table
+- cancellation cleanup still deletes `messages`, `tool_executions`, and `sub_calls`
+  together for an in-flight iteration
+- missing analytics rows are recoverable and far lower severity than losing the
+  canonical conversation history
+
+**Future fix direction:** If stronger guarantees become necessary, extend the
+iteration persistence contract so the agent loop can hand `PersistIteration`
+optional tool-execution and sub-call payloads and commit all three record classes in a
+single transaction.
 
 ---
 
