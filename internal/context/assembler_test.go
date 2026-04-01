@@ -7,6 +7,7 @@ import (
 	stdctx "context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/ponchione/sirtopham/internal/config"
@@ -247,6 +248,85 @@ func TestContextAssemblerUpdateQualityPersistsHitRate(t *testing.T) {
 	}
 	if !row.AgentReadFilesJson.Valid || row.AgentReadFilesJson.String != `["internal/auth/other.go","internal/auth/service.go"]` {
 		t.Fatalf("AgentReadFilesJson = %+v, want sorted unique read files", row.AgentReadFilesJson)
+	}
+}
+
+type assemblerRetrieverErrorStub struct {
+	err error
+}
+
+func (s *assemblerRetrieverErrorStub) Retrieve(_ stdctx.Context, _ *ContextNeeds, _ []string, _ config.ContextConfig) (*RetrievalResults, error) {
+	return nil, s.err
+}
+
+func TestContextAssemblerPropagatesRetrieverError(t *testing.T) {
+	db := newCompressionTestDB(t)
+	conversationID := seedCompressionConversation(t, db)
+
+	retrieverErr := errors.New("vector store unavailable")
+	analyzer := &assemblerAnalyzerStub{result: &ContextNeeds{}}
+	retriever := &assemblerRetrieverErrorStub{err: retrieverErr}
+	budgeter := &assemblerBudgetManagerStub{result: &BudgetResult{}}
+	serializer := &assemblerSerializerStub{content: ""}
+	assembler := NewContextAssembler(analyzer, nil, nil, retriever, budgeter, serializer, config.ContextConfig{}, db)
+
+	_, _, err := assembler.Assemble(stdctx.Background(), "test message", nil, AssemblyScope{
+		ConversationID: conversationID,
+		TurnNumber:     1,
+	}, 200000, 0)
+	if err == nil {
+		t.Fatal("expected error from Assemble, got nil")
+	}
+	if !errors.Is(err, retrieverErr) {
+		t.Fatalf("expected wrapped retriever error, got: %v", err)
+	}
+}
+
+func TestContextAssemblerHandlesNilOptionalComponents(t *testing.T) {
+	db := newCompressionTestDB(t)
+	conversationID := seedCompressionConversation(t, db)
+
+	analyzer := &assemblerAnalyzerStub{result: &ContextNeeds{
+		ExplicitFiles: []string{"internal/auth/middleware.go"},
+	}}
+	retriever := &assemblerRetrieverStub{result: &RetrievalResults{
+		FileResults: []FileResult{{FilePath: "internal/auth/middleware.go", Content: "package auth"}},
+	}}
+	budgeter := &assemblerBudgetManagerStub{result: &BudgetResult{
+		SelectedFileResults: []FileResult{{FilePath: "internal/auth/middleware.go", Content: "package auth"}},
+		BudgetTotal:         1200,
+		BudgetUsed:          80,
+		BudgetBreakdown:     map[string]int{"explicit_files": 80},
+		IncludedChunks:      []string{"internal/auth/middleware.go"},
+		ExcludedChunks:      []string{},
+		ExclusionReasons:    map[string]string{},
+	}}
+	serializer := &assemblerSerializerStub{content: "## Code\ncontext block"}
+
+	// momentum=nil, extractor=nil — only required components provided
+	assembler := NewContextAssembler(analyzer, nil, nil, retriever, budgeter, serializer, config.ContextConfig{StoreAssemblyReports: true}, db)
+
+	pkg, compressionNeeded, err := assembler.Assemble(stdctx.Background(), "show me the middleware", nil, AssemblyScope{
+		ConversationID: conversationID,
+		TurnNumber:     2,
+	}, 200000, 500)
+	if err != nil {
+		t.Fatalf("Assemble returned error: %v", err)
+	}
+	if compressionNeeded {
+		t.Fatal("compressionNeeded = true, want false")
+	}
+	if pkg == nil {
+		t.Fatal("pkg = nil, want package")
+	}
+	if !pkg.Frozen {
+		t.Fatal("pkg.Frozen = false, want true")
+	}
+	if pkg.TokenCount != approximateTokenCount(serializer.content) {
+		t.Fatalf("TokenCount = %d, want %d", pkg.TokenCount, approximateTokenCount(serializer.content))
+	}
+	if pkg.Report == nil {
+		t.Fatal("pkg.Report = nil, want report")
 	}
 }
 
