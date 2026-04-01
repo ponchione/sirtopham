@@ -9,17 +9,34 @@ import (
 	"github.com/ponchione/sirtopham/internal/provider"
 )
 
-func applyAggregateToolResultBudget(ctx context.Context, store ToolResultStore, results []provider.ToolResult, toolCalls []provider.ToolCall, maxChars int) []provider.ToolResult {
+type AggregateToolResultBudgetReport struct {
+	OriginalChars      int
+	FinalChars         int
+	MaxChars           int
+	ReplacedResults    int
+	PersistedResults   int
+	InlineShrunkResults int
+	CharsSaved         int
+}
+
+func applyAggregateToolResultBudget(ctx context.Context, store ToolResultStore, results []provider.ToolResult, toolCalls []provider.ToolCall, maxChars int) ([]provider.ToolResult, AggregateToolResultBudgetReport) {
+	report := AggregateToolResultBudgetReport{MaxChars: maxChars}
 	if maxChars <= 0 || len(results) == 0 {
-		return results
+		for _, result := range results {
+			report.OriginalChars += len(result.Content)
+		}
+		report.FinalChars = report.OriginalChars
+		return results, report
 	}
 
 	totalChars := 0
 	for _, result := range results {
 		totalChars += len(result.Content)
 	}
+	report.OriginalChars = totalChars
 	if totalChars <= maxChars {
-		return results
+		report.FinalChars = totalChars
+		return results, report
 	}
 
 	budgeted := append([]provider.ToolResult(nil), results...)
@@ -57,22 +74,35 @@ func applyAggregateToolResultBudget(ctx context.Context, store ToolResultStore, 
 			targetLen = 0
 		}
 		shrunk := current.Content
+		usedPersistence := false
 		if candidate.toolName != "file_read" && store != nil {
 			if ref, err := store.PersistToolResult(ctx, current.ToolUseID, candidate.toolName, current.Content); err == nil {
 				persisted := buildPersistedToolResultMessage(ref, current.ToolUseID, candidate.toolName, current.Content, targetLen)
 				if len(persisted) < len(current.Content) {
 					shrunk = persisted
+					usedPersistence = true
 				}
 			}
 		}
 		if len(shrunk) > targetLen {
 			shrunk = shrinkToolResultForAggregateBudget(shrunk, targetLen, candidate.toolName)
 		}
+		if shrunk == current.Content {
+			continue
+		}
+		report.ReplacedResults++
+		if usedPersistence {
+			report.PersistedResults++
+		} else {
+			report.InlineShrunkResults++
+		}
 		totalChars -= len(current.Content) - len(shrunk)
 		budgeted[candidate.index].Content = shrunk
 	}
 
-	return budgeted
+	report.FinalChars = totalChars
+	report.CharsSaved = report.OriginalChars - report.FinalChars
+	return budgeted, report
 }
 
 func shrinkToolResultForAggregateBudget(content string, maxChars int, toolName string) string {
