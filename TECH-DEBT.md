@@ -185,6 +185,21 @@ filter, or down-rank them intentionally.
 
 ---
 
+### Remaining Claude Code retrofit items are still intentionally deferred
+**Severity:** Info | **Source:** NEXT_SESSION_HANDOFF / Claude retrofit reconciliation (2026-04-01)
+
+The highest-value Claude-handoff slices are no longer the immediate blocker for early runtime testing, but several architecture items remain intentionally incomplete:
+- prompt-cache latching is still absent as an explicit stable-vs-dynamic prompt-byte subsystem
+- token-budget accounting still lacks a `BudgetTracker`-style reserve/estimate/reconcile flow
+- tool-output handling still lives in loop-adjacent helpers rather than a dedicated `ToolOutputManager` package boundary
+- shell/build/test tail-preserving formatting is only partially embodied, not a first-class formatter subsystem
+- `file_write` still does not participate in the read-state/stale-write safety model used for `file_edit`
+- cancellation cleanup still uses existing message/content schemas rather than first-class interrupted record types
+
+**Future fix direction:** Resume these only after the concrete bring-up blockers are solved. If/when Claude-retrofit work resumes, the best remaining order is: prompt-cache latching, better token-budget accounting, tool-output subsystem cleanup, then any broader mutation-safety follow-through for `file_write`.
+
+---
+
 ### Executor.Execute signature differs from spec (agent loop interface)
 **Severity:** Info | **Source:** Layer 5 audit (2026-04-01)
 

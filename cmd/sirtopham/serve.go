@@ -21,6 +21,7 @@ import (
 	"github.com/ponchione/sirtopham/internal/logging"
 	"github.com/ponchione/sirtopham/internal/provider"
 	"github.com/ponchione/sirtopham/internal/provider/anthropic"
+	"github.com/ponchione/sirtopham/internal/provider/codex"
 	"github.com/ponchione/sirtopham/internal/provider/openai"
 	"github.com/ponchione/sirtopham/internal/provider/router"
 	"github.com/ponchione/sirtopham/internal/provider/tracking"
@@ -277,6 +278,13 @@ func buildProvider(name string, cfg appconfig.ProviderConfig) (provider.Provider
 			Model:         cfg.Model,
 			ContextLength: cfg.ContextLength,
 		})
+
+	case "codex":
+		var opts []codex.ProviderOption
+		if cfg.BaseURL != "" {
+			opts = append(opts, codex.WithBaseURL(cfg.BaseURL))
+		}
+		return codex.NewCodexProvider(opts...)
 
 	default:
 		return nil, fmt.Errorf("unsupported provider type: %q", cfg.Type)
