@@ -78,8 +78,11 @@ func TestFileEditZeroMatches(t *testing.T) {
 	if result.Success {
 		t.Fatal("expected failure for zero matches")
 	}
-	if !strings.Contains(result.Content, "not found") {
-		t.Fatalf("expected 'not found' error, got: %s", result.Content)
+	if result.Error != "zero_match" {
+		t.Fatalf("expected zero_match error code, got %q", result.Error)
+	}
+	if !strings.Contains(result.Content, "Check for typos") || !strings.Contains(result.Content, "full file_read") {
+		t.Fatalf("expected recovery guidance, got: %s", result.Content)
 	}
 }
 
@@ -108,8 +111,11 @@ func TestFileEditMultipleMatches(t *testing.T) {
 	if result.Success {
 		t.Fatal("expected failure for multiple matches")
 	}
-	if !strings.Contains(result.Content, "3 times") {
-		t.Fatalf("expected match count in error, got: %s", result.Content)
+	if result.Error != "multiple_matches" {
+		t.Fatalf("expected multiple_matches error code, got %q", result.Error)
+	}
+	if !strings.Contains(result.Content, "3 times") || !strings.Contains(result.Content, "surrounding context") {
+		t.Fatalf("expected disambiguation guidance, got: %s", result.Content)
 	}
 }
 
@@ -270,6 +276,12 @@ func TestFileEditEmptyOldStr(t *testing.T) {
 	if result.Success {
 		t.Fatal("expected failure for empty old_str")
 	}
+	if result.Error != "invalid_create_via_edit" {
+		t.Fatalf("expected invalid_create_via_edit, got %q", result.Error)
+	}
+	if !strings.Contains(result.Content, "file_write") {
+		t.Fatalf("expected guidance to use file_write, got: %s", result.Content)
+	}
 }
 
 func TestFileEditPreservesPermissions(t *testing.T) {
@@ -301,6 +313,49 @@ func TestFileEditPreservesPermissions(t *testing.T) {
 	info, _ := os.Stat(path)
 	if info.Mode().Perm() != 0o755 {
 		t.Fatalf("permissions changed to %o, want 755", info.Mode().Perm())
+	}
+}
+
+func TestFileEditRequiresFreshReadAfterSuccessfulEdit(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "file.txt")
+	os.WriteFile(path, []byte("alpha beta\n"), 0o644)
+
+	store := newMemoryReadStateStore()
+	reader := NewFileRead(store)
+	editor := NewFileEdit(store)
+	_, err := reader.Execute(context.Background(), dir, json.RawMessage(`{"path":"file.txt"}`))
+	if err != nil {
+		t.Fatalf("unexpected read error: %v", err)
+	}
+
+	firstInput, _ := json.Marshal(fileEditInput{
+		Path:   "file.txt",
+		OldStr: "beta",
+		NewStr: "gamma",
+	})
+	firstResult, err := editor.Execute(context.Background(), dir, firstInput)
+	if err != nil {
+		t.Fatalf("unexpected first edit error: %v", err)
+	}
+	if !firstResult.Success {
+		t.Fatalf("expected first edit success, got: %s", firstResult.Content)
+	}
+
+	secondInput, _ := json.Marshal(fileEditInput{
+		Path:   "file.txt",
+		OldStr: "gamma",
+		NewStr: "delta",
+	})
+	secondResult, err := editor.Execute(context.Background(), dir, secondInput)
+	if err != nil {
+		t.Fatalf("unexpected second edit error: %v", err)
+	}
+	if secondResult.Success {
+		t.Fatal("expected second edit to require a fresh read")
+	}
+	if secondResult.Error != "not_read_first" {
+		t.Fatalf("expected not_read_first after successful edit, got %q", secondResult.Error)
 	}
 }
 
