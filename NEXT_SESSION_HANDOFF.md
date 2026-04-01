@@ -198,64 +198,67 @@ What is worth double-checking next session
 
 Only a few things feel worth active verification before doing more implementation:
 
-1. Real end-to-end oversized-output behavior
-- Verify with a real conversation / real large tool output that:
-  - output is persisted under the configured artifact root
-  - the next model-visible request gets the structured persisted ref
-  - transcript/UI behavior is still sane
+1. Codex runtime path end-to-end
+- Codex provider wiring in `serve.go` is now fixed.
+- Verify a real codex-authenticated startup and turn with:
+  - `codex` present on PATH
+  - valid `~/.codex/auth.json`
+  - codex selected as the default provider/model in config
+- Confirm provider health/model listing/UI behavior is sane when codex is the main runtime path.
 
-2. Budget/config semantics
+2. Obsidian API layer bring-up
+- The intended brain vault is repo-local (for example `.brain/`), but the current v0.1 brain tools still operate through the Obsidian Local REST API layer.
+- Next session should focus on the concrete bring-up path for that layer, not on replacing it with a different architecture yet:
+  - decide exactly how the local repo vault should be surfaced to Obsidian
+  - document or script the Local REST API setup path
+  - verify read/write/search/list behavior against the repo-local vault
+
+3. Budget/config semantics
 - Double-check that runtime config exposure is not confusing between:
   - per-tool output cap (`tool_output_max_tokens`)
   - aggregate next-message fresh-tool-result budgeting (`MaxToolResultsPerMessageChars` in the agent loop)
 - If this feels confusing, either document it better or expose the aggregate cap explicitly too.
 
-3. Artifact lifecycle / cleanup policy
+4. Artifact lifecycle / cleanup policy
 - Persisted tool results now accumulate under a configurable root.
 - Decide whether this is acceptable as-is or whether old artifacts need cleanup/retention behavior.
 
-4. Cancellation edge cases under stress
-- If cancellation correctness matters next, add adversarial tests around:
-  - cancel during tool execution
-  - cancel after assistant tool-call start but before tool result persistence
-  - crash/restart between message commit and analytics write
-
 Recommended next implementation slice
 
-Unless priorities changed, the best next Claude-handoff-aligned slice is now:
-- cancellation cleanup / transcript invariants, phase 10
+Unless priorities changed, the best next slice is now:
+- Obsidian API layer bring-up for a repo-local brain vault
 
 Why this should be next
-- The core cleanup seam, compression follow-through, web transcript rendering, search-snippet cleanup, and title-safety guard are now in place.
-- The highest remaining deterministic gap appears to be future export-style or other transcript-derived consumers rather than current core chat/search/title paths.
-- This remains a better next investment than speculative prompt-cache or broader token-budget architecture unless a concrete export/transcript surface now exists.
+- The immediate user goal is early realistic testing, not more Claude-retrofit architecture.
+- Codex provider wiring is fixed enough to start real auth/runtime validation.
+- The main remaining blocker for brain-backed testing is getting the Obsidian API layer working cleanly with a repo-local `.brain/` vault.
 
 Suggested exact next-session plan
 
 1. Read these first
-- `sirtopham-handoff/03-implementation-plan.md`
-- `sirtopham-handoff/01-priority-recommendations.md`
-- `sirtopham-handoff/stubs/turnstate/turnstate.go`
-- `internal/agent/turn_cleanup.go`
-- `internal/context/compression.go`
-- `internal/conversation/manager.go`
-- `internal/conversation/title.go`
-- any concrete export/transcript-derivation codepaths added since this handoff
+- `docs/layer4/06-obsidian-client-brain-tools/epic-06-obsidian-client-brain-tools.md`
+- `docs/layer4/06-obsidian-client-brain-tools/task-01-obsidian-client.md`
+- `internal/brain/client.go`
+- `internal/tool/brain_search.go`
+- `internal/tool/brain_read.go`
+- `internal/tool/brain_write.go`
+- `internal/tool/brain_update.go`
+- `cmd/sirtopham/serve.go`
+- `sirtopham.yaml`
 
-2. Confirm the remaining tombstone-consumer realities
-- Whether any real export/download/share/transcript-summary surface exists yet
-- Whether new transcript-derived utilities should reuse a shared tombstone-normalization helper instead of duplicating ad hoc logic
-- Whether current title/search normalization should be consolidated without adding premature abstraction
+2. Confirm the real bring-up path
+- How the repo-local `.brain/` vault should be opened/owned by Obsidian
+- What exact Local REST API plugin/runtime setup is required for testing on this machine
+- Whether any small config/docs ergonomics are missing for codex-default + repo-local-brain startup
 
 3. Implement the next narrow TDD slice
 Minimum worthwhile target now:
-- preserve the structured planner/executor seam
-- only touch a real downstream consumer if one exists in code today
-- otherwise prefer a small consolidation/refactor only if it clearly reduces drift between compression/search/title tombstone rules
-- keep completed iterations durable and next-turn startup clean
+- keep codex as the preferred default runtime path
+- make Obsidian API bring-up clearer/easier via docs, config surfacing, or light runtime validation
+- if a concrete defect appears in the Obsidian client/tool path during live setup, fix that defect directly
 
-4. Validate with focused tests first, then broader suite
-At minimum run targeted cancellation/transcript-consumer tests and then the relevant broader package suites, plus `npm run build` if web-visible behavior changes.
+4. Validate with focused tests first, then live bring-up
+At minimum run the relevant Go suites, then do a real startup test with codex auth plus the repo-local brain vault wired through the Obsidian API layer.
 
 What not to do next session unless there is strong evidence it is worth it
 - Do not jump into prompt-cache-latching architecture first.
