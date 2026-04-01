@@ -512,6 +512,41 @@ func TestTitleGenProviderError(t *testing.T) {
 	}
 }
 
+func TestTitleGenSkipsTombstoneTitle(t *testing.T) {
+	ctx := context.Background()
+	database := newTestDB(t)
+	projectID := seedProject(t, database)
+	mgr := newTestManager(t, database)
+	mgr.HistoryManager.now = func() time.Time { return time.Unix(1700001000, 0).UTC() }
+
+	conv, err := mgr.Create(ctx, projectID)
+	if err != nil {
+		t.Fatalf("Create error: %v", err)
+	}
+	if err := mgr.PersistUserMessage(ctx, conv.ID, 1, "help me debug the auth middleware"); err != nil {
+		t.Fatalf("PersistUserMessage error: %v", err)
+	}
+
+	mockProvider := &mockTitleProvider{
+		response: &provider.Response{
+			Content: []provider.ContentBlock{
+				provider.NewTextBlock("[interrupted_assistant]\nreason=interrupt\nmessage=Assistant output was interrupted before turn completion."),
+			},
+		},
+	}
+
+	gen := NewTitleGen(mgr, mockProvider, "fast-model", nil)
+	gen.GenerateTitle(ctx, conv.ID)
+
+	got, err := mgr.Get(ctx, conv.ID)
+	if err != nil {
+		t.Fatalf("Get error: %v", err)
+	}
+	if got.Title != nil {
+		t.Fatalf("Title should be nil after tombstone title, got %v", *got.Title)
+	}
+}
+
 func TestTitleGenNoUserMessage(t *testing.T) {
 	ctx := context.Background()
 	database := newTestDB(t)
@@ -548,6 +583,9 @@ func TestCleanTitle(t *testing.T) {
 		{`'Fix Login Bug'`, "Fix Login Bug"},
 		{"  Hello World  ", "Hello World"},
 		{"`Some Title`", "Some Title"},
+		{"[interrupted_assistant]\nreason=interrupt\nmessage=Assistant output was interrupted before turn completion.", ""},
+		{"[failed_assistant]\nreason=stream_failure\nmessage=Assistant output ended due to a stream failure before turn completion.", ""},
+		{"[interrupted_tool_result]\nreason=interrupt\ntool=shell", ""},
 		{"", ""},
 		{"A", "A"},
 	}

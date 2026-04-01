@@ -134,6 +134,9 @@ func cleanTitle(raw string) string {
 		title = strings.TrimSuffix(title, q)
 	}
 	title = strings.TrimSpace(title)
+	if looksLikeTranscriptTombstone(title) {
+		return ""
+	}
 
 	// Truncate overly long titles.
 	if len(title) > 100 {
@@ -142,7 +145,20 @@ func cleanTitle(raw string) string {
 			title = title[:lastSpace]
 		}
 	}
+	if looksLikeTranscriptTombstone(title) {
+		return ""
+	}
 	return title
+}
+
+func looksLikeTranscriptTombstone(text string) bool {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return false
+	}
+	return strings.Contains(trimmed, "[interrupted_assistant]") ||
+		strings.Contains(trimmed, "[failed_assistant]") ||
+		strings.Contains(trimmed, "[interrupted_tool_result]")
 }
 
 // extractText concatenates all text content blocks from a response.
