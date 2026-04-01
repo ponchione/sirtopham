@@ -3,8 +3,10 @@ package conversation
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/ponchione/sirtopham/internal/db"
@@ -304,9 +306,49 @@ func (m *Manager) Search(ctx context.Context, query string) ([]SearchResult, err
 		if row.Title.Valid {
 			sr.Title = &row.Title.String
 		}
+		sr.Snippet = sanitizeSearchSnippet(sr.Snippet)
 		results = append(results, sr)
 	}
 	return results, nil
+}
+
+func sanitizeSearchSnippet(snippet string) string {
+	trimmed := strings.TrimSpace(snippet)
+	if trimmed == "" {
+		return ""
+	}
+	if strings.Contains(trimmed, "[failed_assistant]") {
+		return "[assistant stream failure tombstone]"
+	}
+	if strings.Contains(trimmed, "[interrupted_assistant]") {
+		return "[assistant interrupted tombstone]"
+	}
+	if strings.Contains(trimmed, "[interrupted_tool_result]") {
+		return "[interrupted tool result]"
+	}
+	if !strings.HasPrefix(trimmed, "[") {
+		return snippet
+	}
+
+	var blocks []struct {
+		Type string `json:"type"`
+		Text string `json:"text,omitempty"`
+	}
+	if err := json.Unmarshal([]byte(trimmed), &blocks); err != nil {
+		return snippet
+	}
+	for _, block := range blocks {
+		if block.Type != "text" {
+			continue
+		}
+		if strings.Contains(block.Text, "[failed_assistant]") {
+			return "[assistant stream failure tombstone]"
+		}
+		if strings.Contains(block.Text, "[interrupted_assistant]") {
+			return "[assistant interrupted tombstone]"
+		}
+	}
+	return snippet
 }
 
 // dbConversationToConversation converts a sqlc-generated db.Conversation to
