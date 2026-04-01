@@ -57,8 +57,10 @@ type configResponse struct {
 }
 
 type agentSettings struct {
-	MaxIterations    int  `json:"max_iterations"`
-	ExtendedThinking bool `json:"extended_thinking"`
+	MaxIterations       int    `json:"max_iterations"`
+	ExtendedThinking    bool   `json:"extended_thinking"`
+	ToolOutputMaxTokens int    `json:"tool_output_max_tokens"`
+	ToolResultStoreRoot string `json:"tool_result_store_root"`
 }
 
 type providerInfo struct {
@@ -107,8 +109,10 @@ func (h *ConfigHandler) handleGetConfig(w http.ResponseWriter, r *http.Request) 
 		FallbackProvider: h.cfg.Routing.Fallback.Provider,
 		FallbackModel:    h.cfg.Routing.Fallback.Model,
 		Agent: agentSettings{
-			MaxIterations:    h.cfg.Agent.MaxIterationsPerTurn,
-			ExtendedThinking: h.cfg.Agent.ExtendedThinking,
+			MaxIterations:       h.cfg.Agent.MaxIterationsPerTurn,
+			ExtendedThinking:    h.cfg.Agent.ExtendedThinking,
+			ToolOutputMaxTokens: h.cfg.Agent.ToolOutputMaxTokens,
+			ToolResultStoreRoot: h.cfg.Agent.ToolResultStoreRoot,
 		},
 		Providers: providers,
 	})
