@@ -176,12 +176,11 @@ Cancellation cleanup now persists two distinct durable markers inside existing m
 
 This is good enough to preserve transcript truthfulness today, but it still has follow-up debt:
 - no first-class DB/message type distinguishes tombstones from ordinary assistant/tool payloads
-- frontend/UI rendering may eventually want special treatment rather than showing raw marker text
-- compression now collapses assistant tombstones to compact summaries, but other downstream consumers (search, title-adjacent transcript utilities, any future transcript exports) may still need explicit rules for these markers
+- the main web transcript now renders tombstones human-readably, but search, title-adjacent transcript utilities, and any future transcript exports may still need explicit rules for these markers
 
 **Future fix direction:** If interrupted-state UX or analytics become important, introduce a
 first-class durable representation (schema field, content-block type, or explicit metadata)
-for interrupted assistant/tool records and teach the web UI plus transcript utilities to render,
+for interrupted assistant/tool records and teach remaining transcript consumers to render,
 filter, or down-rank them intentionally.
 
 ---

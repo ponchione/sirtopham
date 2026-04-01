@@ -117,7 +117,7 @@ What is substantially complete is the highest-priority tool-output slice plus a 
   - `internal/tool/file_edit_analysis_test.go`
   - `internal/tool/register.go`
 
-9. Cancellation cleanup now has a phase-6 follow-through for tombstone-aware compression inputs
+9. Cancellation cleanup now has a phase-6/7 follow-through for tombstone-aware downstream consumers
 - The loop now builds a structured cleanup plan from explicit in-flight turn state instead of open-coding raw `CancelIteration` calls.
 - `loop.Cancel()` is now distinguished from generic external context cancellation:
   - loop-triggered cancel emits `user_interrupted`
@@ -131,8 +131,9 @@ What is substantially complete is the highest-priority tool-output slice plus a 
   - stream failure => `[failed_assistant]`
 - `consumeStream` now returns partial accumulated content on context cancellation so the cleanup path can preserve partial assistant text when available.
 - Compression input rendering now collapses assistant tombstones to compact summaries instead of leaking full tombstone payloads / partial text back into compression prompts.
+- The web conversation history path now parses persisted assistant JSON content blocks instead of showing raw JSON blobs and renders assistant/tool tombstones as human-readable transcript entries.
 - This is still not the full Claude-Code-style cleanup model.
-- Remaining gap: interrupted assistant/tool state still reuses the existing message/content-block schema rather than a first-class DB record type, and the web UI/search/export layers do not yet render or filter these tombstones specially.
+- Remaining gap: interrupted assistant/tool state still reuses the existing message/content-block schema rather than a first-class DB record type, and search/export/title-adjacent consumers still do not have explicit tombstone filtering or ranking rules.
 - Main files:
   - `internal/agent/turn_cleanup.go`
   - `internal/agent/turn_cleanup_test.go`
@@ -143,6 +144,7 @@ What is substantially complete is the highest-priority tool-output slice plus a 
   - `internal/agent/retry.go`
   - `internal/context/compression.go`
   - `internal/context/compression_test.go`
+  - `web/src/lib/history.ts`
   - `TECH-DEBT.md`
 
 What is NOT complete from the Claude Code / sirtopham handoff
@@ -215,12 +217,12 @@ Only a few things feel worth active verification before doing more implementatio
 
 Recommended next implementation slice
 
-Unless priorities changed, the best next Claude-handoff-aligned slice is still:
-- cancellation cleanup / transcript invariants, phase 7
+Unless priorities changed, the best next Claude-handoff-aligned slice is now:
+- cancellation cleanup / transcript invariants, phase 8
 
 Why this should be next
-- The first seam now exists, so the next meaningful work is to make cleanup behavior richer rather than starting another subsystem.
-- File-edit hardening is still in good shape and does not look like the highest-risk deterministic gap.
+- The core cleanup seam, compression follow-through, and web transcript rendering are now in place.
+- The highest remaining deterministic gap is no longer transcript readability in the main chat UI; it is downstream consumers that may still treat tombstone payloads like ordinary text.
 - This remains a better next investment than speculative prompt-cache or broader token-budget architecture.
 
 Suggested exact next-session plan
@@ -230,24 +232,24 @@ Suggested exact next-session plan
 - `sirtopham-handoff/01-priority-recommendations.md`
 - `sirtopham-handoff/stubs/turnstate/turnstate.go`
 - `internal/agent/turn_cleanup.go`
-- current cancellation/cleanup paths in the agent loop and conversation persistence
-- current tests covering cancellation and iteration cleanup behavior
+- `internal/context/compression.go`
+- `web/src/lib/history.ts`
+- current search/title/export-facing codepaths in `internal/conversation` and `internal/server`
 
-2. Confirm the remaining cancellation-path realities
-- What partial assistant/tool states are observable before iteration persistence
-- Which interrupted states should be deleted vs tombstoned vs synthesized
-- How current cleanup should interact with message persistence vs analytics persistence
+2. Confirm the remaining tombstone-consumer realities
+- Which consumers derive snippets or summaries directly from stored transcript text
+- Whether title generation, search snippets, and any future export path should ignore tombstone markers entirely or replace them with compact summaries
+- Whether any server/API-side normalization is preferable to UI-only cleanup for those consumers
 
 3. Implement the next narrow TDD slice
 Minimum worthwhile target now:
 - preserve the structured planner/executor seam
-- decide whether interrupted/failed tombstones need dedicated UI/rendering affordances or transcript filtering behavior
-- make search/export and any title-adjacent transcript consumers explicitly ignore, down-rank, or specially render tombstone markers
-- if one downstream consumer is chosen first, prefer the web/transcript rendering path over speculative broader architecture
+- make one additional downstream consumer explicit, preferably search snippets or title-adjacent transcript summarization
+- ensure tombstone markers do not dominate snippets/titles or look like ordinary assistant prose in those surfaces
 - keep completed iterations durable and next-turn startup clean
 
 4. Validate with focused tests first, then broader suite
-At minimum run targeted cancellation-path tests and then the relevant broader package suites.
+At minimum run targeted cancellation/transcript-consumer tests and then the relevant broader package suites, plus `npm run build` if web-visible behavior changes.
 
 What not to do next session unless there is strong evidence it is worth it
 - Do not jump into prompt-cache-latching architecture first.
