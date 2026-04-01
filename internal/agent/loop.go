@@ -620,7 +620,21 @@ func (l *AgentLoop) RunTurn(ctx stdctx.Context, req RunTurnRequest) (*TurnResult
 			return nil, l.handleCancellation(req.ConversationID, req.TurnNumber, iteration, completedIterations, ctx.Err())
 		}
 
-		toolResults = applyAggregateToolResultBudget(ctx, l.toolResultStore, toolResults, result.ToolCalls, l.cfg.MaxToolResultsPerMessageChars)
+		toolResults, budgetReport := applyAggregateToolResultBudget(ctx, l.toolResultStore, toolResults, result.ToolCalls, l.cfg.MaxToolResultsPerMessageChars)
+		if budgetReport.ReplacedResults > 0 {
+			l.logger.Debug("aggregate tool-result budget applied",
+				"conversation_id", req.ConversationID,
+				"turn", req.TurnNumber,
+				"iteration", iteration,
+				"replaced_results", budgetReport.ReplacedResults,
+				"persisted_results", budgetReport.PersistedResults,
+				"inline_shrunk_results", budgetReport.InlineShrunkResults,
+				"chars_saved", budgetReport.CharsSaved,
+				"original_chars", budgetReport.OriginalChars,
+				"final_chars", budgetReport.FinalChars,
+				"max_chars", budgetReport.MaxChars,
+			)
+		}
 
 		// Build the iteration messages for persistence: assistant + tool results.
 		persistMessages := []conversation.IterationMessage{
