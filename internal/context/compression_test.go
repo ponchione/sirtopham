@@ -160,6 +160,94 @@ func TestCompressionEngineSummarizesMiddleSanitizesOrphansAndInvalidatesCache(t 
 	}
 }
 
+func TestCompressionEngineCompressesOrphanedToolResults(t *testing.T) {
+	db := newCompressionTestDB(t)
+	conversationID := seedCompressionConversation(t, db)
+
+	// Messages in order:
+	// 1: user           (head)
+	// 2: assistant+tool_use:A  (head)
+	// 3: tool_result:A  (middle - compressed)
+	// 4: assistant+tool_use:B  (middle - compressed)
+	// 5: tool_result:B  (tail - orphaned! its tool_use:B is in compressed middle)
+	// 6: user           (tail)
+	// 7: assistant      (tail)
+	// 8: user           (tail)
+	insertCompressionMessage(t, db, compressionSeedMessage{sequence: 1, role: "user", content: "start", turn: 1, iteration: 1})
+	insertCompressionMessage(t, db, compressionSeedMessage{
+		sequence: 2,
+		role:     "assistant",
+		content: assistantJSON(t,
+			provider.NewTextBlock("I'll read file A."),
+			provider.NewToolUseBlock("toolu-A", "file_read", json.RawMessage(`{"path":"a.go"}`)),
+		),
+		turn:      1,
+		iteration: 1,
+	})
+	insertCompressionMessage(t, db, compressionSeedMessage{sequence: 3, role: "tool", content: "package a", toolUseID: "toolu-A", toolName: "file_read", turn: 1, iteration: 1})
+	insertCompressionMessage(t, db, compressionSeedMessage{
+		sequence: 4,
+		role:     "assistant",
+		content: assistantJSON(t,
+			provider.NewTextBlock("Now I'll read file B."),
+			provider.NewToolUseBlock("toolu-B", "file_read", json.RawMessage(`{"path":"b.go"}`)),
+		),
+		turn:      2,
+		iteration: 1,
+	})
+	insertCompressionMessage(t, db, compressionSeedMessage{sequence: 5, role: "tool", content: "package b", toolUseID: "toolu-B", toolName: "file_read", turn: 2, iteration: 1})
+	insertCompressionMessage(t, db, compressionSeedMessage{sequence: 6, role: "user", content: "continue", turn: 3, iteration: 1})
+	insertCompressionMessage(t, db, compressionSeedMessage{sequence: 7, role: "assistant", content: assistantJSON(t, provider.NewTextBlock("all done")), turn: 3, iteration: 1})
+	insertCompressionMessage(t, db, compressionSeedMessage{sequence: 8, role: "user", content: "thanks", turn: 4, iteration: 1})
+
+	providerStub := &compressionProviderStub{responseText: "- Read files A and B"}
+	engine := NewCompressionEngine(db, providerStub)
+	result, err := engine.Compress(stdctx.Background(), conversationID, config.ContextConfig{
+		CompressionHeadPreserve: 2,
+		CompressionTailPreserve: 4,
+		CompressionModel:        "local",
+	})
+	if err != nil {
+		t.Fatalf("Compress returned error: %v", err)
+	}
+	if !result.Compressed {
+		t.Fatal("Compressed = false, want true")
+	}
+
+	messages := listCompressionMessages(t, db, conversationID)
+	active := activeCompressionMessages(messages)
+
+	// Expected active messages after compression:
+	// 1: user (head)
+	// 2: assistant+tool_use:A (head, but tool_use:A stripped because tool_result:A was compressed)
+	// summary (inserted between head and tail)
+	// 6: user (tail)
+	// 7: assistant (tail)
+	// 8: user (tail)
+	// NOTE: tool_result:B at seq 5 should be compressed because its tool_use:B (seq 4) was in the middle
+
+	// Verify tool_result:B (seq 5) is compressed
+	for _, msg := range messages {
+		if msg.Sequence == 5 {
+			if msg.IsCompressed != 1 {
+				t.Fatalf("tool_result:B at seq 5 should be compressed (is_compressed=%d), orphaned tool result not handled", msg.IsCompressed)
+			}
+		}
+	}
+
+	// Verify tool_result:B is not in active messages
+	for _, msg := range active {
+		if msg.ToolUseID == "toolu-B" {
+			t.Fatalf("orphaned tool_result:B (toolu-B) should not be in active messages, but found: %+v", msg)
+		}
+	}
+
+	// Active should be: user(1), sanitized-assistant(2), summary, user(6), assistant(7), user(8) = 6
+	if len(active) != 6 {
+		t.Fatalf("active message count = %d, want 6 (orphaned tool result should be compressed)", len(active))
+	}
+}
+
 func TestCompressionEngineFallsBackWithoutSummary(t *testing.T) {
 	db := newCompressionTestDB(t)
 	conversationID := seedCompressionConversation(t, db)
@@ -398,6 +486,186 @@ func ftsCountForQuery(t *testing.T, sqlDB *sql.DB, query string) int {
 		t.Fatalf("fts count query failed: %v", err)
 	}
 	return count
+}
+
+func TestCompressionEngineCascadesTwoRoundsCompressingOldSummary(t *testing.T) {
+	db := newCompressionTestDB(t)
+	conversationID := seedCompressionConversation(t, db)
+
+	// Insert 15 messages: alternating user/assistant pairs across 8 turns.
+	// With head=3, tail=4 the layout is:
+	//   head:   seq 1(turn1), 2(turn1), 3(turn2)
+	//   middle: seq 4(turn2)..11(turn6)   — 8 messages
+	//   tail:   seq 12(turn6), 13(turn7), 14(turn7), 15(turn8)
+	for i := 1; i <= 15; i++ {
+		role := "user"
+		content := "user message"
+		if i%2 == 0 {
+			role = "assistant"
+			content = assistantJSON(t, provider.NewTextBlock("assistant message"))
+		}
+		insertCompressionMessage(t, db, compressionSeedMessage{
+			sequence:  float64(i),
+			role:      role,
+			content:   content,
+			turn:      (i + 1) / 2,
+			iteration: 1,
+		})
+	}
+
+	// ---- Round 1 ----
+	stubR1 := &compressionProviderStub{responseText: "- Round 1 summary of turns 2-6"}
+	engine := NewCompressionEngine(db, stubR1)
+	cfg := config.ContextConfig{
+		CompressionHeadPreserve: 3,
+		CompressionTailPreserve: 4,
+		CompressionModel:        "local",
+	}
+	r1, err := engine.Compress(stdctx.Background(), conversationID, cfg)
+	if err != nil {
+		t.Fatalf("Round 1 Compress returned error: %v", err)
+	}
+	if !r1.Compressed {
+		t.Fatal("Round 1: Compressed = false, want true")
+	}
+	if !r1.SummaryInserted {
+		t.Fatal("Round 1: SummaryInserted = false, want true")
+	}
+	if r1.CompressedMessages != 8 {
+		t.Fatalf("Round 1: CompressedMessages = %d, want 8", r1.CompressedMessages)
+	}
+	// Middle turns 2-6
+	if r1.CompressedTurnStart != 2 || r1.CompressedTurnEnd != 6 {
+		t.Fatalf("Round 1: turn range = %d-%d, want 2-6", r1.CompressedTurnStart, r1.CompressedTurnEnd)
+	}
+
+	// After round 1: active = head(3) + summary(1) + tail(4) = 8
+	r1Messages := listCompressionMessages(t, db, conversationID)
+	r1Active := activeCompressionMessages(r1Messages)
+	if len(r1Active) != 8 {
+		t.Fatalf("Round 1: active message count = %d, want 8", len(r1Active))
+	}
+
+	// Find the round-1 summary and record its ID.
+	var r1SummaryID int64
+	var r1SummarySeq float64
+	for _, msg := range r1Active {
+		if msg.IsSummary == 1 {
+			r1SummaryID = msg.ID
+			r1SummarySeq = msg.Sequence
+			if !msg.CompressedTurnStart.Valid || int(msg.CompressedTurnStart.Int64) != 2 {
+				t.Fatalf("Round 1 summary compressed_turn_start = %v, want 2", msg.CompressedTurnStart)
+			}
+			if !msg.CompressedTurnEnd.Valid || int(msg.CompressedTurnEnd.Int64) != 6 {
+				t.Fatalf("Round 1 summary compressed_turn_end = %v, want 6", msg.CompressedTurnEnd)
+			}
+			break
+		}
+	}
+	if r1SummaryID == 0 {
+		t.Fatal("Round 1: no summary message found")
+	}
+
+	// ---- Add 8 more messages (seq 16-23, turns 8-12) ----
+	// After these the active set is 16 messages:
+	//   head:   seq 1,2,3
+	//   middle: summary, seq 12..19  (9 messages)
+	//   tail:   seq 20,21,22,23
+	for i := 16; i <= 23; i++ {
+		role := "user"
+		content := "user message round2"
+		if i%2 == 0 {
+			role = "assistant"
+			content = assistantJSON(t, provider.NewTextBlock("assistant message round2"))
+		}
+		insertCompressionMessage(t, db, compressionSeedMessage{
+			sequence:  float64(i),
+			role:      role,
+			content:   content,
+			turn:      (i + 1) / 2,
+			iteration: 1,
+		})
+	}
+
+	// ---- Round 2 ----
+	stubR2 := &compressionProviderStub{responseText: "- Round 2 cascading summary of turns 2-10"}
+	engine2 := NewCompressionEngine(db, stubR2)
+	r2, err := engine2.Compress(stdctx.Background(), conversationID, cfg)
+	if err != nil {
+		t.Fatalf("Round 2 Compress returned error: %v", err)
+	}
+	if !r2.Compressed {
+		t.Fatal("Round 2: Compressed = false, want true")
+	}
+	if !r2.SummaryInserted {
+		t.Fatal("Round 2: SummaryInserted = false, want true")
+	}
+	// Round 2 middle includes old summary (turns 2-6) plus seq 12-19 (turns 6-10).
+	// compressionTurnRange should merge them: start=2, end=10.
+	if r2.CompressedTurnStart != 2 || r2.CompressedTurnEnd != 10 {
+		t.Fatalf("Round 2: turn range = %d-%d, want 2-10", r2.CompressedTurnStart, r2.CompressedTurnEnd)
+	}
+
+	// Verify old summary is now compressed.
+	r2Messages := listCompressionMessages(t, db, conversationID)
+	for _, msg := range r2Messages {
+		if msg.ID == r1SummaryID {
+			if msg.IsCompressed != 1 {
+				t.Fatalf("Old summary (id=%d, seq=%v) is_compressed = %d, want 1", r1SummaryID, r1SummarySeq, msg.IsCompressed)
+			}
+			break
+		}
+	}
+
+	// Active after round 2 should be: head(3) + new summary(1) + tail(4) = 8
+	r2Active := activeCompressionMessages(r2Messages)
+	if len(r2Active) != 8 {
+		t.Fatalf("Round 2: active message count = %d, want 8", len(r2Active))
+	}
+
+	// Find new summary and verify its turn range covers the full cascade.
+	var r2SummaryFound bool
+	for _, msg := range r2Active {
+		if msg.IsSummary == 1 {
+			r2SummaryFound = true
+			if msg.ID == r1SummaryID {
+				t.Fatal("Round 2: active summary is still the old one; expected a new summary")
+			}
+			if !msg.CompressedTurnStart.Valid || int(msg.CompressedTurnStart.Int64) != 2 {
+				t.Fatalf("Round 2 summary compressed_turn_start = %v, want 2", msg.CompressedTurnStart)
+			}
+			if !msg.CompressedTurnEnd.Valid || int(msg.CompressedTurnEnd.Int64) != 10 {
+				t.Fatalf("Round 2 summary compressed_turn_end = %v, want 10", msg.CompressedTurnEnd)
+			}
+			if !strings.HasPrefix(msg.Content, "[CONTEXT COMPACTION]\n") {
+				t.Fatalf("Round 2 summary content = %q, want [CONTEXT COMPACTION] prefix", msg.Content)
+			}
+			break
+		}
+	}
+	if !r2SummaryFound {
+		t.Fatal("Round 2: no summary message found in active messages")
+	}
+
+	// Verify head is preserved (seq 1,2,3).
+	for i, wantSeq := range []float64{1, 2, 3} {
+		if r2Active[i].Sequence != wantSeq {
+			t.Fatalf("Round 2: head[%d].Sequence = %v, want %v", i, r2Active[i].Sequence, wantSeq)
+		}
+	}
+
+	// Verify tail is the last 4 active messages (seq 20,21,22,23).
+	for i, wantSeq := range []float64{20, 21, 22, 23} {
+		if r2Active[4+i].Sequence != wantSeq {
+			t.Fatalf("Round 2: tail[%d].Sequence = %v, want %v", i, r2Active[4+i].Sequence, wantSeq)
+		}
+	}
+
+	// Verify reconstructed history via the query returns messages in correct order.
+	reconstructed := reconstructActiveHistory(t, db, conversationID)
+	if len(reconstructed) != 8 {
+		t.Fatalf("Round 2: reconstructed history count = %d, want 8", len(reconstructed))
+	}
 }
 
 func mustExecCompression(t *testing.T, sqlDB *sql.DB, query string, args ...any) {

@@ -261,6 +261,10 @@ func estimateGraphHitTokensForBudget(hit GraphHit) int {
 	return approximateTokenCount(hit.FilePath + "\n" + hit.SymbolName + "\n" + hit.RelationshipType)
 }
 
+// approximateTokenCount estimates the token count for a text string using the common
+// heuristic of ~4 characters per token. The +3 provides ceiling-division rounding.
+// This is intentionally rough — exact tokenization depends on the model's tokenizer
+// and is not needed for budget allocation decisions.
 func approximateTokenCount(text string) int {
 	text = strings.TrimSpace(text)
 	if text == "" {

@@ -156,6 +156,21 @@ func (e *CompressionEngine) Compress(ctx stdctx.Context, conversationID string, 
 		}
 	}
 
+	// Second pass: compress orphaned tool-result messages whose originating
+	// assistant tool_use block was compressed in the middle.
+	survivingToolUses := survivingAssistantToolUseIDs(plan.head, plan.tail)
+	for _, msg := range append(append([]dbpkg.Message(nil), plan.head...), plan.tail...) {
+		if msg.Role != "tool" || !msg.ToolUseID.Valid || strings.TrimSpace(msg.ToolUseID.String) == "" {
+			continue
+		}
+		if _, ok := survivingToolUses[msg.ToolUseID.String]; ok {
+			continue
+		}
+		if err := qtx.MarkMessageCompressedByID(ctx, msg.ID); err != nil {
+			return nil, fmt.Errorf("compression engine: compress orphaned tool result %d: %w", msg.ID, err)
+		}
+	}
+
 	if summaryInserted {
 		if err := qtx.InsertCompressionSummary(ctx, dbpkg.InsertCompressionSummaryParams{
 			ConversationID: conversationID,
@@ -415,6 +430,27 @@ func survivingToolResultIDs(groups ...[]dbpkg.Message) map[string]struct{} {
 	return ids
 }
 
+func survivingAssistantToolUseIDs(groups ...[]dbpkg.Message) map[string]struct{} {
+	ids := make(map[string]struct{})
+	for _, group := range groups {
+		for _, msg := range group {
+			if msg.Role != "assistant" || !msg.Content.Valid || strings.TrimSpace(msg.Content.String) == "" {
+				continue
+			}
+			blocks, err := provider.ContentBlocksFromRaw(json.RawMessage(msg.Content.String))
+			if err != nil {
+				continue
+			}
+			for _, block := range blocks {
+				if block.Type == "tool_use" && block.ID != "" {
+					ids[block.ID] = struct{}{}
+				}
+			}
+		}
+	}
+	return ids
+}
+
 func survivingAssistantMessages(groups ...[]dbpkg.Message) []dbpkg.Message {
 	assistants := make([]dbpkg.Message, 0)
 	for _, group := range groups {
@@ -481,6 +517,9 @@ func exceedsCompressionThreshold(tokenCount int, modelContextLimit int, cfg conf
 	return float64(tokenCount) > float64(modelContextLimit)*compressionThreshold(cfg)
 }
 
+// approximateTokensFromChars estimates token count from a character count using
+// the common heuristic of ~4 characters per token. The +3 provides ceiling-division
+// rounding. Used for preflight compression checks where exact counts are unavailable.
 func approximateTokensFromChars(totalChars int) int {
 	if totalChars <= 0 {
 		return 0
