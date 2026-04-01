@@ -44,7 +44,7 @@ work. Move the CLI-dependent tests to a separate file that keeps the tag.
 
 ## Layer 3 — Context Assembly
 
-**Audited:** 2026-04-01 | **Result:** Clean — no tech debt items.
+**Audited:** 2026-04-01 | **Result:** Clean — no code defects. Two partial items noted below.
 
 All 7 epics (42 checklist items) pass. Three test/doc gaps found during audit
 were fixed in the same session:
@@ -53,5 +53,46 @@ were fixed in the same session:
 3. Cascading compression test added (two rounds)
 
 Race detector clean. 43 tests pass across 9 test files.
+
+### Turn Analyzer missing "question intent" and "debugging hints" signals
+**Severity:** Low | **Source:** Layer 3 audit (2026-04-01)
+
+The audit checklist listed "question intent" and "debugging hints" as expected
+signal types in the `RuleBasedAnalyzer`. Neither appears in the epic spec
+(`docs/layer3/02-turn-analyzer/epic-02-turn-analyzer.md`), which defines exactly
+6 signal types — all implemented: `file_ref`, `symbol_ref`, `modification_intent`,
+`creation_intent`, `git_context`, `continuation`.
+
+The checklist items were aspirational. Adding these signals could improve context
+assembly quality for question-heavy and debugging turns (e.g., "why does this
+return nil?" could boost RAG queries toward error-handling code), but the current
+system degrades gracefully — the agent uses `search_semantic` reactively when
+proactive context is insufficient.
+
+**Fix direction:** Add two new signal extractors to `analyzer.go`:
+- `applyQuestionIntent`: detect "why", "how", "what does", "explain" patterns;
+  could set a flag that biases retrieval toward documentation/comments.
+- `applyDebuggingHints`: detect "error", "panic", "nil", "crash", "fail", "bug",
+  "broken", stack trace patterns; could boost error-handling code in RAG results.
+
+Both would follow the existing extractor pattern (regex scan → Signal emission →
+ContextNeeds mutation). Low priority — the reactive fallback covers these cases.
+
+---
+
+### Budget priority chain omits brain docs (v0.2 scope)
+**Severity:** Info | **Source:** Layer 3 audit (2026-04-01)
+
+The audit checklist listed the budget priority order as:
+  explicit files > **brain docs** > top RAG > graph > conventions > git > lower RAG
+
+The epic spec (`docs/layer3/05-budget-manager-serialization/epic-05-budget-manager-serialization.md`)
+explicitly defers brain docs to v0.2 and lists 6 priority tiers without brain.
+The implementation matches the v0.1 spec exactly.
+
+**Fix direction:** When v0.2 proactive brain retrieval lands, add a `BrainHit`
+priority tier in `budget.go`'s `Fit()` method between explicit files and top RAG
+hits. The `BrainHit` type already exists in `types.go` and `RetrievalResults`
+already has a `BrainHits` field — only the budget allocation logic needs updating.
 
 
