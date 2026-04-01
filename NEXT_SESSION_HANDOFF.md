@@ -133,8 +133,9 @@ What is substantially complete is the highest-priority tool-output slice plus a 
 - Compression input rendering now collapses assistant tombstones to compact summaries instead of leaking full tombstone payloads / partial text back into compression prompts.
 - The web conversation history path now parses persisted assistant JSON content blocks instead of showing raw JSON blobs and renders assistant/tool tombstones as human-readable transcript entries.
 - Conversation search snippets now collapse tombstone-bearing assistant/tool payloads to compact summaries instead of leaking raw markers or `partial_text=...` bodies into result previews.
+- Title generation now rejects model outputs that look like transcript tombstones instead of persisting marker text as conversation titles.
 - This is still not the full Claude-Code-style cleanup model.
-- Remaining gap: interrupted assistant/tool state still reuses the existing message/content-block schema rather than a first-class DB record type, and title/export-style transcript consumers still do not have explicit tombstone filtering or ranking rules.
+- Remaining gap: interrupted assistant/tool state still reuses the existing message/content-block schema rather than a first-class DB record type, and any future export-style transcript consumers still do not have explicit tombstone filtering or rendering rules.
 - Main files:
   - `internal/agent/turn_cleanup.go`
   - `internal/agent/turn_cleanup_test.go`
@@ -147,6 +148,7 @@ What is substantially complete is the highest-priority tool-output slice plus a 
   - `internal/context/compression_test.go`
   - `internal/conversation/manager.go`
   - `internal/conversation/manager_test.go`
+  - `internal/conversation/title.go`
   - `web/src/lib/history.ts`
   - `TECH-DEBT.md`
 
@@ -221,12 +223,12 @@ Only a few things feel worth active verification before doing more implementatio
 Recommended next implementation slice
 
 Unless priorities changed, the best next Claude-handoff-aligned slice is now:
-- cancellation cleanup / transcript invariants, phase 9
+- cancellation cleanup / transcript invariants, phase 10
 
 Why this should be next
-- The core cleanup seam, compression follow-through, web transcript rendering, and search-snippet cleanup are now in place.
-- The highest remaining deterministic gap is downstream title/export-style consumers that may still treat tombstone payloads like ordinary transcript text.
-- This remains a better next investment than speculative prompt-cache or broader token-budget architecture.
+- The core cleanup seam, compression follow-through, web transcript rendering, search-snippet cleanup, and title-safety guard are now in place.
+- The highest remaining deterministic gap appears to be future export-style or other transcript-derived consumers rather than current core chat/search/title paths.
+- This remains a better next investment than speculative prompt-cache or broader token-budget architecture unless a concrete export/transcript surface now exists.
 
 Suggested exact next-session plan
 
@@ -238,18 +240,18 @@ Suggested exact next-session plan
 - `internal/context/compression.go`
 - `internal/conversation/manager.go`
 - `internal/conversation/title.go`
-- current export/title-facing codepaths in `internal/conversation` and `internal/server`
+- any concrete export/transcript-derivation codepaths added since this handoff
 
 2. Confirm the remaining tombstone-consumer realities
-- Whether title generation or any title-adjacent transcript summarization path can ever see tombstone-only/ tombstone-heavy text
-- Whether future transcript export paths should drop tombstone payload details or replace them with compact summaries
-- Whether any shared transcript-normalization helper should exist instead of one-off consumer logic
+- Whether any real export/download/share/transcript-summary surface exists yet
+- Whether new transcript-derived utilities should reuse a shared tombstone-normalization helper instead of duplicating ad hoc logic
+- Whether current title/search normalization should be consolidated without adding premature abstraction
 
 3. Implement the next narrow TDD slice
 Minimum worthwhile target now:
 - preserve the structured planner/executor seam
-- make one additional downstream consumer explicit, preferably title-adjacent transcript summarization or export formatting
-- ensure tombstone markers do not dominate titles/exports or look like ordinary assistant prose in those surfaces
+- only touch a real downstream consumer if one exists in code today
+- otherwise prefer a small consolidation/refactor only if it clearly reduces drift between compression/search/title tombstone rules
 - keep completed iterations durable and next-turn startup clean
 
 4. Validate with focused tests first, then broader suite

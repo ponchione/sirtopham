@@ -176,7 +176,7 @@ Cancellation cleanup now persists two distinct durable markers inside existing m
 
 This is good enough to preserve transcript truthfulness today, but it still has follow-up debt:
 - no first-class DB/message type distinguishes tombstones from ordinary assistant/tool payloads
-- the main web transcript and conversation search snippets now render tombstones human-readably, but title-adjacent transcript utilities and any future transcript exports may still need explicit rules for these markers
+- the main web transcript and conversation search snippets now render tombstones human-readably, and title generation now refuses tombstone-like outputs, but any future transcript export/share/derivation surfaces may still need explicit rules for these markers
 
 **Future fix direction:** If interrupted-state UX or analytics become important, introduce a
 first-class durable representation (schema field, content-block type, or explicit metadata)
