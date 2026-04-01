@@ -84,6 +84,9 @@ func TestFileEditZeroMatches(t *testing.T) {
 	if !strings.Contains(result.Content, "Check for typos") || !strings.Contains(result.Content, "full file_read") {
 		t.Fatalf("expected recovery guidance, got: %s", result.Content)
 	}
+	if !strings.Contains(result.Content, "Preview:") || !strings.Contains(result.Content, "hello world") {
+		t.Fatalf("expected file preview in error, got: %s", result.Content)
+	}
 }
 
 func TestFileEditMultipleMatches(t *testing.T) {
@@ -116,6 +119,9 @@ func TestFileEditMultipleMatches(t *testing.T) {
 	}
 	if !strings.Contains(result.Content, "3 times") || !strings.Contains(result.Content, "surrounding context") {
 		t.Fatalf("expected disambiguation guidance, got: %s", result.Content)
+	}
+	if !strings.Contains(result.Content, "Candidate lines:") || !strings.Contains(result.Content, "1") {
+		t.Fatalf("expected candidate line info, got: %s", result.Content)
 	}
 }
 
