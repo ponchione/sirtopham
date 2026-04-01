@@ -197,6 +197,7 @@ func runServe(cmd *cobra.Command, configPath string, portOverride int, hostOverr
 			ModelName:                  cfg.Routing.Default.Model,
 			EmitContextDebug:           cfg.Context.EmitContextDebug,
 			ContextConfig:              cfg.Context,
+			ToolResultStoreRoot:        cfg.Agent.ToolResultStoreRoot,
 			CompressHistoricalResults:  cfg.Agent.CompressHistoricalResults,
 			HistorySummarizeAfterTurns: cfg.Agent.HistorySummarizeAfterTurns,
 		},

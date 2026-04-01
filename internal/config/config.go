@@ -87,6 +87,7 @@ type AgentConfig struct {
 	MaxIterationsPerTurn     int      `yaml:"max_iterations_per_turn"`
 	LoopDetectionThreshold   int      `yaml:"loop_detection_threshold"`
 	ToolOutputMaxTokens      int      `yaml:"tool_output_max_tokens"`
+	ToolResultStoreRoot      string   `yaml:"tool_result_store_root"`
 	ShellTimeoutSeconds      int      `yaml:"shell_timeout_seconds"`
 	ShellDenylist            []string `yaml:"shell_denylist"`
 	ExtendedThinking         bool     `yaml:"extended_thinking"`
@@ -406,6 +407,14 @@ func (c *Config) validatePaths() error {
 		return fmt.Errorf("invalid field project_root=%q (must be an existing directory)", c.ProjectRoot)
 	}
 	c.ProjectRoot = projectRoot
+
+	if strings.TrimSpace(c.Agent.ToolResultStoreRoot) != "" {
+		toolResultStoreRoot, err := expandPath(c.Agent.ToolResultStoreRoot)
+		if err != nil {
+			return fmt.Errorf("invalid field agent.tool_result_store_root=%q: %w", c.Agent.ToolResultStoreRoot, err)
+		}
+		c.Agent.ToolResultStoreRoot = toolResultStoreRoot
+	}
 
 	if !c.Brain.Enabled {
 		return nil
