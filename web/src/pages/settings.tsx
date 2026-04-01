@@ -127,9 +127,17 @@ export function SettingsPage() {
                 </p>
               )}
 
-              <div className="text-[10px] text-muted-foreground/60">
-                Agent: max {config.agent.max_iterations} iterations, extended thinking{" "}
-                {config.agent.extended_thinking ? "on" : "off"}
+              <div className="space-y-1 text-[10px] text-muted-foreground/60">
+                <div>
+                  Agent: max {config.agent.max_iterations} iterations, extended thinking{" "}
+                  {config.agent.extended_thinking ? "on" : "off"}
+                </div>
+                <div>Tool output max tokens: {config.agent.tool_output_max_tokens}</div>
+                {config.agent.tool_result_store_root && (
+                  <div className="break-all font-mono">
+                    Persisted tool result store: {config.agent.tool_result_store_root}
+                  </div>
+                )}
               </div>
             </div>
           ) : null}

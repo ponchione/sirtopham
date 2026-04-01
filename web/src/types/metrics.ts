@@ -129,6 +129,8 @@ export interface AppConfig {
   agent: {
     max_iterations: number;
     extended_thinking: boolean;
+    tool_output_max_tokens: number;
+    tool_result_store_root?: string;
   };
   providers: Array<{
     name: string;
