@@ -66,8 +66,8 @@ func (f FileEdit) Execute(ctx context.Context, projectRoot string, input json.Ra
 	if params.OldStr == "" {
 		return &ToolResult{
 			Success: false,
-			Content: "old_str cannot be empty",
-			Error:   "empty old_str",
+			Content: "file_edit cannot create or append content with an empty old_str. Read the file first and provide an exact match to replace, or use file_write to create/overwrite the file.",
+			Error:   "invalid_create_via_edit",
 		}, nil
 	}
 
@@ -134,16 +134,16 @@ func (f FileEdit) Execute(ctx context.Context, projectRoot string, input json.Ra
 	case 0:
 		return &ToolResult{
 			Success: false,
-			Content: "String not found in file. Check for typos or whitespace differences.",
-			Error:   "no match",
+			Content: "String not found in file. Check for typos, whitespace differences, or refresh with a full file_read before retrying file_edit.",
+			Error:   "zero_match",
 		}, nil
 	case 1:
 		// Exactly one match — proceed with replacement.
 	default:
 		return &ToolResult{
 			Success: false,
-			Content: fmt.Sprintf("String appears %d times in the file. Provide a longer, more unique search string that includes surrounding context.", count),
-			Error:   "multiple matches",
+			Content: fmt.Sprintf("String appears %d times in the file. Provide a longer, more unique search string that includes surrounding context from the full file_read.", count),
+			Error:   "multiple_matches",
 		}, nil
 	}
 
