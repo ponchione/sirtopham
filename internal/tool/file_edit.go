@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 )
 
@@ -51,6 +52,70 @@ func (FileEdit) Schema() json.RawMessage {
 			"required": ["path", "old_str", "new_str"]
 		}
 	}`)
+}
+
+func filePreview(content string, maxLines int) string {
+	lines := strings.Split(content, "\n")
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	if len(lines) == 0 {
+		return "(empty file)"
+	}
+	if maxLines > 0 && len(lines) > maxLines {
+		lines = lines[:maxLines]
+	}
+	return strings.Join(lines, "\n")
+}
+
+func candidateLineSummary(content, needle string, maxCandidates int) string {
+	if needle == "" {
+		return "none"
+	}
+	lines := strings.Split(content, "\n")
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	candidateLines := make([]int, 0)
+	for i, line := range lines {
+		if strings.Contains(line, needle) {
+			candidateLines = append(candidateLines, i+1)
+		}
+	}
+	if len(candidateLines) == 0 {
+		for i := 0; i < len(content); {
+			idx := strings.Index(content[i:], needle)
+			if idx < 0 {
+				break
+			}
+			pos := i + idx
+			line := 1 + strings.Count(content[:pos], "\n")
+			candidateLines = append(candidateLines, line)
+			i = pos + len(needle)
+		}
+	}
+	if len(candidateLines) == 0 {
+		return "unknown"
+	}
+	sort.Ints(candidateLines)
+	parts := make([]string, 0, min(len(candidateLines), maxCandidates))
+	for _, line := range candidateLines {
+		if len(parts) >= maxCandidates {
+			break
+		}
+		parts = append(parts, fmt.Sprintf("line %d", line))
+	}
+	if len(candidateLines) > maxCandidates {
+		parts = append(parts, fmt.Sprintf("... (%d total)", len(candidateLines)))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func (f FileEdit) Execute(ctx context.Context, projectRoot string, input json.RawMessage) (*ToolResult, error) {
@@ -134,7 +199,7 @@ func (f FileEdit) Execute(ctx context.Context, projectRoot string, input json.Ra
 	case 0:
 		return &ToolResult{
 			Success: false,
-			Content: "String not found in file. Check for typos, whitespace differences, or refresh with a full file_read before retrying file_edit.",
+			Content: fmt.Sprintf("String not found in file. Check for typos, whitespace differences, or refresh with a full file_read before retrying file_edit.\nPreview:\n%s", filePreview(oldContent, 3)),
 			Error:   "zero_match",
 		}, nil
 	case 1:
@@ -142,7 +207,7 @@ func (f FileEdit) Execute(ctx context.Context, projectRoot string, input json.Ra
 	default:
 		return &ToolResult{
 			Success: false,
-			Content: fmt.Sprintf("String appears %d times in the file. Provide a longer, more unique search string that includes surrounding context from the full file_read.", count),
+			Content: fmt.Sprintf("String appears %d times in the file. Provide a longer, more unique search string that includes surrounding context from the full file_read.\nCandidate lines: %s", count, candidateLineSummary(oldContent, params.OldStr, 5)),
 			Error:   "multiple_matches",
 		}, nil
 	}
