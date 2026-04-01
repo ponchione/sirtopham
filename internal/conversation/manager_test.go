@@ -559,6 +559,66 @@ func TestCleanTitle(t *testing.T) {
 	}
 }
 
+func TestSearchSnippetSummaryForAssistantTombstone(t *testing.T) {
+	input := `[{"type":"text","text":"[interrupted_assistant]\nreason=interrupt\nmessage=Assistant output was interrupted before turn completion.\npartial_text=<b>working</b> on it"}]`
+	got := sanitizeSearchSnippet(input)
+	if got != "[assistant interrupted tombstone]" {
+		t.Fatalf("sanitizeSearchSnippet() = %q, want compact assistant tombstone summary", got)
+	}
+}
+
+func TestSearchSnippetSummaryForFailedAssistantTombstone(t *testing.T) {
+	input := `[{"type":"text","text":"[failed_assistant]\nreason=stream_failure\nmessage=Assistant output ended due to a stream failure before turn completion.\npartial_text=<b>working</b> on it"}]`
+	got := sanitizeSearchSnippet(input)
+	if got != "[assistant stream failure tombstone]" {
+		t.Fatalf("sanitizeSearchSnippet() = %q, want compact failed assistant tombstone summary", got)
+	}
+}
+
+func TestSearchSnippetSummaryForInterruptedToolResult(t *testing.T) {
+	input := `[interrupted_tool_result]\nreason=interrupt\ntool=shell\ntool_use_id=tool-1\nstatus=interrupted_during_execution\nmessage=Tool execution did not complete before the turn ended.\n<b>working</b>`
+	got := sanitizeSearchSnippet(input)
+	if got != "[interrupted tool result]" {
+		t.Fatalf("sanitizeSearchSnippet() = %q, want compact interrupted tool summary", got)
+	}
+}
+
+func TestManagerSearchSanitizesTombstoneSnippets(t *testing.T) {
+	ctx := context.Background()
+	database := newTestDB(t)
+	projectID := seedProject(t, database)
+	mgr := newTestManager(t, database)
+	mgr.HistoryManager.now = func() time.Time { return time.Unix(1700001000, 0).UTC() }
+
+	conv, err := mgr.Create(ctx, projectID, WithTitle("Tombstone search"))
+	if err != nil {
+		t.Fatalf("Create error: %v", err)
+	}
+	if err := mgr.PersistUserMessage(ctx, conv.ID, 1, "please inspect the failed run"); err != nil {
+		t.Fatalf("PersistUserMessage error: %v", err)
+	}
+	if err := mgr.PersistIteration(ctx, conv.ID, 1, 1, []IterationMessage{{
+		Role:    "assistant",
+		Content: `[{"type":"text","text":"[interrupted_assistant]\nreason=interrupt\nmessage=Assistant output was interrupted before turn completion.\npartial_text=working on it"}]`,
+	}}); err != nil {
+		t.Fatalf("PersistIteration error: %v", err)
+	}
+
+	results, err := mgr.Search(ctx, "working")
+	if err != nil {
+		t.Fatalf("Search error: %v", err)
+	}
+	if len(results) == 0 {
+		t.Fatal("Search returned no results, want tombstone-backed match")
+	}
+	if strings.Contains(results[0].Snippet, "partial_text") || strings.Contains(results[0].Snippet, "[interrupted_assistant]") {
+		t.Fatalf("Search snippet = %q, want sanitized tombstone summary", results[0].Snippet)
+	}
+	if results[0].Snippet != "[assistant interrupted tombstone]" {
+		t.Fatalf("Search snippet = %q, want compact tombstone summary", results[0].Snippet)
+	}
+}
+
 // --- SeenFiles Integration ---
 
 func TestManagerSeenFilesIntegration(t *testing.T) {
