@@ -53,6 +53,7 @@ func TestLoadPartialYAMLOverridesSpecifiedFields(t *testing.T) {
 		"  port: 9000\n" +
 		"agent:\n" +
 		"  shell_timeout_seconds: 60\n" +
+		"  tool_result_store_root: \"" + filepath.Join(projectRoot, ".artifacts", "tool-results") + "\"\n" +
 		"brain:\n" +
 		"  enabled: false\n"
 
@@ -76,6 +77,10 @@ func TestLoadPartialYAMLOverridesSpecifiedFields(t *testing.T) {
 	}
 	if cfg.Agent.ShellTimeoutSeconds != 60 {
 		t.Fatalf("Agent.ShellTimeoutSeconds = %d, want 60", cfg.Agent.ShellTimeoutSeconds)
+	}
+	wantToolResultStoreRoot := filepath.Join(projectRoot, ".artifacts", "tool-results")
+	if got := cfg.Agent.ToolResultStoreRoot; got != wantToolResultStoreRoot {
+		t.Fatalf("Agent.ToolResultStoreRoot = %q, want %q", got, wantToolResultStoreRoot)
 	}
 	if cfg.LogFormat != "text" {
 		t.Fatalf("LogFormat = %q, want default text", cfg.LogFormat)

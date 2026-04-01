@@ -6,8 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -87,6 +85,7 @@ type AgentLoopConfig struct {
 	EmitContextDebug              bool                 `json:"emit_context_debug,omitempty"`
 	ContextConfig                 config.ContextConfig `json:"context_config,omitempty"`
 	MaxToolResultsPerMessageChars int                  `json:"max_tool_results_per_message_chars,omitempty"`
+	ToolResultStoreRoot           string               `json:"tool_result_store_root,omitempty"`
 
 	// Phase 2 history compression (spec 11).
 	CompressHistoricalResults  bool `json:"compress_historical_results,omitempty"`
@@ -188,7 +187,7 @@ func NewAgentLoop(deps AgentLoopDeps) *AgentLoop {
 		now:                 time.Now,
 	}
 	if loop.toolResultStore == nil {
-		loop.toolResultStore = NewFileToolResultStore(filepath.Join(os.TempDir(), "sirtopham-tool-results"))
+		loop.toolResultStore = NewFileToolResultStore(loop.cfg.ToolResultStoreRoot)
 	}
 	return loop
 }
