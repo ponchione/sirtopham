@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -134,43 +135,29 @@ func detectProgressAction(line string) string {
 func collapseProgressSummary(action string, count int) string {
 	switch strings.ToLower(action) {
 	case "compiling":
-		return "[Compiled " + itoa(count) + " crates]"
+		return "[Compiled " + strconv.Itoa(count) + " crates]"
 	case "downloading":
-		return "[Downloaded " + itoa(count) + " packages]"
+		return "[Downloaded " + strconv.Itoa(count) + " packages]"
 	case "installing":
-		return "[Installed " + itoa(count) + " packages]"
+		return "[Installed " + strconv.Itoa(count) + " packages]"
 	case "fetching":
-		return "[Fetched " + itoa(count) + " packages]"
+		return "[Fetched " + strconv.Itoa(count) + " packages]"
 	case "building":
-		return "[Built " + itoa(count) + " targets]"
+		return "[Built " + strconv.Itoa(count) + " targets]"
 	case "linking":
-		return "[Linked " + itoa(count) + " targets]"
+		return "[Linked " + strconv.Itoa(count) + " targets]"
 	case "checking":
-		return "[Checked " + itoa(count) + " crates]"
+		return "[Checked " + strconv.Itoa(count) + " crates]"
 	case "resolving":
-		return "[Resolved " + itoa(count) + " dependencies]"
+		return "[Resolved " + strconv.Itoa(count) + " dependencies]"
 	case "updating":
-		return "[Updated " + itoa(count) + " packages]"
+		return "[Updated " + strconv.Itoa(count) + " packages]"
 	default:
-		return "[" + itoa(count) + " progress lines collapsed]"
+		return "[" + strconv.Itoa(count) + " progress lines collapsed]"
 	}
 }
 
-// itoa is a minimal int-to-string without importing strconv.
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	if n < 0 {
-		return "-" + itoa(-n)
-	}
-	var digits []byte
-	for n > 0 {
-		digits = append([]byte{byte('0' + n%10)}, digits...)
-		n /= 10
-	}
-	return string(digits)
-}
+
 
 // cleanWhitespace performs three operations:
 //  1. Strips trailing whitespace from every line.

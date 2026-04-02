@@ -1,12 +1,14 @@
 package codex
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/ponchione/sirtopham/internal/provider"
@@ -87,7 +89,7 @@ func (p *CodexProvider) Complete(ctx context.Context, req *provider.Request) (*p
 		model = "o3"
 	}
 
-	apiReq := buildResponsesRequest(model, req, false)
+	apiReq := buildResponsesRequest(model, req, p.usesChatGPTCodexEndpoint())
 	body, err := json.Marshal(apiReq)
 	if err != nil {
 		return nil, &provider.ProviderError{
@@ -129,7 +131,7 @@ func (p *CodexProvider) Complete(ctx context.Context, req *provider.Request) (*p
 			}
 		}
 
-		httpReq, err := http.NewRequestWithContext(ctx, "POST", p.baseURL+"/v1/responses", bytes.NewReader(body))
+		httpReq, err := http.NewRequestWithContext(ctx, "POST", p.responsesEndpointURL(), bytes.NewReader(body))
 		if err != nil {
 			return nil, &provider.ProviderError{
 				Provider:   "codex",
@@ -161,18 +163,40 @@ func (p *CodexProvider) Complete(ctx context.Context, req *provider.Request) (*p
 			}
 		}
 
-		respBody, readErr := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		latencyMs := time.Since(start).Milliseconds()
-
-		if readErr != nil {
-			return nil, &provider.ProviderError{
-				Provider:   "codex",
-				StatusCode: 0,
-				Message:    fmt.Sprintf("failed to read response body: %v", readErr),
-				Retriable:  false,
+		var respBody []byte
+		if p.usesChatGPTCodexEndpoint() && resp.StatusCode == 200 {
+			contentBlocks, usage, stopReason, err := readStreamedResponse(resp.Body)
+			resp.Body.Close()
+			if err != nil {
+				return nil, &provider.ProviderError{
+					Provider:   "codex",
+					StatusCode: 0,
+					Message:    fmt.Sprintf("failed to read streamed response body: %v", err),
+					Retriable:  false,
+				}
+			}
+			latencyMs := time.Since(start).Milliseconds()
+			return &provider.Response{
+				Content:    contentBlocks,
+				Usage:      usage,
+				Model:      model,
+				StopReason: stopReason,
+				LatencyMs:  latencyMs,
+			}, nil
+		} else {
+			var readErr error
+			respBody, readErr = io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if readErr != nil {
+				return nil, &provider.ProviderError{
+					Provider:   "codex",
+					StatusCode: 0,
+					Message:    fmt.Sprintf("failed to read response body: %v", readErr),
+					Retriable:  false,
+				}
 			}
 		}
+		latencyMs := time.Since(start).Milliseconds()
 
 		lastStatusCode = resp.StatusCode
 		lastBody = respBody
@@ -256,6 +280,89 @@ func (p *CodexProvider) Complete(ctx context.Context, req *provider.Request) (*p
 
 // parseOutputItems converts Responses API output items to unified ContentBlock
 // values and determines the stop reason.
+func readStreamedResponse(body io.Reader) ([]provider.ContentBlock, provider.Usage, provider.StopReason, error) {
+	scanner := bufio.NewScanner(body)
+	var eventType string
+	var text strings.Builder
+	var usage provider.Usage
+	stopReason := provider.StopReasonEndTurn
+	var toolName string
+	var toolCallID string
+	var toolArgs strings.Builder
+	var blocks []provider.ContentBlock
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.HasPrefix(line, "event: ") {
+			eventType = strings.TrimPrefix(line, "event: ")
+			continue
+		}
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		data := strings.TrimPrefix(line, "data: ")
+		switch eventType {
+		case "response.output_text.delta":
+			var delta sseTextDelta
+			if err := json.Unmarshal([]byte(data), &delta); err != nil {
+				return nil, provider.Usage{}, "", err
+			}
+			text.WriteString(delta.Delta)
+		case "response.output_item.added":
+			var added sseOutputItemAdded
+			if err := json.Unmarshal([]byte(data), &added); err != nil {
+				return nil, provider.Usage{}, "", err
+			}
+			if added.Item.Type == "function_call" {
+				toolCallID = added.Item.CallID
+				toolName = added.Item.Name
+				toolArgs.Reset()
+				stopReason = provider.StopReasonToolUse
+			}
+		case "response.function_call_arguments.delta":
+			var delta sseFuncArgDelta
+			if err := json.Unmarshal([]byte(data), &delta); err != nil {
+				return nil, provider.Usage{}, "", err
+			}
+			toolArgs.WriteString(delta.Delta)
+		case "response.output_item.done":
+			var done sseOutputItemDone
+			if err := json.Unmarshal([]byte(data), &done); err != nil {
+				return nil, provider.Usage{}, "", err
+			}
+			if done.Item.Type == "function_call" {
+				blocks = append(blocks, provider.ContentBlock{
+					Type:  "tool_use",
+					ID:    toolCallID,
+					Name:  toolName,
+					Input: json.RawMessage(toolArgs.String()),
+				})
+				toolCallID = ""
+				toolName = ""
+				toolArgs.Reset()
+			}
+		case "response.completed":
+			var completed sseCompleted
+			if err := json.Unmarshal([]byte(data), &completed); err != nil {
+				return nil, provider.Usage{}, "", err
+			}
+			usage = provider.Usage{
+				InputTokens:         completed.Response.Usage.InputTokens,
+				OutputTokens:        completed.Response.Usage.OutputTokens,
+				CacheReadTokens:     completed.Response.Usage.InputTokensDetails.CachedTokens,
+				CacheCreationTokens: 0,
+			}
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, provider.Usage{}, "", err
+	}
+	if text.Len() > 0 {
+		blocks = append([]provider.ContentBlock{{Type: "text", Text: text.String()}}, blocks...)
+	}
+	return blocks, usage, stopReason, nil
+}
+
 func parseOutputItems(items []responsesOutputItem) ([]provider.ContentBlock, provider.StopReason) {
 	var blocks []provider.ContentBlock
 	hasToolCall := false

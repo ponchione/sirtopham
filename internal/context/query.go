@@ -24,6 +24,16 @@ var fillerPhrases = []string{
 	"lets",
 }
 
+// fillerPhrasePatterns holds precompiled word-boundary regexps for each filler phrase,
+// avoiding repeated regexp.MustCompile calls in hot loops.
+var fillerPhrasePatterns = func() map[string]*regexp.Regexp {
+	m := make(map[string]*regexp.Regexp, len(fillerPhrases))
+	for _, phrase := range fillerPhrases {
+		m[phrase] = regexp.MustCompile(`\b` + regexp.QuoteMeta(phrase) + `\b`)
+	}
+	return m
+}()
+
 var technicalDomainTerms = []string{
 	"middleware",
 	"handler",
@@ -194,6 +204,10 @@ func removeExplicitEntities(query string, needs *ContextNeeds) string {
 }
 
 func replaceWholePhrase(input string, phrase string) string {
+	if p, ok := fillerPhrasePatterns[phrase]; ok {
+		return p.ReplaceAllString(input, " ")
+	}
+	// Fallback for phrases not in the precompiled set.
 	pattern := regexp.MustCompile(`\b` + regexp.QuoteMeta(phrase) + `\b`)
 	return pattern.ReplaceAllString(input, " ")
 }

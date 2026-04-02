@@ -5,14 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
-	"regexp"
 	"strings"
 
 	"github.com/ponchione/sirtopham/internal/brain"
 	"github.com/ponchione/sirtopham/internal/config"
 )
-
-var headingRegexp = regexp.MustCompile(`(?m)^(#{1,6})\s+(.+)$`)
 
 // BrainUpdate implements the brain_update tool — append, prepend, or replace
 // a section of an existing brain document.

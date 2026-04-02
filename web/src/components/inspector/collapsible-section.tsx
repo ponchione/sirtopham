@@ -3,25 +3,28 @@ import { useState, type ReactNode } from "react";
 interface CollapsibleSectionProps {
   title: string;
   defaultOpen?: boolean;
+  sectionColor?: string;
   children: ReactNode;
 }
 
 export function CollapsibleSection({
   title,
   defaultOpen = false,
+  sectionColor,
   children,
 }: CollapsibleSectionProps) {
   const [open, setOpen] = useState(defaultOpen);
 
   return (
-    <div className="rounded-md border border-border/50">
+    <div className="border border-border">
       <button
         type="button"
         onClick={() => setOpen(!open)}
-        className="flex w-full items-center gap-1.5 px-2 py-1.5 text-[11px] font-semibold text-muted-foreground hover:text-foreground transition-colors"
+        className="flex w-full items-center justify-between px-2 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground"
       >
+        <span className="uppercase tracking-wider text-[10px]">{title}</span>
         <svg
-          className={`h-3 w-3 shrink-0 transition-transform ${open ? "rotate-90" : ""}`}
+          className={`h-3 w-3 transition-transform ${open ? "rotate-90" : ""}`}
           fill="none"
           viewBox="0 0 24 24"
           stroke="currentColor"
@@ -29,9 +32,22 @@ export function CollapsibleSection({
         >
           <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
         </svg>
-        {title}
       </button>
-      {open && <div className="px-2 pb-2">{children}</div>}
+      {open && (
+        <div
+          className="px-2 pb-2 pt-1"
+          style={
+            sectionColor
+              ? ({
+                  borderLeft: `2px solid ${sectionColor}`,
+                  paddingLeft: "8px",
+                } as React.CSSProperties)
+              : undefined
+          }
+        >
+          {children}
+        </div>
+      )}
     </div>
   );
 }

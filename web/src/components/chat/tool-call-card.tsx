@@ -17,9 +17,15 @@ export function ToolCallCard({ block }: ToolCallCardProps) {
 
   const statusColor = block.done
     ? block.success !== false
-      ? "text-green-600 dark:text-green-400"
-      : "text-red-500 dark:text-red-400"
-    : "text-yellow-600 dark:text-yellow-400";
+      ? "text-accent"
+      : "text-destructive"
+    : "text-[#ffab00]";
+
+  const borderColor = block.done
+    ? block.success !== false
+      ? "#00e676"
+      : "#ff1744"
+    : "#ffab00";
 
   const statusIcon = block.done
     ? block.success !== false
@@ -44,21 +50,32 @@ export function ToolCallCard({ block }: ToolCallCardProps) {
           <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
         </svg>
         <span className={statusColor}>{statusIcon}</span>
-        <span className="font-mono font-medium text-foreground">{block.toolName}</span>
+        <span className="font-medium text-foreground">{block.toolName}</span>
         {block.duration != null && (
           <span className="text-muted-foreground/60">{formatDuration(block.duration)}</span>
         )}
         {!block.done && (
-          <span className="ml-1 inline-block h-2 w-2 animate-pulse rounded-full bg-yellow-500" />
+          <span className="ml-1 inline-block h-2 w-2 bg-[#ffab00] pulse-glow" />
         )}
       </button>
       {open && (
-        <div className="mt-1.5 ml-4 space-y-2 rounded-md border border-border/50 bg-muted/30 px-3 py-2 text-xs">
+        <div
+          data-augmented-ui="tl-clip br-clip both"
+          className="mt-1.5 ml-4 space-y-2 border-0 bg-muted/30 px-3 py-2 text-xs"
+          style={{
+            "--aug-tl": "10px",
+            "--aug-br": "10px",
+            "--aug-border-all": "1px",
+            "--aug-border-bg": borderColor,
+            "--aug-inlay-all": "3px",
+            "--aug-inlay-bg": "#0a0e1480",
+          } as React.CSSProperties}
+        >
           {/* Arguments */}
           {block.args && Object.keys(block.args).length > 0 && (
             <div>
-              <div className="mb-0.5 font-semibold text-muted-foreground">Arguments</div>
-              <pre className="whitespace-pre-wrap font-mono text-foreground/80 max-h-40 overflow-y-auto">
+              <div className="mb-0.5 font-semibold text-muted-foreground uppercase tracking-wider text-[10px]">Arguments</div>
+              <pre className="whitespace-pre-wrap text-foreground/80 max-h-40 overflow-y-auto">
                 {JSON.stringify(block.args, null, 2)}
               </pre>
             </div>
@@ -67,11 +84,11 @@ export function ToolCallCard({ block }: ToolCallCardProps) {
           {/* Streaming output */}
           {block.output && (
             <div>
-              <div className="mb-0.5 font-semibold text-muted-foreground">Output</div>
-              <pre className="whitespace-pre-wrap font-mono text-foreground/80 max-h-48 overflow-y-auto">
+              <div className="mb-0.5 font-semibold text-muted-foreground uppercase tracking-wider text-[10px]">Output</div>
+              <pre className="whitespace-pre-wrap text-foreground/80 max-h-48 overflow-y-auto">
                 {block.output}
                 {!block.done && (
-                  <span className="ml-0.5 inline-block h-3 w-0.5 animate-pulse bg-muted-foreground" />
+                  <span className="ml-0.5 inline-block h-3 w-1.5 bg-primary pulse-glow" />
                 )}
               </pre>
             </div>
@@ -80,8 +97,8 @@ export function ToolCallCard({ block }: ToolCallCardProps) {
           {/* Final result (if different from streaming output) */}
           {block.done && block.result && block.result !== block.output && (
             <div>
-              <div className="mb-0.5 font-semibold text-muted-foreground">Result</div>
-              <pre className="whitespace-pre-wrap font-mono text-foreground/80 max-h-48 overflow-y-auto">
+              <div className="mb-0.5 font-semibold text-muted-foreground uppercase tracking-wider text-[10px]">Result</div>
+              <pre className="whitespace-pre-wrap text-foreground/80 max-h-48 overflow-y-auto">
                 {block.result}
               </pre>
             </div>

@@ -1124,7 +1124,9 @@ func (l *AgentLoop) maybeGenerateTitle(conversationID string, turnNumber int) {
 				)
 			}
 		}()
-		l.titleGenerator.GenerateTitle(stdctx.Background(), conversationID)
+		ctx, cancel := stdctx.WithTimeout(stdctx.Background(), 30*time.Second)
+		defer cancel()
+		l.titleGenerator.GenerateTitle(ctx, conversationID)
 	}()
 }
 
@@ -1176,9 +1178,6 @@ func withDefaultConfig(cfg AgentLoopConfig) AgentLoopConfig {
 	}
 	if cfg.LoopDetectionThreshold <= 0 {
 		cfg.LoopDetectionThreshold = defaultLoopDetectThreshold
-	}
-	if !cfg.ExtendedThinking {
-		cfg.ExtendedThinking = true
 	}
 	if cfg.BasePrompt == "" {
 		cfg.BasePrompt = "You are a helpful AI assistant."

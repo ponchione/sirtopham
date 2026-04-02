@@ -45,22 +45,35 @@ export function SettingsPage() {
   return (
     <div className="flex-1 overflow-y-auto px-4 py-6">
       <div className="mx-auto max-w-2xl space-y-6">
-        <h1 className="text-xl font-bold">Settings</h1>
+        <h1 className="text-xl font-bold uppercase tracking-widest text-primary text-glow-cyan">
+          Settings
+        </h1>
 
         {/* Project Info */}
         <section className="space-y-2">
-          <h2 className="text-sm font-semibold text-muted-foreground">Project</h2>
+          <h2 className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+            Project
+          </h2>
           {projLoading ? (
             <p className="text-xs text-muted-foreground">Loading…</p>
           ) : project ? (
-            <div className="rounded-lg border border-border p-3 text-sm space-y-1">
+            <div
+              data-augmented-ui="tl-clip br-clip border"
+              className="border-0 bg-muted p-3 text-sm space-y-1"
+              style={{
+                "--aug-tl": "10px",
+                "--aug-br": "10px",
+                "--aug-border-all": "1px",
+                "--aug-border-bg": "#1a2a3a",
+              } as React.CSSProperties}
+            >
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Name</span>
                 <span className="font-medium">{project.name}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Path</span>
-                <span className="font-mono text-xs">{project.root_path}</span>
+                <span className="text-xs">{project.root_path}</span>
               </div>
               {project.language && (
                 <div className="flex justify-between">
@@ -76,20 +89,31 @@ export function SettingsPage() {
 
         {/* Default Model */}
         <section className="space-y-2">
-          <h2 className="text-sm font-semibold text-muted-foreground">Default Model</h2>
+          <h2 className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+            Default Model
+          </h2>
           {configLoading ? (
             <p className="text-xs text-muted-foreground">Loading…</p>
           ) : config ? (
-            <div className="rounded-lg border border-border p-3 space-y-3">
+            <div
+              data-augmented-ui="tl-clip br-clip border"
+              className="border-0 bg-muted p-3 space-y-3"
+              style={{
+                "--aug-tl": "10px",
+                "--aug-br": "10px",
+                "--aug-border-all": "1px",
+                "--aug-border-bg": "#1a2a3a",
+              } as React.CSSProperties}
+            >
               <div className="flex items-center gap-2 text-sm">
                 <span className="text-muted-foreground">Current:</span>
-                <span className="font-mono font-medium">
+                <span className="font-medium text-primary">
                   {config.default_provider}/{config.default_model}
                 </span>
               </div>
               <div className="flex items-center gap-2 text-xs text-muted-foreground">
                 <span>Fallback:</span>
-                <span className="font-mono">
+                <span>
                   {config.fallback_provider}/{config.fallback_model}
                 </span>
               </div>
@@ -108,9 +132,20 @@ export function SettingsPage() {
                             key={model.id}
                             variant={isActive ? "default" : "ghost"}
                             size="sm"
-                            className="mr-1 mb-1 text-xs"
+                            data-augmented-ui={isActive ? "tl-clip br-clip border" : undefined}
+                            className={`mr-1 mb-1 text-xs ${isActive ? "glow-cyan border-0" : ""}`}
                             disabled={saving || isActive}
                             onClick={() => handleModelChange(prov.name, model.id)}
+                            style={
+                              isActive
+                                ? ({
+                                    "--aug-tl": "4px",
+                                    "--aug-br": "4px",
+                                    "--aug-border-all": "1px",
+                                    "--aug-border-bg": "#00e5ff",
+                                  } as React.CSSProperties)
+                                : undefined
+                            }
                           >
                             {prov.name}/{model.id}
                           </Button>
@@ -122,7 +157,7 @@ export function SettingsPage() {
               )}
 
               {saveMsg && (
-                <p className={`text-xs ${saveMsg === "Saved" ? "text-green-600" : "text-destructive"}`}>
+                <p className={`text-xs ${saveMsg === "Saved" ? "text-accent" : "text-destructive"}`}>
                   {saveMsg}
                 </p>
               )}
@@ -134,7 +169,7 @@ export function SettingsPage() {
                 </div>
                 <div>Tool output max tokens: {config.agent.tool_output_max_tokens}</div>
                 {config.agent.tool_result_store_root && (
-                  <div className="break-all font-mono">
+                  <div className="break-all">
                     Persisted tool result store: {config.agent.tool_result_store_root}
                   </div>
                 )}
@@ -145,7 +180,9 @@ export function SettingsPage() {
 
         {/* Providers */}
         <section className="space-y-2">
-          <h2 className="text-sm font-semibold text-muted-foreground">Providers</h2>
+          <h2 className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+            Providers
+          </h2>
           {provLoading ? (
             <p className="text-xs text-muted-foreground">Loading…</p>
           ) : providers.length === 0 ? (
@@ -153,19 +190,29 @@ export function SettingsPage() {
           ) : (
             <div className="space-y-2">
               {providers.map((prov) => (
-                <div key={prov.name} className="rounded-lg border border-border p-3">
+                <div
+                  key={prov.name}
+                  data-augmented-ui="tl-clip br-clip border"
+                  className="border-0 bg-muted p-3"
+                  style={{
+                    "--aug-tl": "10px",
+                    "--aug-br": "10px",
+                    "--aug-border-all": "1px",
+                    "--aug-border-bg": "#1a2a3a",
+                  } as React.CSSProperties}
+                >
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-medium">{prov.name}</span>
-                      <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                      <span className="bg-muted-foreground/10 px-1.5 py-0.5 text-[10px] text-muted-foreground">
                         {prov.type}
                       </span>
                     </div>
                     <span
-                      className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                      className={`px-2 py-0.5 text-[10px] font-medium ${
                         prov.status === "available"
-                          ? "bg-green-500/20 text-green-700 dark:text-green-300"
-                          : "bg-red-500/20 text-red-700 dark:text-red-300"
+                          ? "bg-accent/20 text-accent glow-green"
+                          : "bg-destructive/20 text-destructive glow-red"
                       }`}
                     >
                       {prov.status}
@@ -175,7 +222,7 @@ export function SettingsPage() {
                     <div className="mt-2 space-y-0.5">
                       {prov.models.map((m) => (
                         <div key={m.id} className="flex items-center gap-2 text-xs text-muted-foreground">
-                          <span className="font-mono">{m.id}</span>
+                          <span>{m.id}</span>
                           <span className="text-[10px]">{(m.context_window / 1000).toFixed(0)}k ctx</span>
                           {m.supports_tools && <span className="text-[10px]">🔧</span>}
                           {m.supports_thinking && <span className="text-[10px]">💭</span>}

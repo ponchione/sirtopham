@@ -129,7 +129,7 @@ export function ConversationPage() {
             <button
               type="button"
               onClick={() => setMetricsOpen(!metricsOpen)}
-              className={`rounded p-1 text-xs ${metricsOpen ? "bg-muted text-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}
+              className={`p-1 text-xs ${metricsOpen ? "bg-muted text-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}
               title="Conversation metrics"
             >
               📊
@@ -137,7 +137,7 @@ export function ConversationPage() {
             <button
               type="button"
               onClick={() => setInspectorOpen(!inspectorOpen)}
-              className={`rounded p-1 text-xs ${inspectorOpen ? "bg-muted text-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}
+              className={`p-1 text-xs ${inspectorOpen ? "bg-muted text-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}
               title="Context inspector"
             >
               🔍
@@ -179,7 +179,7 @@ export function ConversationPage() {
               messages[messages.length - 1].role !== "assistant" ||
               messages[messages.length - 1].blocks.length === 0) && (
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-primary" />
+                <span className="inline-block h-2 w-2 bg-primary pulse-glow" />
                 {agentState === "thinking" && "Thinking…"}
                 {agentState === "executing_tools" && "Running tools…"}
                 {agentState === "idle" && "Processing…"}
@@ -188,7 +188,15 @@ export function ConversationPage() {
 
           {/* Error banner */}
           {error && (
-            <div className="rounded-lg border border-destructive/50 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+            <div
+              data-augmented-ui="tl-clip border"
+              className="border-0 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+              style={{
+                "--aug-tl": "8px",
+                "--aug-border-all": "1px",
+                "--aug-border-bg": "#ff1744",
+              } as React.CSSProperties}
+            >
               {error}
             </div>
           )}
@@ -209,22 +217,55 @@ export function ConversationPage() {
       {/* Input area */}
       <div className="border-t border-border p-4">
         <div className="mx-auto flex max-w-3xl gap-2">
-          <textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="Type a message… (Enter to send, Shift+Enter for newline)"
-            className="flex-1 resize-none rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none ring-ring/50 placeholder:text-muted-foreground focus-visible:ring-2"
-            rows={1}
-            disabled={isStreaming}
-            autoFocus
-          />
+          <div
+            data-augmented-ui="tl-clip br-clip border"
+            className="flex flex-1"
+            style={{
+              "--aug-tl": "10px",
+              "--aug-br": "10px",
+              "--aug-border-all": "1px",
+              "--aug-border-bg": "#00e5ff60",
+            } as React.CSSProperties}
+          >
+            <textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="Type a message… (Enter to send, Shift+Enter for newline)"
+              className="flex-1 resize-none border-0 bg-input px-3 py-2 text-sm outline-none placeholder:text-muted-foreground"
+              rows={1}
+              disabled={isStreaming}
+              autoFocus
+            />
+          </div>
           {isStreaming ? (
-            <Button variant="destructive" onClick={cancel}>
+            <Button
+              variant="destructive"
+              onClick={cancel}
+              data-augmented-ui="tl-clip br-clip border"
+              className="border-0 bg-destructive/20 text-destructive hover:bg-destructive/30"
+              style={{
+                "--aug-tl": "6px",
+                "--aug-br": "6px",
+                "--aug-border-all": "1px",
+                "--aug-border-bg": "#ff1744",
+              } as React.CSSProperties}
+            >
               Cancel
             </Button>
           ) : (
-            <Button onClick={handleSend} disabled={!input.trim()}>
+            <Button
+              onClick={handleSend}
+              disabled={!input.trim()}
+              data-augmented-ui="tl-clip br-clip border"
+              className="border-0 bg-primary text-primary-foreground hover:bg-primary/80"
+              style={{
+                "--aug-tl": "6px",
+                "--aug-br": "6px",
+                "--aug-border-all": "1px",
+                "--aug-border-bg": "#00e5ff",
+              } as React.CSSProperties}
+            >
               Send
             </Button>
           )}
@@ -253,7 +294,7 @@ function BlockRenderer({ block, streaming }: { block: ContentBlock; streaming: b
         <div>
           <MarkdownContent content={block.text} />
           {streaming && (
-            <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse bg-current" />
+            <span className="ml-0.5 inline-block h-4 w-1.5 bg-primary pulse-glow" />
           )}
         </div>
       );
@@ -273,13 +314,13 @@ function MessageBubble({
   const isSystem = message.role === "system";
   const isCompressed = message.isCompressed || message.isSummary;
 
-  // System messages.
+  // System messages — amber dashed border.
   if (isSystem) {
     return (
       <div className="flex justify-center">
-        <div className="max-w-[85%] rounded-lg border border-dashed border-border bg-muted/30 px-4 py-2 text-xs text-muted-foreground italic">
+        <div className="max-w-[85%] border border-dashed border-[#ffab00]/40 bg-muted/30 px-4 py-2 text-xs text-muted-foreground italic">
           {isCompressed && (
-            <span className="mr-1.5 inline-block rounded bg-muted-foreground/20 px-1 py-0.5 text-[10px] font-medium not-italic">
+            <span className="mr-1.5 inline-block bg-muted-foreground/20 px-1 py-0.5 text-[10px] font-medium not-italic">
               compressed
             </span>
           )}
@@ -289,21 +330,31 @@ function MessageBubble({
     );
   }
 
-  // User messages or messages with no blocks — simple text.
+  // User messages — augmented with br-clip, cyan border.
   if (isUser || message.blocks.length === 0) {
     return (
       <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
         <div
-          className={`max-w-[85%] whitespace-pre-wrap rounded-lg px-4 py-2.5 text-sm ${
+          data-augmented-ui={isUser ? "br-clip border" : undefined}
+          className={`max-w-[85%] whitespace-pre-wrap px-4 py-2.5 text-sm ${
             isUser
-              ? "bg-primary text-primary-foreground"
+              ? "bg-primary/10 text-foreground"
               : isCompressed
-                ? "bg-muted/50 text-muted-foreground italic border border-dashed border-border"
+                ? "bg-muted/50 text-muted-foreground italic border border-dashed border-[#ffab00]/40"
                 : "bg-muted text-foreground"
           }`}
+          style={
+            isUser
+              ? ({
+                  "--aug-br": "12px",
+                  "--aug-border-all": "1px",
+                  "--aug-border-bg": "#00e5ff60",
+                } as React.CSSProperties)
+              : undefined
+          }
         >
           {isCompressed && (
-            <span className="mr-1.5 inline-block rounded bg-muted-foreground/20 px-1 py-0.5 text-[10px] font-medium not-italic">
+            <span className="mr-1.5 inline-block bg-muted-foreground/20 px-1 py-0.5 text-[10px] font-medium not-italic">
               compressed
             </span>
           )}
@@ -313,29 +364,36 @@ function MessageBubble({
     );
   }
 
-  // Assistant messages with blocks — render each block with markdown.
+  // Assistant messages with blocks — augmented with tl-clip, green border.
   return (
     <div className="flex justify-start">
       <div
-        className={`max-w-[85%] rounded-lg px-4 py-2.5 text-sm ${
+        data-augmented-ui="tl-clip border"
+        className={`max-w-[85%] px-4 py-2.5 text-sm ${
           isCompressed
-            ? "bg-muted/50 text-muted-foreground border border-dashed border-border"
+            ? "bg-muted/50 text-muted-foreground border border-dashed border-[#ffab00]/40"
             : "bg-muted text-foreground"
         }`}
+        style={{
+          "--aug-tl": "12px",
+          "--aug-border-all": "1px",
+          "--aug-border-bg": "#00e67640",
+        } as React.CSSProperties}
       >
         {isCompressed && (
-          <span className="mb-1.5 inline-block rounded bg-muted-foreground/20 px-1 py-0.5 text-[10px] font-medium">
+          <span className="mb-1.5 inline-block bg-muted-foreground/20 px-1 py-0.5 text-[10px] font-medium">
             compressed
           </span>
         )}
         {message.blocks.map((block, i) => {
           const isLastBlock = i === message.blocks.length - 1;
           return (
-            <BlockRenderer
-              key={i}
-              block={block}
-              streaming={streaming && isLastBlock}
-            />
+            <div key={i} data-augmented-ui-reset>
+              <BlockRenderer
+                block={block}
+                streaming={streaming && isLastBlock}
+              />
+            </div>
           );
         })}
       </div>

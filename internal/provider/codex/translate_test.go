@@ -16,21 +16,12 @@ func TestBuildResponsesRequest_SystemPromptConcatenation(t *testing.T) {
 	}
 	rr := buildResponsesRequest("o3", req, false)
 
-	if len(rr.Input) < 1 {
-		t.Fatal("expected at least one input item")
-	}
-	item := rr.Input[0]
-	if item.Role != "system" {
-		t.Fatalf("expected role %q, got %q", "system", item.Role)
-	}
-
-	content, ok := item.Content.(string)
-	if !ok {
-		t.Fatalf("expected string content, got %T", item.Content)
-	}
 	expected := "You are a coding assistant.\n\nProject context: Go backend"
-	if content != expected {
-		t.Errorf("expected content %q, got %q", expected, content)
+	if rr.Instructions != expected {
+		t.Fatalf("expected instructions %q, got %q", expected, rr.Instructions)
+	}
+	if len(rr.Input) != 0 {
+		t.Fatalf("expected no input items when only system blocks are present, got %d", len(rr.Input))
 	}
 }
 
@@ -42,6 +33,9 @@ func TestBuildResponsesRequest_EmptySystemBlocks(t *testing.T) {
 	}
 	rr := buildResponsesRequest("o3", req, false)
 
+	if rr.Instructions != "You are a helpful assistant." {
+		t.Fatalf("expected default instructions, got %q", rr.Instructions)
+	}
 	if len(rr.Input) == 0 {
 		t.Fatal("expected at least one input item")
 	}
@@ -97,15 +91,12 @@ func TestBuildResponsesRequest_AssistantMessageTextOnly(t *testing.T) {
 		t.Fatalf("expected role %q, got %q", "assistant", item.Role)
 	}
 
-	contentBlocks, ok := item.Content.([]responsesContentBlock)
+	content, ok := item.Content.(string)
 	if !ok {
-		t.Fatalf("expected []responsesContentBlock, got %T", item.Content)
+		t.Fatalf("expected string content, got %T", item.Content)
 	}
-	if len(contentBlocks) != 1 {
-		t.Fatalf("expected 1 content block, got %d", len(contentBlocks))
-	}
-	if contentBlocks[0].Type != "text" || contentBlocks[0].Text != "I'll check the code." {
-		t.Errorf("expected text block with text %q, got type=%q text=%q", "I'll check the code.", contentBlocks[0].Type, contentBlocks[0].Text)
+	if content != "I'll check the code." {
+		t.Errorf("expected content %q, got %q", "I'll check the code.", content)
 	}
 }
 
@@ -122,24 +113,24 @@ func TestBuildResponsesRequest_AssistantMessageWithToolUse(t *testing.T) {
 	}
 	rr := buildResponsesRequest("o3", req, false)
 
-	if len(rr.Input) != 1 {
-		t.Fatalf("expected 1 input item, got %d", len(rr.Input))
+	if len(rr.Input) != 2 {
+		t.Fatalf("expected 2 input items, got %d", len(rr.Input))
 	}
 
-	contentBlocks, ok := rr.Input[0].Content.([]responsesContentBlock)
+	if rr.Input[0].Role != "assistant" {
+		t.Fatalf("expected first item role %q, got %q", "assistant", rr.Input[0].Role)
+	}
+	content, ok := rr.Input[0].Content.(string)
 	if !ok {
-		t.Fatalf("expected []responsesContentBlock, got %T", rr.Input[0].Content)
+		t.Fatalf("expected first item string content, got %T", rr.Input[0].Content)
 	}
-	if len(contentBlocks) != 2 {
-		t.Fatalf("expected 2 content blocks, got %d", len(contentBlocks))
+	if content != "Let me read that." {
+		t.Fatalf("expected assistant text %q, got %q", "Let me read that.", content)
 	}
 
-	fc := contentBlocks[1]
+	fc := rr.Input[1]
 	if fc.Type != "function_call" {
 		t.Errorf("expected type %q, got %q", "function_call", fc.Type)
-	}
-	if fc.ID != "fc_tc_1" {
-		t.Errorf("expected ID %q, got %q", "fc_tc_1", fc.ID)
 	}
 	if fc.CallID != "tc_1" {
 		t.Errorf("expected CallID %q, got %q", "tc_1", fc.CallID)
@@ -164,27 +155,14 @@ func TestBuildResponsesRequest_ToolResultMessage(t *testing.T) {
 		t.Fatalf("expected 1 input item, got %d", len(rr.Input))
 	}
 	item := rr.Input[0]
-	if item.Role != "user" {
-		t.Fatalf("expected role %q, got %q", "user", item.Role)
+	if item.Type != "function_call_output" {
+		t.Fatalf("expected type %q, got %q", "function_call_output", item.Type)
 	}
-
-	contentBlocks, ok := item.Content.([]responsesContentBlock)
-	if !ok {
-		t.Fatalf("expected []responsesContentBlock, got %T", item.Content)
+	if item.CallID != "tc_1" {
+		t.Errorf("expected CallID %q, got %q", "tc_1", item.CallID)
 	}
-	if len(contentBlocks) != 1 {
-		t.Fatalf("expected 1 content block, got %d", len(contentBlocks))
-	}
-
-	fco := contentBlocks[0]
-	if fco.Type != "function_call_output" {
-		t.Errorf("expected type %q, got %q", "function_call_output", fco.Type)
-	}
-	if fco.CallID != "tc_1" {
-		t.Errorf("expected CallID %q, got %q", "tc_1", fco.CallID)
-	}
-	if fco.Output != "package auth..." {
-		t.Errorf("expected Output %q, got %q", "package auth...", fco.Output)
+	if item.Output != "package auth..." {
+		t.Errorf("expected Output %q, got %q", "package auth...", item.Output)
 	}
 }
 
@@ -296,15 +274,21 @@ func TestBuildResponsesRequest_JSONOutput(t *testing.T) {
 	if raw["model"] != "o3" {
 		t.Errorf("expected model %q, got %v", "o3", raw["model"])
 	}
+	if raw["instructions"] != "You are helpful." {
+		t.Errorf("expected instructions %q, got %v", "You are helpful.", raw["instructions"])
+	}
 	if raw["stream"] != false {
 		t.Errorf("expected stream false, got %v", raw["stream"])
+	}
+	if raw["store"] != false {
+		t.Errorf("expected store false, got %v", raw["store"])
 	}
 
 	input, ok := raw["input"].([]interface{})
 	if !ok {
 		t.Fatalf("expected input array, got %T", raw["input"])
 	}
-	if len(input) != 2 {
-		t.Fatalf("expected 2 input items, got %d", len(input))
+	if len(input) != 1 {
+		t.Fatalf("expected 1 input item, got %d", len(input))
 	}
 }

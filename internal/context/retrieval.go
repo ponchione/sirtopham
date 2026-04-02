@@ -248,7 +248,7 @@ func (o *RetrievalOrchestrator) retrieveExplicitFiles(ctx stdctx.Context, explic
 		results = append(results, FileResult{
 			FilePath:   relative,
 			Content:    string(content),
-			TokenCount: len(strings.Fields(string(content))),
+			TokenCount: len(content) / 4, // chars/4 approximation consistent with approximateTokenCount
 			Truncated:  truncated,
 		})
 	}

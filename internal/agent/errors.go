@@ -150,7 +150,7 @@ func validateToolCallJSON(tc provider.ToolCall) toolCallValidationResult {
 	}
 
 	// Check if it's valid JSON.
-	var parsed interface{}
+	var parsed any
 	if err := json.Unmarshal(tc.Input, &parsed); err != nil {
 		return toolCallValidationResult{
 			Valid: false,

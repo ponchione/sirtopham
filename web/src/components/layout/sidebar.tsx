@@ -66,20 +66,29 @@ export function Sidebar({ open, onClose }: SidebarProps) {
         />
       )}
 
-      {/* Sidebar panel */}
+      {/* Sidebar panel — augmented frame */}
       <aside
-        className={`fixed inset-y-0 left-0 z-50 flex w-64 flex-col border-r border-border bg-sidebar text-sidebar-foreground transition-transform duration-200 md:static md:translate-x-0 ${
+        data-augmented-ui="tr-clip border"
+        className={`fixed inset-y-0 left-0 z-50 flex w-64 flex-col bg-sidebar text-sidebar-foreground transition-transform duration-200 md:static md:translate-x-0 ${
           open ? "translate-x-0" : "-translate-x-full"
         }`}
+        style={{
+          "--aug-tr": "20px",
+          "--aug-border-right": "2px",
+          "--aug-border-bg":
+            "linear-gradient(180deg, #00e5ff, #00e5ff40, transparent)",
+        } as React.CSSProperties}
       >
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3">
-          <span className="text-lg font-semibold tracking-tight">sirtopham</span>
+          <span className="text-lg font-semibold uppercase tracking-widest text-primary text-glow-cyan">
+            sirtopham
+          </span>
           {/* Close button — mobile only */}
           <button
             type="button"
             onClick={onClose}
-            className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground md:hidden"
+            className="p-1 text-muted-foreground hover:bg-muted hover:text-foreground md:hidden"
             aria-label="Close sidebar"
           >
             <CloseIcon />
@@ -88,12 +97,19 @@ export function Sidebar({ open, onClose }: SidebarProps) {
 
         <Separator />
 
-        {/* New conversation */}
+        {/* New conversation — augmented button */}
         <div className="p-2">
           <button
             type="button"
             onClick={handleNewConversation}
-            className="inline-flex w-full items-center justify-start gap-2 rounded-lg border border-border bg-background px-2.5 py-1.5 text-sm font-medium hover:bg-muted"
+            data-augmented-ui="tl-clip br-clip border"
+            className="inline-flex w-full items-center justify-start gap-2 border-0 bg-background px-2.5 py-1.5 text-sm font-medium text-primary hover:bg-muted"
+            style={{
+              "--aug-tl": "8px",
+              "--aug-br": "8px",
+              "--aug-border-all": "1px",
+              "--aug-border-bg": "#00e5ff",
+            } as React.CSSProperties}
           >
             <PlusIcon />
             New conversation
@@ -149,7 +165,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
         <Link
           to="/settings"
           onClick={onClose}
-          className="inline-flex w-full items-center justify-start gap-2 rounded-lg px-2.5 py-1.5 text-sm font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+          className="inline-flex w-full items-center justify-start gap-2 px-2.5 py-1.5 text-sm font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
         >
           <SettingsIcon />
           Settings
@@ -180,11 +196,16 @@ function ConversationItem({
     <button
       type="button"
       onClick={() => onSelect(conversation.id)}
-      className={`group flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors ${
+      className={`group flex w-full items-center gap-2 px-2.5 py-2 text-left text-sm transition-colors ${
         active
-          ? "bg-muted font-medium text-foreground"
-          : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+          ? "border-l-2 border-l-primary bg-muted font-medium text-foreground"
+          : "border-l-2 border-l-transparent text-muted-foreground hover:bg-muted/50 hover:text-foreground"
       }`}
+      style={
+        active
+          ? ({ boxShadow: "inset 4px 0 8px -4px #00e5ff40" } as React.CSSProperties)
+          : undefined
+      }
     >
       <div className="min-w-0 flex-1">
         <div className="truncate">{title}</div>
@@ -193,7 +214,7 @@ function ConversationItem({
       <button
         type="button"
         onClick={(e) => onDelete(e, conversation.id)}
-        className="shrink-0 rounded p-0.5 text-muted-foreground/40 opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
+        className="shrink-0 p-0.5 text-muted-foreground/40 opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
         aria-label={`Delete ${title}`}
       >
         <TrashIcon />

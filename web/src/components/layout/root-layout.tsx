@@ -8,7 +8,7 @@ export function RootLayout() {
   const handleClose = useCallback(() => setSidebarOpen(false), []);
 
   return (
-    <div className="flex h-screen overflow-hidden bg-background text-foreground">
+    <div className="scanlines flex h-screen overflow-hidden bg-background text-foreground">
       <Sidebar open={sidebarOpen} onClose={handleClose} />
 
       <main className="flex flex-1 flex-col overflow-hidden">
@@ -17,12 +17,14 @@ export function RootLayout() {
           <button
             type="button"
             onClick={() => setSidebarOpen(true)}
-            className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+            className="p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
             aria-label="Open sidebar"
           >
             <MenuIcon />
           </button>
-          <span className="ml-2 text-sm font-semibold tracking-tight">sirtopham</span>
+          <span className="ml-2 text-sm font-semibold uppercase tracking-widest text-glow-cyan text-primary">
+            sirtopham
+          </span>
         </div>
 
         <Outlet />

@@ -10,6 +10,7 @@ import (
 	"nhooyr.io/websocket"
 
 	"github.com/ponchione/sirtopham/internal/agent"
+	"github.com/ponchione/sirtopham/internal/config"
 	"github.com/ponchione/sirtopham/internal/conversation"
 	"github.com/ponchione/sirtopham/internal/server"
 )
@@ -70,7 +71,11 @@ func setupWSTest(t *testing.T, agentMock *mockAgentService) (string, *mockConver
 	t.Helper()
 	convMock := &mockConversationService{}
 	srv := server.New(server.Config{Host: "127.0.0.1", Port: 0, DevMode: true}, newTestLogger())
-	server.NewWebSocketHandler(srv, agentMock, convMock, "test-project", newTestLogger())
+	cfg := &config.Config{ProjectRoot: "test-project", Providers: map[string]config.ProviderConfig{
+		"codex": {Type: "codex", ContextLength: 200000},
+		"local": {Type: "openai-compatible", ContextLength: 32768},
+	}}
+	server.NewWebSocketHandler(srv, agentMock, convMock, cfg, newTestLogger())
 	_, base := startServer(t, srv)
 	return base, convMock
 }
@@ -140,6 +145,61 @@ func TestWebSocketMessageTriggersRunTurn(t *testing.T) {
 	conn.Close(websocket.StatusNormalClosure, "test done")
 }
 
+func TestWebSocketMessageUsesNextTurnNumberForNewConversation(t *testing.T) {
+	turnStarted := make(chan agent.RunTurnRequest, 1)
+	agentMock := &mockAgentService{
+		runTurnFn: func(ctx context.Context, req agent.RunTurnRequest) (*agent.TurnResult, error) {
+			turnStarted <- req
+			return &agent.TurnResult{}, nil
+		},
+	}
+	base, _ := setupWSTest(t, agentMock)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	wsURL := "ws" + base[4:] + "/api/ws"
+	conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	if err != nil {
+		t.Fatalf("websocket dial failed: %v", err)
+	}
+	defer conn.CloseNow()
+
+	msg := map[string]string{
+		"type":    "message",
+		"content": "New chat",
+	}
+	data, _ := json.Marshal(msg)
+	if err := conn.Write(ctx, websocket.MessageText, data); err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+
+	_, respData, err := conn.Read(ctx)
+	if err != nil {
+		t.Fatalf("read failed: %v", err)
+	}
+
+	var resp map[string]any
+	json.Unmarshal(respData, &resp)
+	if resp["type"] != "conversation_created" {
+		t.Fatalf("expected conversation_created, got %v", resp["type"])
+	}
+
+	select {
+	case req := <-turnStarted:
+		if req.ConversationID == "" {
+			t.Fatal("expected non-empty conversation_id after auto-create")
+		}
+		if req.TurnNumber != 1 {
+			t.Fatalf("TurnNumber = %d, want 1", req.TurnNumber)
+		}
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for RunTurn")
+	}
+
+	conn.Close(websocket.StatusNormalClosure, "test done")
+}
+
 func TestWebSocketMessageCreatesConversation(t *testing.T) {
 	turnStarted := make(chan agent.RunTurnRequest, 1)
 	agentMock := &mockAgentService{
@@ -187,6 +247,160 @@ func TestWebSocketMessageCreatesConversation(t *testing.T) {
 	case req := <-turnStarted:
 		if req.ConversationID == "" {
 			t.Fatal("expected non-empty conversation_id after auto-create")
+		}
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for RunTurn")
+	}
+
+	conn.Close(websocket.StatusNormalClosure, "test done")
+}
+
+func TestWebSocketUsesRoutingDefaultProvider(t *testing.T) {
+	turnStarted := make(chan agent.RunTurnRequest, 1)
+	agentMock := &mockAgentService{
+		runTurnFn: func(ctx context.Context, req agent.RunTurnRequest) (*agent.TurnResult, error) {
+			turnStarted <- req
+			return &agent.TurnResult{}, nil
+		},
+	}
+	convMock := &mockConversationService{}
+	srv := server.New(server.Config{Host: "127.0.0.1", Port: 0, DevMode: true}, newTestLogger())
+	cfg := &config.Config{
+		ProjectRoot: "test-project",
+		Routing: config.RoutingConfig{Default: config.RouteConfig{Provider: "anthropic", Model: "claude-sonnet-4-6-20250514"}},
+		Providers: map[string]config.ProviderConfig{
+			"anthropic": {Type: "anthropic", ContextLength: 200000},
+			"codex":     {Type: "codex", ContextLength: 200000},
+		},
+	}
+	server.NewWebSocketHandler(srv, agentMock, convMock, cfg, newTestLogger())
+	_, base := startServer(t, srv)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	wsURL := "ws" + base[4:] + "/api/ws"
+	conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	if err != nil {
+		t.Fatalf("websocket dial failed: %v", err)
+	}
+	defer conn.CloseNow()
+
+	msg := map[string]string{"type": "message", "content": "hello"}
+	data, _ := json.Marshal(msg)
+	if err := conn.Write(ctx, websocket.MessageText, data); err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+	_, _, err = conn.Read(ctx) // conversation_created
+	if err != nil {
+		t.Fatalf("read conversation_created failed: %v", err)
+	}
+
+	select {
+	case req := <-turnStarted:
+		if req.Provider != "anthropic" {
+			t.Fatalf("Provider = %q, want anthropic", req.Provider)
+		}
+		if req.Model != "claude-sonnet-4-6-20250514" {
+			t.Fatalf("Model = %q, want claude-sonnet-4-6-20250514", req.Model)
+		}
+		if req.ModelContextLimit != 200000 {
+			t.Fatalf("ModelContextLimit = %d, want 200000", req.ModelContextLimit)
+		}
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for RunTurn")
+	}
+
+	conn.Close(websocket.StatusNormalClosure, "test done")
+}
+
+func TestWebSocketUsesFallbackContextLimitForCodexWithoutConfiguredLength(t *testing.T) {
+	turnStarted := make(chan agent.RunTurnRequest, 1)
+	agentMock := &mockAgentService{
+		runTurnFn: func(ctx context.Context, req agent.RunTurnRequest) (*agent.TurnResult, error) {
+			turnStarted <- req
+			return &agent.TurnResult{}, nil
+		},
+	}
+	convMock := &mockConversationService{}
+	srv := server.New(server.Config{Host: "127.0.0.1", Port: 0, DevMode: true}, newTestLogger())
+	cfg := &config.Config{ProjectRoot: "test-project", Providers: map[string]config.ProviderConfig{
+		"codex": {Type: "codex"},
+	}}
+	server.NewWebSocketHandler(srv, agentMock, convMock, cfg, newTestLogger())
+	_, base := startServer(t, srv)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	wsURL := "ws" + base[4:] + "/api/ws"
+	conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	if err != nil {
+		t.Fatalf("websocket dial failed: %v", err)
+	}
+	defer conn.CloseNow()
+
+	msg := map[string]string{"type": "message", "content": "hello"}
+	data, _ := json.Marshal(msg)
+	if err := conn.Write(ctx, websocket.MessageText, data); err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+	_, _, err = conn.Read(ctx) // conversation_created
+	if err != nil {
+		t.Fatalf("read conversation_created failed: %v", err)
+	}
+
+	select {
+	case req := <-turnStarted:
+		if req.Provider != "codex" {
+			t.Fatalf("Provider = %q, want codex", req.Provider)
+		}
+		if req.ModelContextLimit != 200000 {
+			t.Fatalf("ModelContextLimit = %d, want 200000", req.ModelContextLimit)
+		}
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for RunTurn")
+	}
+
+	conn.Close(websocket.StatusNormalClosure, "test done")
+}
+
+func TestWebSocketMessageUsesNextTurnNumberForExistingConversation(t *testing.T) {
+	turnStarted := make(chan agent.RunTurnRequest, 1)
+	agentMock := &mockAgentService{
+		runTurnFn: func(ctx context.Context, req agent.RunTurnRequest) (*agent.TurnResult, error) {
+			turnStarted <- req
+			return &agent.TurnResult{}, nil
+		},
+	}
+	base, convMock := setupWSTest(t, agentMock)
+	content := "previous"
+	convMock.messages = []conversation.MessageView{
+		{ID: 1, Role: "user", Content: &content, TurnNumber: 1, Sequence: 0},
+		{ID: 2, Role: "assistant", Content: &content, TurnNumber: 1, Sequence: 1},
+		{ID: 3, Role: "user", Content: &content, TurnNumber: 2, Sequence: 2},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	wsURL := "ws" + base[4:] + "/api/ws"
+	conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	if err != nil {
+		t.Fatalf("websocket dial failed: %v", err)
+	}
+	defer conn.CloseNow()
+
+	msg := map[string]string{"type": "message", "conversation_id": "conv-1", "content": "hi again"}
+	data, _ := json.Marshal(msg)
+	if err := conn.Write(ctx, websocket.MessageText, data); err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+
+	select {
+	case req := <-turnStarted:
+		if req.TurnNumber != 3 {
+			t.Fatalf("TurnNumber = %d, want 3", req.TurnNumber)
 		}
 	case <-ctx.Done():
 		t.Fatal("timed out waiting for RunTurn")

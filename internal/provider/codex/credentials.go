@@ -3,6 +3,7 @@ package codex
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -17,6 +18,14 @@ import (
 type codexAuthFile struct {
 	AccessToken string `json:"access_token"`
 	ExpiresAt   string `json:"expires_at"` // RFC3339 format, e.g. "2026-03-28T16:00:00Z"
+	LastRefresh string `json:"last_refresh"`
+	Tokens      struct {
+		AccessToken string `json:"access_token"`
+	} `json:"tokens"`
+}
+
+type jwtClaims struct {
+	Exp int64 `json:"exp"`
 }
 
 // getAccessToken obtains a valid access token, refreshing if needed.
@@ -41,34 +50,29 @@ func (p *CodexProvider) getAccessToken(ctx context.Context) (string, error) {
 		return p.cachedToken, nil
 	}
 
-	// Try reading the auth file first (it may already have a valid token)
+	// Try reading the auth file first (it may already have a valid token).
 	token, expiry, err := p.readAuthFile()
-	if err == nil && token != "" && time.Until(expiry) > 120*time.Second {
+	if err == nil && token != "" && time.Until(expiry) > 30*time.Second {
 		p.cachedToken = token
 		p.tokenExpiry = expiry
-		return p.cachedToken, nil
+		return token, nil
 	}
 
-	// Refresh needed
+	// Fall back to CLI refresh only when the auth file is missing/expired.
 	if refreshErr := p.refreshToken(ctx); refreshErr != nil {
 		return "", refreshErr
 	}
 
-	// Read the updated auth file
+	// Read the updated auth file.
 	token, expiry, err = p.readAuthFile()
 	if err != nil {
-		return "", &provider.ProviderError{
-			Provider:   "codex",
-			StatusCode: 0,
-			Message:    err.Error(),
-			Retriable:  false,
-		}
+		return "", err
 	}
-
 	p.cachedToken = token
 	p.tokenExpiry = expiry
-	return p.cachedToken, nil
+	return token, nil
 }
+
 
 // authFilePath is a package-level variable to allow tests to override the home directory.
 var homeDir = os.UserHomeDir
@@ -94,16 +98,46 @@ func (p *CodexProvider) readAuthFile() (string, time.Time, error) {
 		return "", time.Time{}, fmt.Errorf("codex: invalid auth file format: %w", err)
 	}
 
-	expiry, err := time.Parse(time.RFC3339, auth.ExpiresAt)
-	if err != nil {
-		return "", time.Time{}, fmt.Errorf("codex: invalid expires_at timestamp in auth file: %w", err)
+	token := auth.AccessToken
+	if token == "" {
+		token = auth.Tokens.AccessToken
 	}
-
-	if auth.AccessToken == "" {
+	if token == "" {
 		return "", time.Time{}, fmt.Errorf("codex: auth file contains empty access_token. Run `codex auth` to re-authenticate.")
 	}
 
-	return auth.AccessToken, expiry, nil
+	if auth.ExpiresAt != "" {
+		expiry, err := time.Parse(time.RFC3339, auth.ExpiresAt)
+		if err != nil {
+			return "", time.Time{}, fmt.Errorf("codex: invalid expires_at timestamp in auth file: %w", err)
+		}
+		return token, expiry, nil
+	}
+
+	expiry, err := jwtExpiry(token)
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("codex: auth file missing expires_at and token exp claim: %w", err)
+	}
+	return token, expiry, nil
+}
+
+func jwtExpiry(token string) (time.Time, error) {
+	parts := strings.Split(token, ".")
+	if len(parts) < 2 {
+		return time.Time{}, fmt.Errorf("token is not a JWT")
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return time.Time{}, fmt.Errorf("decode JWT payload: %w", err)
+	}
+	var claims jwtClaims
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return time.Time{}, fmt.Errorf("parse JWT payload: %w", err)
+	}
+	if claims.Exp <= 0 {
+		return time.Time{}, fmt.Errorf("missing exp claim")
+	}
+	return time.Unix(claims.Exp, 0).UTC(), nil
 }
 
 // refreshToken shells out to `codex refresh` to obtain fresh credentials.

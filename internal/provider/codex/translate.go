@@ -9,30 +9,26 @@ import (
 
 // responsesRequest is the top-level JSON body for POST /v1/responses.
 type responsesRequest struct {
-	Model     string              `json:"model"`
-	Input     []responsesInput    `json:"input"`
-	Tools     []responsesTool     `json:"tools,omitempty"`
-	Stream    bool                `json:"stream"`
-	Reasoning *responsesReasoning `json:"reasoning,omitempty"`
+	Model        string              `json:"model"`
+	Instructions string              `json:"instructions"`
+	Input        []responsesInput    `json:"input"`
+	Tools        []responsesTool     `json:"tools,omitempty"`
+	Stream       bool                `json:"stream"`
+	Store        bool                `json:"store"`
+	Reasoning    *responsesReasoning `json:"reasoning,omitempty"`
 }
 
 // responsesInput represents one item in the input array.
-// For system/user/assistant roles, this is a message with either string
-// content or an array of content blocks.
+// ChatGPT Codex accepts both message items and top-level function call/result
+// items in the same array.
 type responsesInput struct {
-	Role    string      `json:"role"`    // "system", "user", "assistant"
-	Content interface{} `json:"content"` // string or []responsesContentBlock
-}
-
-// responsesContentBlock represents a typed content block within a message.
-type responsesContentBlock struct {
-	Type      string `json:"type"`                // "text", "function_call", "function_call_output"
-	Text      string `json:"text,omitempty"`      // for type="text"
-	ID        string `json:"id,omitempty"`        // for type="function_call"
-	CallID    string `json:"call_id,omitempty"`   // for type="function_call" and "function_call_output"
-	Name      string `json:"name,omitempty"`      // for type="function_call"
-	Arguments string `json:"arguments,omitempty"` // for type="function_call" (JSON string)
-	Output    string `json:"output,omitempty"`    // for type="function_call_output"
+	Type      string      `json:"type,omitempty"`
+	Role      string      `json:"role,omitempty"`
+	Content   interface{} `json:"content,omitempty"`
+	CallID    string      `json:"call_id,omitempty"`
+	Name      string      `json:"name,omitempty"`
+	Arguments string      `json:"arguments,omitempty"`
+	Output    string      `json:"output,omitempty"`
 }
 
 // responsesTool represents a tool definition in the tools array.
@@ -53,20 +49,20 @@ type responsesReasoning struct {
 // request body. The model parameter comes from the provider config or request.
 func buildResponsesRequest(model string, req *provider.Request, stream bool) responsesRequest {
 	rr := responsesRequest{
-		Model:  model,
-		Stream: stream,
+		Model:        model,
+		Instructions: "You are a helpful assistant.",
+		Stream:       stream,
+		Store:        false,
 	}
 
-	// System prompt handling: concatenate all system blocks
+	// System prompt handling: Codex expects top-level instructions rather than
+	// a system-role input item.
 	if len(req.SystemBlocks) > 0 {
 		var parts []string
 		for _, sb := range req.SystemBlocks {
 			parts = append(parts, sb.Text)
 		}
-		rr.Input = append(rr.Input, responsesInput{
-			Role:    "system",
-			Content: strings.Join(parts, "\n\n"),
-		})
+		rr.Instructions = strings.Join(parts, "\n\n")
 	}
 
 	// Message translation
@@ -93,18 +89,17 @@ func buildResponsesRequest(model string, req *provider.Request, stream bool) res
 				continue
 			}
 
-			var contentBlocks []responsesContentBlock
+			var textParts []string
+			var toolCalls []responsesInput
 			for _, block := range blocks {
 				switch block.Type {
 				case "text":
-					contentBlocks = append(contentBlocks, responsesContentBlock{
-						Type: "text",
-						Text: block.Text,
-					})
+					if block.Text != "" {
+						textParts = append(textParts, block.Text)
+					}
 				case "tool_use":
-					contentBlocks = append(contentBlocks, responsesContentBlock{
+					toolCalls = append(toolCalls, responsesInput{
 						Type:      "function_call",
-						ID:        "fc_" + block.ID,
 						CallID:    block.ID,
 						Name:      block.Name,
 						Arguments: string(block.Input),
@@ -113,21 +108,21 @@ func buildResponsesRequest(model string, req *provider.Request, stream bool) res
 					// Skip: Responses API uses encrypted reasoning, not plaintext thinking
 				}
 			}
-			rr.Input = append(rr.Input, responsesInput{
-				Role:    "assistant",
-				Content: contentBlocks,
-			})
+			if len(textParts) > 0 {
+				rr.Input = append(rr.Input, responsesInput{
+					Role:    "assistant",
+					Content: strings.Join(textParts, "\n"),
+				})
+			}
+			rr.Input = append(rr.Input, toolCalls...)
 
 		case provider.RoleTool:
 			var text string
 			_ = json.Unmarshal(msg.Content, &text)
 			rr.Input = append(rr.Input, responsesInput{
-				Role: "user",
-				Content: []responsesContentBlock{{
-					Type:   "function_call_output",
-					CallID: msg.ToolUseID,
-					Output: text,
-				}},
+				Type:   "function_call_output",
+				CallID: msg.ToolUseID,
+				Output: text,
 			})
 		}
 	}

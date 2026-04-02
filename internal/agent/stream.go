@@ -198,7 +198,7 @@ func sanitizeContentBlocks(blocks []provider.ContentBlock) []provider.ContentBlo
 	copy(sanitized, blocks)
 	for i := range sanitized {
 		if sanitized[i].Type == "tool_use" && len(sanitized[i].Input) > 0 {
-			var parsed interface{}
+			var parsed any
 			if err := json.Unmarshal(sanitized[i].Input, &parsed); err != nil {
 				// Replace invalid Input with a JSON string describing the error.
 				sanitized[i].Input = json.RawMessage(fmt.Sprintf(

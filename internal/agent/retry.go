@@ -87,7 +87,7 @@ func (l *AgentLoop) streamWithRetry(
 			// Context cancelled during sleep.
 			return nil, err
 		}
-		delay *= time.Duration(defaultRetryBackoffMult)
+		delay = time.Duration(int64(delay) * int64(defaultRetryBackoffMult))
 	}
 
 	// All retries exhausted.

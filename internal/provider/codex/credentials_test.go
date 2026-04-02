@@ -2,6 +2,8 @@ package codex
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -32,6 +34,22 @@ func writeAuthFile(t *testing.T, dir, content string) {
 	}
 }
 
+func testJWT(t *testing.T, exp time.Time) string {
+	t.Helper()
+	headerJSON, err := json.Marshal(map[string]any{"alg": "none", "typ": "JWT"})
+	if err != nil {
+		t.Fatalf("marshal header: %v", err)
+	}
+	payloadJSON, err := json.Marshal(map[string]any{"exp": exp.Unix()})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	encode := func(in []byte) string {
+		return base64.RawURLEncoding.EncodeToString(in)
+	}
+	return encode(headerJSON) + "." + encode(payloadJSON) + ".sig"
+}
+
 func TestReadAuthFile_Valid(t *testing.T) {
 	tmpDir := t.TempDir()
 	overrideHomeDir(t, tmpDir)
@@ -48,6 +66,26 @@ func TestReadAuthFile_Valid(t *testing.T) {
 	expected := time.Date(2026, 3, 28, 18, 0, 0, 0, time.UTC)
 	if !expiry.Equal(expected) {
 		t.Errorf("expected expiry %v, got %v", expected, expiry)
+	}
+}
+
+func TestReadAuthFile_NestedTokensJWTExpiry(t *testing.T) {
+	tmpDir := t.TempDir()
+	overrideHomeDir(t, tmpDir)
+	expected := time.Date(2026, 4, 3, 17, 45, 59, 0, time.UTC)
+	token := testJWT(t, expected)
+	writeAuthFile(t, tmpDir, `{"auth_mode":"chatgpt","last_refresh":"2026-03-24T17:45:59Z","tokens":{"access_token":"`+token+`","refresh_token":"redacted"}}`)
+
+	p := &CodexProvider{}
+	gotToken, expiry, err := p.readAuthFile()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotToken != token {
+		t.Fatalf("expected nested token to be returned")
+	}
+	if !expiry.Equal(expected) {
+		t.Fatalf("expected expiry %v, got %v", expected, expiry)
 	}
 }
 
@@ -122,6 +160,27 @@ func TestGetAccessToken_CachedTokenReturnedWithoutIO(t *testing.T) {
 	}
 	if token != "cached_tok" {
 		t.Errorf("expected token %q, got %q", "cached_tok", token)
+	}
+}
+
+func TestGetAccessToken_ExpiredCachedTokenUsesStillValidAuthFileWithoutRefresh(t *testing.T) {
+	tmpDir := t.TempDir()
+	overrideHomeDir(t, tmpDir)
+	writeAuthFile(t, tmpDir, `{"access_token": "fresh_from_file", "expires_at": "2027-01-01T00:00:00Z"}`)
+
+	mockBin := createMockScript(t, tmpDir, "#!/bin/sh\necho 'should not refresh' >&2\nexit 1\n")
+	p := &CodexProvider{
+		cachedToken:  "old_tok",
+		tokenExpiry:  time.Now().Add(60 * time.Second),
+		codexBinPath: mockBin,
+	}
+
+	token, err := p.getAccessToken(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if token != "fresh_from_file" {
+		t.Errorf("expected token %q, got %q", "fresh_from_file", token)
 	}
 }
 

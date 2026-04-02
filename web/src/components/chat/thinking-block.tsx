@@ -27,7 +27,7 @@ export function ThinkingBlock({ block }: ThinkingBlockProps) {
         <span className="italic">
           {block.done ? "Thought" : "Thinking"}
           {!block.done && (
-            <span className="ml-1 inline-block h-2 w-2 animate-pulse rounded-full bg-muted-foreground" />
+            <span className="ml-1 inline-block h-2 w-2 bg-muted-foreground pulse-glow" />
           )}
         </span>
         {block.text.length > 0 && (
@@ -37,10 +37,18 @@ export function ThinkingBlock({ block }: ThinkingBlockProps) {
         )}
       </button>
       {open && (
-        <div className="mt-1.5 ml-4 rounded-md border border-border/50 bg-muted/30 px-3 py-2 text-xs text-muted-foreground whitespace-pre-wrap font-mono leading-relaxed max-h-64 overflow-y-auto">
+        <div
+          data-augmented-ui="tl-2 border"
+          className="mt-1.5 ml-4 border-0 bg-muted/30 px-3 py-2 text-xs text-muted-foreground whitespace-pre-wrap leading-relaxed max-h-64 overflow-y-auto"
+          style={{
+            "--aug-tl": "6px",
+            "--aug-border-left": "2px",
+            "--aug-border-bg": "#546e7a",
+          } as React.CSSProperties}
+        >
           {block.text || "…"}
           {!block.done && (
-            <span className="ml-0.5 inline-block h-3 w-0.5 animate-pulse bg-muted-foreground" />
+            <span className="ml-0.5 inline-block h-3 w-1.5 bg-primary pulse-glow" />
           )}
         </div>
       )}

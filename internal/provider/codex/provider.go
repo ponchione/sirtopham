@@ -15,7 +15,7 @@ import (
 // Responses API, using credentials delegated to the codex CLI binary.
 type CodexProvider struct {
 	httpClient   *http.Client
-	baseURL      string       // default: "https://api.openai.com"
+	baseURL      string       // default: "https://chatgpt.com/backend-api/codex"
 	mu           sync.RWMutex // guards cachedToken and tokenExpiry
 	cachedToken  string
 	tokenExpiry  time.Time
@@ -44,7 +44,7 @@ func WithBaseURL(url string) ProviderOption {
 // CLI binary is available on PATH.
 func NewCodexProvider(opts ...ProviderOption) (*CodexProvider, error) {
 	p := &CodexProvider{
-		baseURL:    "https://api.openai.com",
+		baseURL:    "https://chatgpt.com/backend-api/codex",
 		httpClient: &http.Client{Timeout: 120 * time.Second},
 	}
 
@@ -77,8 +77,22 @@ var _ provider.Provider = (*CodexProvider)(nil)
 // Models returns the static list of models supported by the Codex provider.
 func (p *CodexProvider) Models(ctx context.Context) ([]provider.Model, error) {
 	return []provider.Model{
+		{ID: "gpt-5.1-codex-mini", Name: "gpt-5.1-codex-mini", ContextWindow: 400000, SupportsTools: true, SupportsThinking: false},
 		{ID: "o3", Name: "o3", ContextWindow: 200000, SupportsTools: true, SupportsThinking: false},
 		{ID: "o4-mini", Name: "o4-mini", ContextWindow: 200000, SupportsTools: true, SupportsThinking: false},
 		{ID: "gpt-4.1", Name: "GPT-4.1", ContextWindow: 1000000, SupportsTools: true, SupportsThinking: false},
 	}, nil
+}
+
+func (p *CodexProvider) responsesEndpointURL() string {
+	base := strings.TrimRight(p.baseURL, "/")
+	if strings.Contains(base, "chatgpt.com/backend-api/codex") || strings.HasSuffix(base, "/codex") {
+		return base + "/responses"
+	}
+	return base + "/v1/responses"
+}
+
+func (p *CodexProvider) usesChatGPTCodexEndpoint() bool {
+	base := strings.TrimRight(p.baseURL, "/")
+	return strings.Contains(base, "chatgpt.com/backend-api/codex") || strings.HasSuffix(base, "/codex")
 }

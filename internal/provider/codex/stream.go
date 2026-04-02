@@ -92,7 +92,7 @@ func (p *CodexProvider) Stream(ctx context.Context, req *provider.Request) (<-ch
 		}
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.baseURL+"/v1/responses", bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.responsesEndpointURL(), bytes.NewReader(body))
 	if err != nil {
 		return nil, &provider.ProviderError{
 			Provider:   "codex",

@@ -331,23 +331,4 @@ func TestNormalizeToolResult_WhitespaceCleanupOrder(t *testing.T) {
 	}
 }
 
-// --- itoa ---
 
-func TestItoa(t *testing.T) {
-	tests := []struct {
-		input int
-		want  string
-	}{
-		{0, "0"},
-		{1, "1"},
-		{42, "42"},
-		{100, "100"},
-		{999, "999"},
-	}
-	for _, tt := range tests {
-		got := itoa(tt.input)
-		if got != tt.want {
-			t.Errorf("itoa(%d) = %q, want %q", tt.input, got, tt.want)
-		}
-	}
-}

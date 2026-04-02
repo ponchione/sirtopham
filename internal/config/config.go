@@ -236,7 +236,7 @@ func Default() *Config {
 		Brain: BrainConfig{
 			Enabled:                 true,
 			VaultPath:               wd,
-			ObsidianAPIURL:          "http://localhost:27124",
+			ObsidianAPIURL:          "https://localhost:27124",
 			ObsidianAPIKey:          "",
 			EmbeddingModel:          "nomic-embed-code",
 			ChunkAtHeadings:         true,
