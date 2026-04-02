@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
+	"database/sql"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"syscall"
 	"time"
@@ -86,6 +89,9 @@ func runServe(cmd *cobra.Command, configPath string, portOverride int, hostOverr
 
 	// Project ID is the project root path.
 	projectID := cfg.ProjectRoot
+	if err := ensureProjectRecord(cmd.Context(), database, cfg); err != nil {
+		return fmt.Errorf("ensure project record: %w", err)
+	}
 
 	logger.Info("sirtopham starting",
 		"version", version,
@@ -120,8 +126,7 @@ func runServe(cmd *cobra.Command, configPath string, portOverride int, hostOverr
 		if err != nil {
 			return fmt.Errorf("build provider %q: %w", name, err)
 		}
-		tracked := tracking.NewTrackedProvider(p, subCallStore, logger)
-		if err := provRouter.RegisterProvider(tracked); err != nil {
+		if err := provRouter.RegisterProvider(p); err != nil {
 			return fmt.Errorf("register provider %q: %w", name, err)
 		}
 		logger.Info("registered provider", "name", name, "type", provCfg.Type)
@@ -227,7 +232,7 @@ func runServe(cmd *cobra.Command, configPath string, portOverride int, hostOverr
 
 	// Register handlers.
 	server.NewConversationHandler(srv, convManager, projectID, logger)
-	server.NewWebSocketHandler(srv, agentLoop, convManager, projectID, logger)
+	server.NewWebSocketHandler(srv, agentLoop, convManager, cfg, logger)
 	server.NewProjectHandler(srv, cfg, logger)
 	server.NewConfigHandler(srv, cfg, provRouter, logger)
 	server.NewMetricsHandler(srv, queries, logger)
@@ -246,10 +251,9 @@ func runServe(cmd *cobra.Command, configPath string, portOverride int, hostOverr
 		return fmt.Errorf("server: %w", err)
 	}
 
-	// Ordered teardown.
+	// Ordered teardown (database.Close is handled by defer above).
 	logger.Info("shutting down")
 	agentLoop.Cancel()
-	database.Close()
 	logger.Info("shutdown complete")
 
 	return nil
@@ -292,6 +296,23 @@ func buildProvider(name string, cfg appconfig.ProviderConfig) (provider.Provider
 }
 
 
+
+func ensureProjectRecord(ctx context.Context, database *sql.DB, cfg *appconfig.Config) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	name := filepath.Base(cfg.ProjectRoot)
+	_, err := database.ExecContext(ctx, `
+INSERT INTO projects(id, name, root_path, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+	name = excluded.name,
+	root_path = excluded.root_path,
+	updated_at = excluded.updated_at
+`, cfg.ProjectRoot, name, cfg.ProjectRoot, now, now)
+	return err
+}
 
 func launchBrowser(url string, logger *slog.Logger) {
 	time.Sleep(500 * time.Millisecond) // Let server start.
