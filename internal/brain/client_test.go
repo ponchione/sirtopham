@@ -2,6 +2,7 @@ package brain
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -209,6 +210,40 @@ func TestRequestTimeout(t *testing.T) {
 	_, err := client.ReadDocument(context.Background(), "notes/slow.md")
 	if err == nil {
 		t.Fatal("expected timeout error")
+	}
+}
+
+func TestHTTPSLocalhostAllowsSelfSignedCert(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.TLS == nil {
+			t.Fatal("expected TLS request")
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("# Secure note"))
+	}))
+	defer srv.Close()
+
+	client := NewObsidianClient(srv.URL, "test-key")
+	_, err := client.ReadDocument(context.Background(), "notes/secure.md")
+	if err != nil {
+		t.Fatalf("ReadDocument over TLS returned error: %v", err)
+	}
+}
+
+func TestHTTPSRemoteRejectsSelfSignedCert(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("# Secure note"))
+	}))
+	defer srv.Close()
+
+	client := NewObsidianClient(strings.Replace(srv.URL, "127.0.0.1", "example.com", 1), "test-key")
+	client.httpClient.Transport = &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: false},
+	}
+	_, err := client.ReadDocument(context.Background(), "notes/secure.md")
+	if err == nil {
+		t.Fatal("expected TLS verification error for non-localhost HTTPS")
 	}
 }
 

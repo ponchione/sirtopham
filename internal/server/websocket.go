@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -12,6 +13,7 @@ import (
 	"nhooyr.io/websocket"
 
 	"github.com/ponchione/sirtopham/internal/agent"
+	"github.com/ponchione/sirtopham/internal/config"
 )
 
 // AgentService is the interface the WebSocket handler needs from the agent loop.
@@ -33,21 +35,27 @@ type connOverride struct {
 
 // WebSocketHandler handles WebSocket connections for streaming agent events.
 type WebSocketHandler struct {
-	agent     AgentService
-	convSvc   ConversationService
-	projectID string
-	logger    *slog.Logger
+	agent            AgentService
+	convSvc          ConversationService
+	projectID        string
+	providers        map[string]config.ProviderConfig
+	defaultProvider  string
+	defaultModel     string
+	logger           *slog.Logger
 }
 
 // NewWebSocketHandler creates a handler and registers the WS route.
-func NewWebSocketHandler(s *Server, agentSvc AgentService, convSvc ConversationService, projectID string, logger *slog.Logger) *WebSocketHandler {
+func NewWebSocketHandler(s *Server, agentSvc AgentService, convSvc ConversationService, cfg *config.Config, logger *slog.Logger) *WebSocketHandler {
 	h := &WebSocketHandler{
-		agent:     agentSvc,
-		convSvc:   convSvc,
-		projectID: projectID,
-		logger:    logger,
+		agent:           agentSvc,
+		convSvc:         convSvc,
+		projectID:       cfg.ProjectRoot,
+		providers:       cfg.Providers,
+		defaultProvider: cfg.Routing.Default.Provider,
+		defaultModel:    cfg.Routing.Default.Model,
+		logger:          logger,
 	}
-	s.HandleFunc("/api/ws", h.handleWS)
+s.HandleFunc("/api/ws", h.handleWS)
 	return h
 }
 
@@ -65,6 +73,21 @@ type ServerMessage struct {
 	Type      string    `json:"type"`
 	Timestamp time.Time `json:"timestamp"`
 	Data      any       `json:"data"`
+}
+
+func (h *WebSocketHandler) defaultProviderName() string {
+	if h.defaultProvider != "" {
+		return h.defaultProvider
+	}
+	for name := range h.providers {
+		if name == "codex" {
+			return name
+		}
+	}
+	for name := range h.providers {
+		return name
+	}
+	return ""
 }
 
 func (h *WebSocketHandler) handleWS(w http.ResponseWriter, r *http.Request) {
@@ -215,6 +238,41 @@ func (h *WebSocketHandler) readLoop(ctx context.Context, cancel context.CancelFu
 
 // handleMessage processes a "message" client command — creates or resumes a
 // conversation and runs a turn.
+func (h *WebSocketHandler) nextTurnNumber(ctx context.Context, conversationID string) (int, error) {
+	messages, err := h.convSvc.GetMessages(ctx, conversationID)
+	if err != nil {
+		return 0, err
+	}
+	maxTurn := 0
+	for _, msg := range messages {
+		if int(msg.TurnNumber) > maxTurn {
+			maxTurn = int(msg.TurnNumber)
+		}
+	}
+	return maxTurn + 1, nil
+}
+
+func (h *WebSocketHandler) resolveModelContextLimit(providerName string) (int, error) {
+	if providerName == "" {
+		return 0, fmt.Errorf("provider name is required")
+	}
+	cfg, ok := h.providers[providerName]
+	if !ok {
+		return 0, fmt.Errorf("unknown provider: %s", providerName)
+	}
+	if cfg.ContextLength > 0 {
+		return cfg.ContextLength, nil
+	}
+	switch cfg.Type {
+	case "anthropic", "codex":
+		return 200000, nil
+	case "openai-compatible":
+		return 32768, nil
+	default:
+		return 0, fmt.Errorf("provider %s has no positive context_length configured", providerName)
+	}
+}
+
 func (h *WebSocketHandler) handleMessage(ctx context.Context, conn *websocket.Conn, sink *agent.ChannelSink, msg ClientMessage, override *connOverride) {
 	// Subscribe sink to receive events for this turn.
 	h.agent.Subscribe(sink)
@@ -248,11 +306,33 @@ func (h *WebSocketHandler) handleMessage(ctx context.Context, conn *websocket.Co
 	override.provider = ""
 	override.mu.Unlock()
 
+	turnNumber, turnErr := h.nextTurnNumber(ctx, convID)
+	if turnErr != nil {
+		h.logger.Error("compute next turn number", "error", turnErr, "conversation_id", convID)
+		h.writeJSONMessage(ctx, conn, "error", map[string]string{"error": "failed to compute next turn number"})
+		return
+	}
+
+	if prov == "" {
+		prov = h.defaultProviderName()
+	}
+	if model == "" && prov == h.defaultProvider {
+		model = h.defaultModel
+	}
+	modelContextLimit, limitErr := h.resolveModelContextLimit(prov)
+	if limitErr != nil {
+		h.logger.Error("resolve model context limit", "error", limitErr, "provider", prov, "conversation_id", convID)
+		h.writeJSONMessage(ctx, conn, "error", map[string]string{"error": "failed to resolve model context limit"})
+		return
+	}
+
 	req := agent.RunTurnRequest{
-		ConversationID: convID,
-		Message:        msg.Content,
-		Model:          model,
-		Provider:       prov,
+		ConversationID:    convID,
+		TurnNumber:        turnNumber,
+		Message:           msg.Content,
+		ModelContextLimit: modelContextLimit,
+		Model:             model,
+		Provider:          prov,
 	}
 
 	_, err := h.agent.RunTurn(ctx, req)

@@ -483,22 +483,16 @@ func TestHTTPTest_CompleteRequestBodyValidation(t *testing.T) {
 	if body["stream"] != false {
 		t.Errorf("expected stream false, got %v", body["stream"])
 	}
+	if body["instructions"] != "You are a coding assistant.\n\nUse Go." {
+		t.Errorf("expected instructions %q, got %v", "You are a coding assistant.\n\nUse Go.", body["instructions"])
+	}
 
 	input, ok := body["input"].([]interface{})
 	if !ok {
 		t.Fatalf("expected input array, got %T", body["input"])
 	}
-	if len(input) < 2 {
-		t.Fatalf("expected at least 2 input items, got %d", len(input))
-	}
-
-	// First item should be system.
-	sys, ok := input[0].(map[string]interface{})
-	if !ok {
-		t.Fatalf("expected map for system item, got %T", input[0])
-	}
-	if sys["role"] != "system" {
-		t.Errorf("expected role %q, got %v", "system", sys["role"])
+	if len(input) != 1 {
+		t.Fatalf("expected 1 input item, got %d", len(input))
 	}
 
 	// Tools should be present.

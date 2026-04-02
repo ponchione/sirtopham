@@ -153,8 +153,15 @@ func (tp *TrackedProvider) Stream(ctx context.Context, req *provider.Request) (<
 					success = false
 				}
 			}
-			out <- event
+			select {
+			case out <- event:
+			case <-ctx.Done():
+				success = false
+				streamErr = ctx.Err()
+				goto done
+			}
 		}
+	done:
 
 		// If no usage events were received, mark as failure.
 		if finalUsage == (provider.Usage{}) && success {

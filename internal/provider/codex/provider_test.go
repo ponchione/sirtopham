@@ -27,14 +27,15 @@ func TestModels(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(models) != 3 {
-		t.Fatalf("expected 3 models, got %d", len(models))
+	if len(models) != 4 {
+		t.Fatalf("expected 4 models, got %d", len(models))
 	}
 
 	expectedModels := []struct {
 		id            string
 		contextWindow int
 	}{
+		{"gpt-5.1-codex-mini", 400000},
 		{"o3", 200000},
 		{"o4-mini", 200000},
 		{"gpt-4.1", 1000000},
@@ -58,10 +59,33 @@ func TestModels(t *testing.T) {
 
 func TestWithBaseURL_TrimsTrailingSlash(t *testing.T) {
 	p := &CodexProvider{}
-	opt := WithBaseURL("https://api.openai.com/")
+	opt := WithBaseURL("https://chatgpt.com/backend-api/codex/")
 	opt(p)
-	if p.baseURL != "https://api.openai.com" {
-		t.Errorf("expected %q, got %q", "https://api.openai.com", p.baseURL)
+	if p.baseURL != "https://chatgpt.com/backend-api/codex" {
+		t.Errorf("expected %q, got %q", "https://chatgpt.com/backend-api/codex", p.baseURL)
+	}
+}
+
+func TestResponsesEndpointURL_DefaultCodexEndpoint(t *testing.T) {
+	p := &CodexProvider{baseURL: "https://chatgpt.com/backend-api/codex"}
+	if got := p.responsesEndpointURL(); got != "https://chatgpt.com/backend-api/codex/responses" {
+		t.Fatalf("expected chatgpt codex responses URL, got %q", got)
+	}
+}
+
+func TestResponsesEndpointURL_OpenAICompatibleEndpoint(t *testing.T) {
+	p := &CodexProvider{baseURL: "https://example.test"}
+	if got := p.responsesEndpointURL(); got != "https://example.test/v1/responses" {
+		t.Fatalf("expected v1 responses URL, got %q", got)
+	}
+}
+
+func TestUsesChatGPTCodexEndpoint(t *testing.T) {
+	if !(&CodexProvider{baseURL: "https://chatgpt.com/backend-api/codex"}).usesChatGPTCodexEndpoint() {
+		t.Fatal("expected chatgpt codex endpoint to be detected")
+	}
+	if (&CodexProvider{baseURL: "https://example.test"}).usesChatGPTCodexEndpoint() {
+		t.Fatal("did not expect generic base URL to be detected as chatgpt codex endpoint")
 	}
 }
 

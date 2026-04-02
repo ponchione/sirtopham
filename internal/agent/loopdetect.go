@@ -72,40 +72,19 @@ func canonicalizeJSON(raw json.RawMessage) string {
 		return "{}"
 	}
 
-	var parsed interface{}
+	var parsed any
 	if err := json.Unmarshal(raw, &parsed); err != nil {
 		return string(raw)
 	}
 
-	canonical, err := json.Marshal(sortKeys(parsed))
+	canonical, err := json.Marshal(parsed)
 	if err != nil {
 		return string(raw)
 	}
 	return string(canonical)
 }
 
-// sortKeys recursively processes a parsed JSON value to ensure maps have
-// sorted keys when re-marshalled. Go's json.Marshal already sorts map keys
-// for map[string]interface{}, so this mainly ensures the value is in the
-// right shape.
-func sortKeys(v interface{}) interface{} {
-	switch val := v.(type) {
-	case map[string]interface{}:
-		sorted := make(map[string]interface{}, len(val))
-		for k, v := range val {
-			sorted[k] = sortKeys(v)
-		}
-		return sorted
-	case []interface{}:
-		result := make([]interface{}, len(val))
-		for i, v := range val {
-			result[i] = sortKeys(v)
-		}
-		return result
-	default:
-		return v
-	}
-}
+
 
 // signaturesEqual compares two sorted signature slices for equality.
 func signaturesEqual(a, b []string) bool {

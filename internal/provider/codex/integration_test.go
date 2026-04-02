@@ -388,28 +388,24 @@ func TestIntegration_CompleteRequestBodyValidation(t *testing.T) {
 	if body["model"] != "o3" {
 		t.Errorf("expected model %q, got %v", "o3", body["model"])
 	}
+	if body["stream"] != false {
+		t.Errorf("expected stream false, got %v", body["stream"])
+	}
+	if body["instructions"] != "You are helpful.\n\nContext: Go project" {
+		t.Errorf("expected instructions %q, got %v", "You are helpful.\n\nContext: Go project", body["instructions"])
+	}
 
 	input, ok := body["input"].([]interface{})
 	if !ok {
 		t.Fatalf("expected input array, got %T", body["input"])
 	}
-
-	// First item: system
-	sys, ok := input[0].(map[string]interface{})
-	if !ok {
-		t.Fatalf("expected map for system item, got %T", input[0])
-	}
-	if sys["role"] != "system" {
-		t.Errorf("expected role %q, got %v", "system", sys["role"])
-	}
-	if sys["content"] != "You are helpful.\n\nContext: Go project" {
-		t.Errorf("expected concatenated system content, got %v", sys["content"])
+	if len(input) != 1 {
+		t.Fatalf("expected 1 input item, got %d", len(input))
 	}
 
-	// Second item: user
-	usr, ok := input[1].(map[string]interface{})
+	usr, ok := input[0].(map[string]interface{})
 	if !ok {
-		t.Fatalf("expected map for user item, got %T", input[1])
+		t.Fatalf("expected map for user item, got %T", input[0])
 	}
 	if usr["role"] != "user" {
 		t.Errorf("expected role %q, got %v", "user", usr["role"])

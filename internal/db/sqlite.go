@@ -60,6 +60,10 @@ func OpenDB(ctx context.Context, filePath string) (*sql.DB, error) {
 		db.Close()
 		return nil, fmt.Errorf("open sqlite database %q: %w", filePath, err)
 	}
+	if err := verifyFTS5Support(ctx, db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("open sqlite database %q: %w", filePath, err)
+	}
 
 	return db, nil
 }
@@ -84,6 +88,16 @@ func buildDSN(filePath string) (string, error) {
 
 	u := url.URL{Scheme: "file", Path: absPath, RawQuery: query.Encode()}
 	return u.String(), nil
+}
+
+func verifyFTS5Support(ctx context.Context, db *sql.DB) error {
+	if _, err := db.ExecContext(ctx, `CREATE VIRTUAL TABLE temp.fts5_probe USING fts5(content);`); err != nil {
+		return fmt.Errorf("sqlite FTS5 support is unavailable (%w). Rebuild/run with -tags sqlite_fts5", err)
+	}
+	if _, err := db.ExecContext(ctx, `DROP TABLE temp.fts5_probe;`); err != nil {
+		return fmt.Errorf("cleanup FTS5 probe table: %w", err)
+	}
+	return nil
 }
 
 func applyAndVerifyPragmas(ctx context.Context, db *sql.DB) error {

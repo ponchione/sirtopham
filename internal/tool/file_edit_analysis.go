@@ -121,9 +121,4 @@ func analyzeFileEditMatches(content, needle string) fileEditMatchAnalysis {
 	return analysis
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
+

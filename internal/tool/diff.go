@@ -66,10 +66,20 @@ type edit struct {
 	content string
 }
 
+// maxDPCells is the maximum number of cells in the LCS DP matrix before
+// we fall back to a simple line-by-line comparison to avoid OOM on large files.
+const maxDPCells = 4_000_000 // ~32 MB for [][]int
+
 // computeEdits computes the edit sequence between oldLines and newLines
 // using a simple LCS-based approach.
 func computeEdits(oldLines, newLines []string) []edit {
 	m, n := len(oldLines), len(newLines)
+
+	// Guard: if the DP matrix would be too large, fall back to a naive
+	// line-by-line diff that uses O(m+n) memory instead of O(m*n).
+	if int64(m+1)*int64(n+1) > maxDPCells {
+		return naiveDiff(oldLines, newLines)
+	}
 
 	// Build LCS table.
 	dp := make([][]int, m+1)
@@ -247,6 +257,42 @@ func groupHunks(edits []edit, oldLen, newLen, contextLines int) []hunk {
 	}
 
 	return hunks
+}
+
+// naiveDiff produces a simple line-by-line diff for inputs too large for the
+// LCS DP matrix. It matches identical leading/trailing lines, then marks the
+// entire middle section as delete+insert. O(m+n) memory.
+func naiveDiff(oldLines, newLines []string) []edit {
+	m, n := len(oldLines), len(newLines)
+
+	// Match common prefix.
+	prefix := 0
+	for prefix < m && prefix < n && oldLines[prefix] == newLines[prefix] {
+		prefix++
+	}
+	// Match common suffix.
+	suffix := 0
+	for suffix < m-prefix && suffix < n-prefix &&
+		oldLines[m-1-suffix] == newLines[n-1-suffix] {
+		suffix++
+	}
+
+	var edits []edit
+	for i := 0; i < prefix; i++ {
+		edits = append(edits, edit{op: editKeep, oldIdx: i, newIdx: i, content: oldLines[i]})
+	}
+	for i := prefix; i < m-suffix; i++ {
+		edits = append(edits, edit{op: editDelete, oldIdx: i, newIdx: -1, content: oldLines[i]})
+	}
+	for j := prefix; j < n-suffix; j++ {
+		edits = append(edits, edit{op: editInsert, oldIdx: -1, newIdx: j, content: newLines[j]})
+	}
+	for i := 0; i < suffix; i++ {
+		oi := m - suffix + i
+		ni := n - suffix + i
+		edits = append(edits, edit{op: editKeep, oldIdx: oi, newIdx: ni, content: oldLines[oi]})
+	}
+	return edits
 }
 
 // splitLines splits text into lines. An empty string returns an empty slice.

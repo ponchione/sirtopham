@@ -17,14 +17,26 @@ export function ContextInspector({ ctx, onClose }: ContextInspectorProps) {
   const { report, loading, currentTurn, totalTurns, nextTurn, prevTurn } = ctx;
 
   return (
-    <div className="flex w-80 flex-col border-l border-border bg-background overflow-hidden">
+    <div
+      data-augmented-ui="tl-clip bl-clip border"
+      className="flex w-80 flex-col bg-sidebar overflow-hidden"
+      style={{
+        "--aug-tl": "15px",
+        "--aug-bl": "15px",
+        "--aug-border-left": "2px",
+        "--aug-border-bg":
+          "linear-gradient(180deg, #00e5ff, #00e67640, #00e5ff)",
+      } as React.CSSProperties}
+    >
       {/* Header */}
       <div className="flex items-center justify-between border-b border-border px-3 py-2">
-        <span className="text-xs font-semibold">Context Inspector</span>
+        <span className="text-xs font-semibold uppercase tracking-widest text-primary text-glow-cyan">
+          Context Inspector
+        </span>
         <button
           type="button"
           onClick={onClose}
-          className="rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+          className="p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
           aria-label="Close inspector"
         >
           <XIcon />
@@ -37,7 +49,7 @@ export function ContextInspector({ ctx, onClose }: ContextInspectorProps) {
           type="button"
           onClick={prevTurn}
           disabled={currentTurn <= 1}
-          className="rounded p-0.5 text-muted-foreground hover:bg-muted disabled:opacity-30"
+          className="p-0.5 text-muted-foreground hover:bg-muted disabled:opacity-30"
         >
           <ChevronLeftIcon />
         </button>
@@ -48,7 +60,7 @@ export function ContextInspector({ ctx, onClose }: ContextInspectorProps) {
           type="button"
           onClick={nextTurn}
           disabled={currentTurn >= totalTurns}
-          className="rounded p-0.5 text-muted-foreground hover:bg-muted disabled:opacity-30"
+          className="p-0.5 text-muted-foreground hover:bg-muted disabled:opacity-30"
         >
           <ChevronRightIcon />
         </button>
@@ -69,7 +81,7 @@ export function ContextInspector({ ctx, onClose }: ContextInspectorProps) {
         {report && (
           <>
             {/* Budget */}
-            <CollapsibleSection title="Token Budget" defaultOpen>
+            <CollapsibleSection title="Token Budget" sectionColor="#00e5ff" defaultOpen>
               <BudgetBar
                 used={report.budget_used ?? 0}
                 total={report.budget_total ?? 0}
@@ -78,7 +90,7 @@ export function ContextInspector({ ctx, onClose }: ContextInspectorProps) {
             </CollapsibleSection>
 
             {/* Quality */}
-            <CollapsibleSection title="Quality">
+            <CollapsibleSection title="Quality" sectionColor="#00e676">
               <QualityMetrics
                 hitRate={report.context_hit_rate}
                 usedSearch={report.agent_used_search_tool}
@@ -89,7 +101,7 @@ export function ContextInspector({ ctx, onClose }: ContextInspectorProps) {
             </CollapsibleSection>
 
             {/* Latency */}
-            <CollapsibleSection title="Latency">
+            <CollapsibleSection title="Latency" sectionColor="#ffab00">
               <LatencyDisplay
                 analysis={report.analysis_latency_ms}
                 retrieval={report.retrieval_latency_ms}
@@ -98,27 +110,27 @@ export function ContextInspector({ ctx, onClose }: ContextInspectorProps) {
             </CollapsibleSection>
 
             {/* Signals */}
-            <CollapsibleSection title="Signals">
+            <CollapsibleSection title="Signals" sectionColor="#b388ff">
               <SignalsList signals={report.signals ?? []} />
             </CollapsibleSection>
 
             {/* Queries */}
-            <CollapsibleSection title="Queries">
+            <CollapsibleSection title="Queries" sectionColor="#00e5ff">
               <QueriesList queries={report.needs?.queries ?? []} />
             </CollapsibleSection>
 
             {/* RAG Results */}
-            <CollapsibleSection title={`Code Chunks (${report.rag_results?.length ?? 0})`}>
+            <CollapsibleSection title={`Code Chunks (${report.rag_results?.length ?? 0})`} sectionColor="#00e676">
               <RAGResultsList results={report.rag_results ?? []} />
             </CollapsibleSection>
 
             {/* Brain Results */}
-            <CollapsibleSection title={`Brain (${report.brain_results?.length ?? 0})`}>
+            <CollapsibleSection title={`Brain (${report.brain_results?.length ?? 0})`} sectionColor="#ffab00">
               <BrainResultsList results={report.brain_results ?? []} />
             </CollapsibleSection>
 
             {/* Graph Results */}
-            <CollapsibleSection title={`Graph (${report.graph_results?.length ?? 0})`}>
+            <CollapsibleSection title={`Graph (${report.graph_results?.length ?? 0})`} sectionColor="#b388ff">
               <GraphResultsList results={report.graph_results ?? []} />
             </CollapsibleSection>
           </>
@@ -145,9 +157,9 @@ function QualityMetrics({
 }) {
   const hitColor =
     hitRate == null ? "text-muted-foreground"
-      : hitRate > 0.7 ? "text-green-600 dark:text-green-400"
-      : hitRate > 0.4 ? "text-yellow-600 dark:text-yellow-400"
-      : "text-red-500 dark:text-red-400";
+      : hitRate > 0.7 ? "text-accent"
+      : hitRate > 0.4 ? "text-[#ffab00]"
+      : "text-destructive";
 
   return (
     <div className="space-y-1.5 text-xs">
@@ -159,7 +171,7 @@ function QualityMetrics({
       </div>
       <div className="flex justify-between">
         <span className="text-muted-foreground">Reactive search</span>
-        <span className={usedSearch ? "text-yellow-600 dark:text-yellow-400" : "text-green-600 dark:text-green-400"}>
+        <span className={usedSearch ? "text-[#ffab00]" : "text-accent"}>
           {usedSearch ? "Yes ⚠" : "No"}
         </span>
       </div>
@@ -170,7 +182,7 @@ function QualityMetrics({
       {agentFiles && agentFiles.length > 0 && (
         <div>
           <span className="text-muted-foreground">Agent read files:</span>
-          <div className="mt-0.5 font-mono text-[10px] text-muted-foreground/80 max-h-20 overflow-y-auto">
+          <div className="mt-0.5 text-[10px] text-muted-foreground/80 max-h-20 overflow-y-auto">
             {agentFiles.map((f, i) => <div key={i}>{f}</div>)}
           </div>
         </div>
@@ -194,9 +206,9 @@ function LatencyDisplay({
   };
   const color = (ms?: number) => {
     if (ms == null) return "";
-    if (ms < 200) return "text-green-600 dark:text-green-400";
-    if (ms < 500) return "text-yellow-600 dark:text-yellow-400";
-    return "text-red-500 dark:text-red-400";
+    if (ms < 200) return "text-accent";
+    if (ms < 500) return "text-[#ffab00]";
+    return "text-destructive";
   };
 
   return (
@@ -221,10 +233,10 @@ function SignalsList({ signals }: { signals: ContextSignal[] }) {
   }
 
   const typeColors: Record<string, string> = {
-    file_ref: "bg-blue-500/20 text-blue-700 dark:text-blue-300",
-    symbol_ref: "bg-purple-500/20 text-purple-700 dark:text-purple-300",
-    intent_verb: "bg-green-500/20 text-green-700 dark:text-green-300",
-    momentum: "bg-orange-500/20 text-orange-700 dark:text-orange-300",
+    file_ref: "bg-primary/20 text-primary text-glow-cyan",
+    symbol_ref: "bg-[#b388ff]/20 text-[#b388ff]",
+    intent_verb: "bg-accent/20 text-accent text-glow-green",
+    momentum: "bg-[#ffab00]/20 text-[#ffab00]",
   };
 
   return (
@@ -232,7 +244,7 @@ function SignalsList({ signals }: { signals: ContextSignal[] }) {
       {signals.map((s, i) => (
         <span
           key={i}
-          className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${typeColors[s.type] ?? "bg-muted text-muted-foreground"}`}
+          className={`px-1.5 py-0.5 text-[10px] font-medium ${typeColors[s.type] ?? "bg-muted text-muted-foreground"}`}
           title={`${s.type}: ${s.value}${s.source ? ` (${s.source})` : ""}`}
         >
           {s.value}
@@ -249,7 +261,7 @@ function QueriesList({ queries }: { queries: string[] }) {
   return (
     <div className="space-y-0.5">
       {queries.map((q, i) => (
-        <div key={i} className="rounded bg-muted/50 px-2 py-1 text-[10px] font-mono">
+        <div key={i} className="bg-muted/50 px-2 py-1 text-[10px]">
           {q}
         </div>
       ))}
@@ -265,10 +277,10 @@ function RAGResultsList({ results }: { results: RAGResult[] }) {
     <div className="space-y-0.5">
       {results.map((r, i) => (
         <div key={i} className="flex items-center gap-1.5 text-[10px]">
-          <span className={`shrink-0 rounded px-1 py-0.5 font-medium ${r.included ? "bg-green-500/20 text-green-700 dark:text-green-300" : "bg-red-500/20 text-red-700 dark:text-red-300"}`}>
+          <span className={`shrink-0 px-1 py-0.5 font-medium ${r.included ? "bg-accent/20 text-accent" : "bg-destructive/20 text-destructive"}`}>
             {r.score.toFixed(2)}
           </span>
-          <span className="truncate font-mono text-muted-foreground" title={r.file_path}>
+          <span className="truncate text-muted-foreground" title={r.file_path}>
             {r.chunk_name ?? r.file_path}
           </span>
         </div>
@@ -285,10 +297,10 @@ function BrainResultsList({ results }: { results: BrainResult[] }) {
     <div className="space-y-0.5">
       {results.map((r, i) => (
         <div key={i} className="flex items-center gap-1.5 text-[10px]">
-          <span className="shrink-0 rounded bg-muted px-1 py-0.5 font-medium">
+          <span className="shrink-0 bg-muted px-1 py-0.5 font-medium">
             {r.score.toFixed(2)}
           </span>
-          <span className="truncate font-mono text-muted-foreground" title={r.vault_path}>
+          <span className="truncate text-muted-foreground" title={r.vault_path}>
             {r.title ?? r.vault_path}
           </span>
           {r.match_mode && (
@@ -308,9 +320,9 @@ function GraphResultsList({ results }: { results: GraphResult[] }) {
     <div className="space-y-0.5">
       {results.map((r, i) => (
         <div key={i} className="text-[10px]">
-          <span className="font-mono font-medium">{r.symbol}</span>
+          <span className="font-medium">{r.symbol}</span>
           <span className="text-muted-foreground"> → {r.relationship} </span>
-          <span className="font-mono text-muted-foreground/70">{r.file_path}</span>
+          <span className="text-muted-foreground/70">{r.file_path}</span>
         </div>
       ))}
     </div>

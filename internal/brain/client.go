@@ -2,6 +2,7 @@ package brain
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -34,12 +35,36 @@ type ObsidianClient struct {
 // NewObsidianClient constructs an ObsidianClient targeting the given base URL
 // (e.g. "http://localhost:27124") with the provided API key.
 func NewObsidianClient(baseURL string, apiKey string) *ObsidianClient {
+	trimmed := strings.TrimRight(baseURL, "/")
 	return &ObsidianClient{
-		baseURL: strings.TrimRight(baseURL, "/"),
+		baseURL: trimmed,
 		apiKey:  apiKey,
 		httpClient: &http.Client{
-			Timeout: defaultTimeout,
+			Timeout:   defaultTimeout,
+			Transport: newTransportForBaseURL(trimmed),
 		},
+	}
+}
+
+func newTransportForBaseURL(baseURL string) http.RoundTripper {
+	parsed, err := url.Parse(baseURL)
+	if err != nil {
+		return http.DefaultTransport
+	}
+	if parsed.Scheme == "https" && isLocalhostHost(parsed.Hostname()) {
+		return &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		}
+	}
+	return http.DefaultTransport
+}
+
+func isLocalhostHost(host string) bool {
+	switch strings.ToLower(host) {
+	case "localhost", "127.0.0.1", "::1":
+		return true
+	default:
+		return false
 	}
 }
 

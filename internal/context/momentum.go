@@ -179,6 +179,6 @@ func stringsSplitNonEmpty(value string, sep string) []string {
 	return result
 }
 
-func stringsJoin(parts []string, sep string) string {
+func stringsJoin(parts []string, _ string) string {
 	return path.Clean(path.Join(parts...))
 }
