@@ -13,12 +13,12 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "notes/hello.md",
+                "file": "Frontend Design System - augmented-ui Integration.md",
                 "mode": "source",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "hello"
+              "title": "Frontend Design System - augmented-ui Integration"
             }
           }
         ]
@@ -185,14 +185,14 @@
   },
   "active": "bf882d8b14c93249",
   "lastOpenFiles": [
-    "notes/curl-smoke.md",
+    "brain-viewer.md",
+    "brain-mcp-migration.md",
     "notes/hello.md",
+    "notes/curl-smoke.md",
     "notes",
     "test-note.md",
     "Frontend Design System - augmented-ui Integration.md",
-    "brain-viewer.md",
     "Unconfirmed 241112.crdownload",
-    "brain-mcp-migration.md",
     "Unconfirmed 119482.crdownload",
     "test-note-2.md",
     "notes/client-smoke.md"
