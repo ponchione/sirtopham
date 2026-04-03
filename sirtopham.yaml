@@ -22,7 +22,6 @@ index:
   include:
     - "**/*.go"
     - "**/*.sql"
-    - "**/*.md"
     - "**/*.ts"
     - "**/*.tsx"
     - "**/*.js"
@@ -45,6 +44,14 @@ index:
     - "**/.next/**"
     - "**/.turbo/**"
     - "**/*.min.js"
+    - "**/docs/**"
+    - "**/specs/**"
+    - "**/design/**"
+    - "**/plans/**"
+    - "**/audit/**"
+    - "**/README.md"
+    - "**/NEXT_SESSION_HANDOFF.md"
+    - "**/TECH-DEBT.md"
 
 brain:
   enabled: true

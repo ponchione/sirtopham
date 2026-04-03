@@ -89,6 +89,37 @@ func TestUnmarshalStrings(t *testing.T) {
 	}
 }
 
+func TestSimilarityFromDistance(t *testing.T) {
+	cases := []struct {
+		name     string
+		distance float64
+		want     float64
+	}{
+		{name: "zero distance", distance: 0, want: 1},
+		{name: "unit distance", distance: 1, want: 0.5},
+		{name: "large distance stays positive", distance: 1.3234, want: 1 / 2.3234},
+		{name: "negative distance clamps", distance: -5, want: 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := similarityFromDistance(tc.distance)
+			if got != tc.want {
+				t.Fatalf("similarityFromDistance(%v) = %v, want %v", tc.distance, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRowToChunkConvertsDistanceToBoundedSimilarity(t *testing.T) {
+	_, score := rowToChunk(map[string]any{"_distance": 1.3234})
+	if score <= 0.35 {
+		t.Fatalf("score = %v, want > 0.35 so relevant hits survive default threshold", score)
+	}
+	if score >= 1 {
+		t.Fatalf("score = %v, want < 1 for non-zero distance", score)
+	}
+}
+
 func TestNewStore_And_RoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()
