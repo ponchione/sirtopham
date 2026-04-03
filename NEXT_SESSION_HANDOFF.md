@@ -3,7 +3,7 @@
 Date: 2026-04-03
 Repo: /home/gernsback/source/sirtopham
 Branch: main
-State: working tree dirty; proactive code retrieval was fixed and validated on a smaller external repo; nothing pushed
+State: working tree mostly clean; proactive code retrieval fix is committed and Codex non-interactive refresh hardening is committed; nothing pushed
 
 ## What was completed today
 
@@ -69,11 +69,23 @@ State: working tree dirty; proactive code retrieval was fixed and validated on a
      - question: `Trace how document titles are managed across pages, including any shared hook and where different pages set their titles.`
      - context report showed proactive RAG with no reactive search tool use
 
+8. Hardened Codex non-interactive credential refresh behavior
+   - Inspected `internal/provider/codex/credentials.go` and compared the runtime policy against the local Hermes Agent reference
+   - Confirmed the live `~/.codex/auth.json` shape includes nested `tokens.{access_token,refresh_token,...}` and `last_refresh`
+   - Added a non-interactive guard before shelling out to `codex refresh`
+   - New behavior: if the auth file is missing/expired in a non-TTY runtime, the provider now returns an actionable error telling the operator to run `codex auth` or `codex refresh` manually in a terminal instead of surfacing raw `stdin is not a terminal`
+   - Added focused Codex provider tests proving:
+     - refresh still works in interactive mode
+     - refresh is skipped entirely in non-interactive mode
+     - expired-token `getAccessToken()` paths do not shell out when there is no TTY
+
 ## Validation run today
 
 Passed:
 - `go test ./internal/codeintel/...`
 - `CGO_ENABLED=1 CGO_LDFLAGS='-L/home/gernsback/source/sirtopham/lib/linux_amd64 -llancedb_go -lm -ldl -lpthread' LD_LIBRARY_PATH='/home/gernsback/source/sirtopham/lib/linux_amd64' go test -tags sqlite_fts5 ./internal/vectorstore ./internal/context`
+- `go test ./internal/provider/codex`
+- `go test ./internal/provider/...`
 - `make build`
 
 Successful runtime validations:
@@ -96,70 +108,49 @@ Representative successful context report facts after the score fix:
 
 ## Current remaining issue
 
-The next real blocker is no longer indexing or proactive retrieval.
+The next real blocker is narrower now.
 
 Current blocker:
-- Codex auth refresh is still brittle in non-interactive runtime paths
-- A final live validation turn failed with:
-  - `codex: Codex credential refresh failed (exit 1): Error: stdin is not a terminal`
-- This appears to be a separate provider/auth-runtime issue from retrieval
+- The raw non-interactive `stdin is not a terminal` failure path is hardened in unit-tested provider code, but it has not yet been re-validated end-to-end through a live server turn after forcing the stale-token path
+- So the remaining work is runtime confirmation, not first-principles provider debugging
 
 Important nuance:
-- The error did NOT invalidate the retrieval fix; subsequent live validations already proved proactive RAG works
-- But it is now the most obvious remaining practical runtime reliability problem for same-day use
+- The retrieval fix remains validated and committed
+- The Codex provider slice now fails more cleanly in non-interactive contexts, but the next session should confirm the real UX in the running app
 
 ## Most likely next session focus
 
-Investigate and harden Codex runtime credential refresh so non-interactive server turns do not fail when refresh is attempted.
+Re-validate Codex auth behavior end-to-end with the existing `my-website` smoke setup.
 
 ### Strong hypotheses to test first
 
-1. `internal/provider/codex/credentials.go` still shells out to `codex refresh` too eagerly
-   - Current logic in `getAccessToken()`:
-     - first tries `readAuthFile()`
-     - if file read/token validity check fails, immediately calls `refreshToken(ctx)`
-   - If the auth file contains a usable token shape but expiry handling is too strict or parsing is off, this can force an unnecessary CLI refresh in a non-interactive server process
+1. The new non-TTY guard may already be enough
+   - If a live turn reaches the expired-token path, the app should now surface an actionable provider error telling the operator to refresh/login in a real terminal
+   - The raw CLI `stdin is not a terminal` text should no longer leak through
 
-2. `refreshToken()` is not guarding against non-interactive execution
-   - Current implementation shells out to:
-     - `codex refresh`
-   - When the CLI decides it needs interactive behavior, the provider returns the raw failure
-   - We probably need a stronger rule: do not attempt interactive refresh in non-interactive server context; fail with a more actionable stale-token error or only use refresh when we know it can succeed unattended
+2. The auth file may still be usable often enough to avoid refresh entirely
+   - Current `readAuthFile()` already accepts both top-level `access_token` and nested `tokens.access_token`
+   - The real local `~/.codex/auth.json` shape matches the nested-token case
+   - If the token is still valid, server turns should continue without any refresh attempt
 
-3. There may be a useful comparison path in the local Hermes Agent repo
-   - Available reference repo:
-     - `/home/gernsback/source/hermes-agent`
-   - Useful comparison hints found today:
-     - `run_agent.py` uses `resolve_codex_runtime_credentials(...)` rather than directly shelling out from the request path
-     - Hermes already has Codex runtime credential handling logic worth inspecting before changing Sirtopham's provider flow
-   - Start by checking how Hermes decides when to reuse auth-file state vs when to refresh, and whether it explicitly avoids interactive CLI refresh in server-like paths
+3. If live validation still feels brittle, the next follow-up is policy, not endpoint shape
+   - The next likely improvement would be more nuanced refresh policy or expiry-skew handling in `getAccessToken()`, not a return to retrieval or vectorstore work
 
 ## Recommended next session
 
-1. Inspect `internal/provider/codex/credentials.go`
-   - Focus on:
-     - `getAccessToken()`
-     - `readAuthFile()`
-     - `refreshToken()`
-   - Reproduce the failing path with a focused test first if practical
-
-2. Compare against Hermes Agent local reference
-   - Repo:
-     - `/home/gernsback/source/hermes-agent`
-   - Start around:
-     - `run_agent.py` Codex runtime credential refresh path (`resolve_codex_runtime_credentials` call sites)
-   - Goal: understand the runtime credential policy Hermes uses for ChatGPT Codex OAuth in non-interactive execution
-
-3. Implement the narrowest viable hardening
-   - Prefer:
-     - use valid token from `~/.codex/auth.json` whenever present and not truly expired
-     - avoid shelling out to `codex refresh` in non-interactive server turns unless there is strong evidence it can succeed unattended
-   - If needed, add a clearer provider error that explains refresh requires interactive auth renewal outside the app
-
-4. Re-validate with the same `my-website` smoke config
+1. Run a live smoke validation with the same smaller repo config
    - `./bin/sirtopham serve --config /tmp/sirtopham-smoke.yaml`
-   - Ask at least one fresh question after forcing the provider path that previously tripped refresh
-   - Confirm the turn does not fail with `stdin is not a terminal`
+   - Ask at least one fresh question against `/home/gernsback/source/my-website`
+
+2. Force or observe the stale-token path if practical
+   - Confirm the app now reports the actionable non-interactive renewal error instead of raw `stdin is not a terminal`
+   - If the local auth token is still valid and refresh is skipped, note that result explicitly
+
+3. Only if the live UX is still poor, tighten policy in `internal/provider/codex/credentials.go`
+   - Candidate follow-up areas:
+     - refresh skew / expiry thresholds
+     - richer provider error wording in the server/UI path
+     - any callsites that may be swallowing or rewriting the new provider error
 
 ## Useful commands
 
@@ -181,12 +172,11 @@ Investigate and harden Codex runtime credential refresh so non-interactive serve
 
 ## Current git state to expect
 
-Tracked modifications at end of session:
-- `internal/vectorstore/store.go`
-- `internal/vectorstore/store_test.go`
-- `sirtopham.yaml`
+Committed this session:
+- `cfb3a95 feat(index): calibrate retrieval scoring`
+- `955c487 feat(provider): harden codex noninteractive refresh`
 
-Untracked:
+Likely remaining untracked:
 - `tmp/`
   - contains temporary debug helpers created during investigation
   - cleanup was not completed because a direct `rm` attempt was blocked by the environment safety layer
