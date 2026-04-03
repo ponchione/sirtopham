@@ -123,7 +123,7 @@ func (s *Store) Upsert(ctx context.Context, chunks []codeintel.Chunk) error {
 	return nil
 }
 
-// VectorSearch performs cosine similarity search against stored embeddings.
+// VectorSearch performs vector similarity search against stored embeddings.
 func (s *Store) VectorSearch(ctx context.Context, queryEmbedding []float32, topK int, filter codeintel.Filter) ([]codeintel.SearchResult, error) {
 	filterStr := buildFilterString(filter)
 
@@ -346,13 +346,20 @@ func rowToChunk(row map[string]any) (codeintel.Chunk, float64) {
 	if v, ok := row["_distance"]; ok {
 		switch d := v.(type) {
 		case float32:
-			score = 1.0 - float64(d)
+			score = similarityFromDistance(float64(d))
 		case float64:
-			score = 1.0 - d
+			score = similarityFromDistance(d)
 		}
 	}
 
 	return c, score
+}
+
+func similarityFromDistance(distance float64) float64 {
+	if distance < 0 {
+		distance = 0
+	}
+	return 1.0 / (1.0 + distance)
 }
 
 func mapStr(m map[string]any, key string) string {
