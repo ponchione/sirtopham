@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -28,6 +30,18 @@ func overrideStdinIsTerminal(t *testing.T, v bool) {
 	orig := stdinIsTerminal
 	stdinIsTerminal = func() bool { return v }
 	t.Cleanup(func() { stdinIsTerminal = orig })
+}
+
+func overrideCodexRefreshEndpoint(t *testing.T, clientID, tokenURL string) {
+	t.Helper()
+	origClientID := codexOAuthClientID
+	origTokenURL := codexOAuthTokenURL
+	codexOAuthClientID = clientID
+	codexOAuthTokenURL = tokenURL
+	t.Cleanup(func() {
+		codexOAuthClientID = origClientID
+		codexOAuthTokenURL = origTokenURL
+	})
 }
 
 func writeAuthFile(t *testing.T, dir, content string) {
@@ -191,30 +205,45 @@ func TestGetAccessToken_ExpiredCachedTokenUsesStillValidAuthFileWithoutRefresh(t
 	}
 }
 
-func TestGetAccessToken_ExpiredTokenTriggersRefresh(t *testing.T) {
-	// Set up a token that is within the 120-second buffer (60s left)
+func TestGetAccessToken_ExpiredTokenTriggersDirectRefreshWithoutShellingOut(t *testing.T) {
 	tmpDir := t.TempDir()
 	overrideHomeDir(t, tmpDir)
-	overrideStdinIsTerminal(t, true)
+	overrideStdinIsTerminal(t, false)
+	expired := time.Now().Add(-1 * time.Hour).UTC().Format(time.RFC3339)
+	writeAuthFile(t, tmpDir, `{"auth_mode":"chatgpt","expires_at":"`+expired+`","tokens":{"access_token":"expired_token","refresh_token":"refresh_token"}}`)
+	marker := filepath.Join(tmpDir, "refresh-ran")
+	mockBin := createMockScript(t, tmpDir, "#!/bin/sh\ntouch \""+marker+"\"\nexit 0\n")
 
-	// Write a valid auth file so readAuthFile succeeds after "refresh"
-	writeAuthFile(t, tmpDir, `{"access_token": "new_token", "expires_at": "2027-01-01T00:00:00Z"}`)
+	refreshedToken := testJWT(t, time.Now().Add(1*time.Hour).UTC())
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			t.Fatalf("ParseForm: %v", err)
+		}
+		if got := r.Form.Get("grant_type"); got != "refresh_token" {
+			t.Fatalf("grant_type = %q", got)
+		}
+		if got := r.Form.Get("refresh_token"); got != "refresh_token" {
+			t.Fatalf("refresh_token = %q", got)
+		}
+		if got := r.Form.Get("client_id"); got != "test-client-id" {
+			t.Fatalf("client_id = %q", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"access_token":"` + refreshedToken + `","refresh_token":"new_refresh_token"}`))
+	}))
+	defer server.Close()
+	overrideCodexRefreshEndpoint(t, "test-client-id", server.URL)
 
-	// Create a mock script that exits 0 (simulating successful refresh)
-	mockBin := createMockScript(t, tmpDir, "#!/bin/sh\nexit 0\n")
-
-	p := &CodexProvider{
-		cachedToken:  "old_tok",
-		tokenExpiry:  time.Now().Add(60 * time.Second), // within 120s buffer
-		codexBinPath: mockBin,
-	}
-
+	p := &CodexProvider{codexBinPath: mockBin}
 	token, err := p.getAccessToken(context.Background())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if token != "new_token" {
-		t.Errorf("expected token %q, got %q", "new_token", token)
+	if token != refreshedToken {
+		t.Fatalf("expected token %q, got %q", refreshedToken, token)
+	}
+	if _, statErr := os.Stat(marker); !os.IsNotExist(statErr) {
+		t.Fatalf("expected no CLI shellout, stat err = %v", statErr)
 	}
 }
 
@@ -238,7 +267,7 @@ func TestGetAccessToken_EmptyTokenTriggersRead(t *testing.T) {
 	}
 }
 
-func TestGetAccessToken_ExpiredTokenInNonInteractiveRuntimeDoesNotShellOut(t *testing.T) {
+func TestGetAccessToken_ExpiredTokenInNonInteractiveRuntimeReturnsActionableErrorWhenNoRefreshToken(t *testing.T) {
 	tmpDir := t.TempDir()
 	overrideHomeDir(t, tmpDir)
 	overrideStdinIsTerminal(t, false)
@@ -256,8 +285,8 @@ func TestGetAccessToken_ExpiredTokenInNonInteractiveRuntimeDoesNotShellOut(t *te
 	if !ok {
 		t.Fatalf("expected *provider.ProviderError, got %T", err)
 	}
-	if !strings.Contains(pe.Message, "no TTY") {
-		t.Fatalf("expected actionable message about non-interactive renewal, got %q", pe.Message)
+	if !strings.Contains(pe.Message, "interactive renewal") && !strings.Contains(pe.Message, "refresh_token") {
+		t.Fatalf("expected actionable message, got %q", pe.Message)
 	}
 	if _, statErr := os.Stat(marker); !os.IsNotExist(statErr) {
 		t.Fatalf("expected refresh command not to run, stat err = %v", statErr)
@@ -278,22 +307,46 @@ func createMockScript(t *testing.T, dir, content string) string {
 
 func TestRefreshToken_Success(t *testing.T) {
 	tmpDir := t.TempDir()
-	overrideStdinIsTerminal(t, true)
-	mockBin := createMockScript(t, tmpDir, "#!/bin/sh\nexit 0\n")
+	overrideHomeDir(t, tmpDir)
+	overrideStdinIsTerminal(t, false)
+	writeAuthFile(t, tmpDir, `{"auth_mode":"chatgpt","tokens":{"access_token":"expired_token","refresh_token":"refresh_token"}}`)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			t.Fatalf("ParseForm: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"access_token":"fresh_access","refresh_token":"fresh_refresh"}`))
+	}))
+	defer server.Close()
+	overrideCodexRefreshEndpoint(t, "test-client-id", server.URL)
 
-	p := &CodexProvider{codexBinPath: mockBin}
+	p := &CodexProvider{}
 	err := p.refreshToken(context.Background())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	data, err := os.ReadFile(filepath.Join(tmpDir, ".codex", "auth.json"))
+	if err != nil {
+		t.Fatalf("read auth file: %v", err)
+	}
+	if !strings.Contains(string(data), "fresh_access") {
+		t.Fatalf("expected refreshed access token to be persisted, got %s", string(data))
+	}
 }
 
-func TestRefreshToken_FailedWithExitCode(t *testing.T) {
+func TestRefreshToken_HTTPFailureReturnsProviderError(t *testing.T) {
 	tmpDir := t.TempDir()
-	overrideStdinIsTerminal(t, true)
-	mockBin := createMockScript(t, tmpDir, "#!/bin/sh\necho 'token expired' >&2\nexit 1\n")
+	overrideHomeDir(t, tmpDir)
+	writeAuthFile(t, tmpDir, `{"auth_mode":"chatgpt","tokens":{"access_token":"expired_token","refresh_token":"refresh_token"}}`)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":"invalid_grant","error_description":"refresh expired"}`))
+	}))
+	defer server.Close()
+	overrideCodexRefreshEndpoint(t, "test-client-id", server.URL)
 
-	p := &CodexProvider{codexBinPath: mockBin}
+	p := &CodexProvider{}
 	err := p.refreshToken(context.Background())
 	if err == nil {
 		t.Fatal("expected error")
@@ -303,21 +356,24 @@ func TestRefreshToken_FailedWithExitCode(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected *provider.ProviderError, got %T", err)
 	}
-	if !strings.Contains(pe.Message, "Codex credential refresh failed (exit 1)") {
-		t.Errorf("expected message containing exit code, got %q", pe.Message)
-	}
-	if !strings.Contains(pe.Message, "token expired") {
-		t.Errorf("expected message containing stderr, got %q", pe.Message)
+	if !strings.Contains(pe.Message, "refresh expired") {
+		t.Errorf("expected message containing refresh error, got %q", pe.Message)
 	}
 }
 
 func TestRefreshToken_Timeout(t *testing.T) {
 	tmpDir := t.TempDir()
-	overrideStdinIsTerminal(t, true)
-	mockBin := createMockScript(t, tmpDir, "#!/bin/sh\nsleep 60\n")
+	overrideHomeDir(t, tmpDir)
+	writeAuthFile(t, tmpDir, `{"auth_mode":"chatgpt","tokens":{"access_token":"expired_token","refresh_token":"refresh_token"}}`)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(2 * time.Second)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"access_token":"late_token"}`))
+	}))
+	defer server.Close()
+	overrideCodexRefreshEndpoint(t, "test-client-id", server.URL)
 
-	p := &CodexProvider{codexBinPath: mockBin}
-
+	p := &CodexProvider{}
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
 
@@ -330,19 +386,17 @@ func TestRefreshToken_Timeout(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected *provider.ProviderError, got %T", err)
 	}
-	// The error should indicate a timeout
-	if !strings.Contains(pe.Message, "timed out") && !strings.Contains(pe.Message, "refresh failed") {
+	if !strings.Contains(pe.Message, "timed out") && !strings.Contains(pe.Message, "refresh") {
 		t.Errorf("expected timeout-related message, got %q", pe.Message)
 	}
 }
 
-func TestRefreshToken_NonInteractiveReturnsActionableErrorWithoutShellingOut(t *testing.T) {
+func TestRefreshToken_MissingRefreshTokenReturnsActionableError(t *testing.T) {
 	tmpDir := t.TempDir()
-	overrideStdinIsTerminal(t, false)
-	marker := filepath.Join(tmpDir, "refresh-ran")
-	mockBin := createMockScript(t, tmpDir, "#!/bin/sh\ntouch \""+marker+"\"\nexit 0\n")
+	overrideHomeDir(t, tmpDir)
+	writeAuthFile(t, tmpDir, `{"auth_mode":"chatgpt","tokens":{"access_token":"expired_token"}}`)
 
-	p := &CodexProvider{codexBinPath: mockBin}
+	p := &CodexProvider{}
 	err := p.refreshToken(context.Background())
 	if err == nil {
 		t.Fatal("expected error")
@@ -352,10 +406,7 @@ func TestRefreshToken_NonInteractiveReturnsActionableErrorWithoutShellingOut(t *
 	if !ok {
 		t.Fatalf("expected *provider.ProviderError, got %T", err)
 	}
-	if !strings.Contains(pe.Message, "interactive renewal") {
-		t.Fatalf("expected actionable non-interactive message, got %q", pe.Message)
-	}
-	if _, statErr := os.Stat(marker); !os.IsNotExist(statErr) {
-		t.Fatalf("expected refresh command not to run, stat err = %v", statErr)
+	if !strings.Contains(pe.Message, "refresh_token") {
+		t.Fatalf("expected actionable missing refresh token message, got %q", pe.Message)
 	}
 }
