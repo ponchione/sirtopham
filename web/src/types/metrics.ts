@@ -114,6 +114,7 @@ export interface ProviderStatus {
 export interface ProviderModel {
   id: string;
   name: string;
+  provider?: string;
   context_window: number;
   supports_tools: boolean;
   supports_thinking: boolean;
@@ -124,8 +125,6 @@ export interface ProviderModel {
 export interface AppConfig {
   default_provider: string;
   default_model: string;
-  fallback_provider: string;
-  fallback_model: string;
   agent: {
     max_iterations: number;
     extended_thinking: boolean;

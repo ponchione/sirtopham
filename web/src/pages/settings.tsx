@@ -111,13 +111,6 @@ export function SettingsPage() {
                   {config.default_provider}/{config.default_model}
                 </span>
               </div>
-              <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                <span>Fallback:</span>
-                <span>
-                  {config.fallback_provider}/{config.fallback_model}
-                </span>
-              </div>
-
               {/* Model selector */}
               {providers.length > 0 && (
                 <div className="space-y-1">

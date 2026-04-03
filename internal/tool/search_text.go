@@ -167,7 +167,7 @@ func (SearchText) Execute(ctx context.Context, projectRoot string, input json.Ra
 	}
 
 	// Parse JSON output and format.
-	formatted := formatRipgrepJSON(stdout.Bytes(), params.Pattern)
+	formatted := formatRipgrepJSON(stdout.Bytes(), params.Pattern, maxResults)
 	return &ToolResult{
 		Success: true,
 		Content: formatted,
@@ -208,12 +208,13 @@ type rgSubmatch struct {
 }
 
 // formatRipgrepJSON parses rg --json output into human-readable format.
-func formatRipgrepJSON(data []byte, pattern string) string {
+func formatRipgrepJSON(data []byte, pattern string, maxResults int) string {
 	lines := bytes.Split(data, []byte("\n"))
 
 	var sb strings.Builder
 	currentFile := ""
 	matchCount := 0
+	printedCurrentFileHeader := false
 
 	for _, line := range lines {
 		if len(line) == 0 {
@@ -227,6 +228,9 @@ func formatRipgrepJSON(data []byte, pattern string) string {
 
 		switch msg.Type {
 		case "match":
+			if maxResults > 0 && matchCount >= maxResults {
+				continue
+			}
 			var m rgMatch
 			if json.Unmarshal(msg.Data, &m) != nil {
 				continue
@@ -237,6 +241,10 @@ func formatRipgrepJSON(data []byte, pattern string) string {
 					sb.WriteString("\n")
 				}
 				currentFile = m.Path.Text
+				printedCurrentFileHeader = true
+				sb.WriteString(fmt.Sprintf("%s\n", currentFile))
+			} else if !printedCurrentFileHeader {
+				printedCurrentFileHeader = true
 				sb.WriteString(fmt.Sprintf("%s\n", currentFile))
 			}
 			matchCount++
@@ -244,6 +252,9 @@ func formatRipgrepJSON(data []byte, pattern string) string {
 			sb.WriteString(fmt.Sprintf("> %4d  %s\n", m.LineNumber, text))
 
 		case "context":
+			if maxResults > 0 && matchCount >= maxResults {
+				continue
+			}
 			var c rgContext
 			if json.Unmarshal(msg.Data, &c) != nil {
 				continue
@@ -253,6 +264,10 @@ func formatRipgrepJSON(data []byte, pattern string) string {
 					sb.WriteString("\n")
 				}
 				currentFile = c.Path.Text
+				printedCurrentFileHeader = true
+				sb.WriteString(fmt.Sprintf("%s\n", currentFile))
+			} else if !printedCurrentFileHeader {
+				printedCurrentFileHeader = true
 				sb.WriteString(fmt.Sprintf("%s\n", currentFile))
 			}
 			text := strings.TrimRight(c.Lines.Text, "\n\r")

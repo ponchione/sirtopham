@@ -2,6 +2,8 @@
 
 **Status:** Draft v0.1 **Last Updated:** 2026-03-28 **Author:** Mitchell
 
+Note: portions of this draft still describe the pre-MCP Obsidian Local REST design. The implemented runtime has since moved to an MCP-backed vault backend; treat REST-specific details here as historical planning context, not the current supported path.
+
 ---
 
 ## Overview

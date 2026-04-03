@@ -2,6 +2,7 @@ package router
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -11,8 +12,7 @@ import (
 
 func TestIntegration_FullLifecycle(t *testing.T) {
 	cfg := RouterConfig{
-		Default:  RouteTarget{Provider: "anthropic", Model: "claude-sonnet-4-6"},
-		Fallback: &RouteTarget{Provider: "local", Model: "qwen2.5-coder-7b"},
+		Default: RouteTarget{Provider: "anthropic", Model: "claude-sonnet-4-6"},
 	}
 	r, err := NewRouter(cfg, nil, nil)
 	if err != nil {
@@ -24,34 +24,28 @@ func TestIntegration_FullLifecycle(t *testing.T) {
 		name:         "anthropic",
 		completeResp: anthropicResp,
 	}
-	localResp := &provider.Response{Model: "qwen2.5-coder-7b"}
-	localMock := &mockProvider{
-		name:         "local",
-		completeResp: localResp,
-	}
 
 	_ = r.RegisterProvider(anthropicMock)
-	_ = r.RegisterProvider(localMock)
 
-	// Step 5: Complete routes to anthropic.
+	// Step 1: Complete routes to anthropic.
 	resp, err := r.Complete(context.Background(), &provider.Request{})
 	if err != nil {
-		t.Fatalf("step 5: unexpected error: %v", err)
+		t.Fatalf("step 1: unexpected error: %v", err)
 	}
 	if resp != anthropicResp {
-		t.Fatal("step 5: expected anthropic response")
+		t.Fatal("step 1: expected anthropic response")
 	}
 
-	// Step 6: Health check.
+	// Step 2: Health check.
 	health := r.ProviderHealthMap()
 	if !health["anthropic"].Healthy {
-		t.Fatal("step 6: expected anthropic healthy")
+		t.Fatal("step 2: expected anthropic healthy")
 	}
 	if health["anthropic"].LastSuccessAt.IsZero() {
-		t.Fatal("step 6: expected LastSuccessAt set")
+		t.Fatal("step 2: expected LastSuccessAt set")
 	}
 
-	// Step 7: Reconfigure anthropic to fail with retriable error.
+	// Step 3: Reconfigure anthropic to fail with retriable error.
 	anthropicMock.mu.Lock()
 	anthropicMock.completeResp = nil
 	anthropicMock.completeErr = &provider.ProviderError{
@@ -62,55 +56,46 @@ func TestIntegration_FullLifecycle(t *testing.T) {
 	}
 	anthropicMock.mu.Unlock()
 
-	// Step 8: Complete falls back to local.
-	resp, err = r.Complete(context.Background(), &provider.Request{})
-	if err != nil {
-		t.Fatalf("step 8: unexpected error: %v", err)
-	}
-	if resp != localResp {
-		t.Fatal("step 8: expected local response from fallback")
+	// Step 4: Complete returns error directly — no fallback.
+	_, err = r.Complete(context.Background(), &provider.Request{})
+	if err == nil {
+		t.Fatal("step 4: expected error from failed provider")
 	}
 
-	// Step 9: Anthropic should be unhealthy.
+	// Step 5: Anthropic should be unhealthy.
 	health = r.ProviderHealthMap()
 	if health["anthropic"].Healthy {
-		t.Fatal("step 9: expected anthropic unhealthy")
+		t.Fatal("step 5: expected anthropic unhealthy")
 	}
 	if health["anthropic"].LastError == nil {
-		t.Fatal("step 9: expected LastError set")
+		t.Fatal("step 5: expected LastError set")
 	}
 
-	// Step 10: Local should be healthy.
-	if !health["local"].Healthy {
-		t.Fatal("step 10: expected local healthy")
-	}
-
-	// Step 11: Reconfigure anthropic back to healthy.
+	// Step 6: Reconfigure anthropic back to healthy.
 	anthropicMock.mu.Lock()
 	anthropicMock.completeResp = anthropicResp
 	anthropicMock.completeErr = nil
 	anthropicMock.mu.Unlock()
 
-	// Step 12: Complete routes to anthropic again (always tries default first).
+	// Step 7: Complete routes to anthropic again.
 	resp, err = r.Complete(context.Background(), &provider.Request{})
 	if err != nil {
-		t.Fatalf("step 12: unexpected error: %v", err)
+		t.Fatalf("step 7: unexpected error: %v", err)
 	}
 	if resp != anthropicResp {
-		t.Fatal("step 12: expected anthropic response")
+		t.Fatal("step 7: expected anthropic response")
 	}
 
-	// Step 13: Anthropic should be healthy again.
+	// Step 8: Anthropic should be healthy again.
 	health = r.ProviderHealthMap()
 	if !health["anthropic"].Healthy {
-		t.Fatal("step 13: expected anthropic healthy")
+		t.Fatal("step 8: expected anthropic healthy")
 	}
 }
 
-func TestIntegration_PerRequestOverrideWithFallback(t *testing.T) {
+func TestIntegration_PerRequestOverride(t *testing.T) {
 	cfg := RouterConfig{
-		Default:  RouteTarget{Provider: "anthropic", Model: "claude-sonnet-4-6"},
-		Fallback: &RouteTarget{Provider: "local", Model: "qwen2.5-coder-7b"},
+		Default: RouteTarget{Provider: "anthropic", Model: "claude-sonnet-4-6"},
 	}
 	r, _ := NewRouter(cfg, nil, nil)
 
@@ -129,48 +114,44 @@ func TestIntegration_PerRequestOverrideWithFallback(t *testing.T) {
 	_ = r.RegisterProvider(anthropicMock)
 	_ = r.RegisterProvider(localMock)
 
-	// Step 3: Override routes to local directly.
+	// Override routes to local directly.
 	req := &provider.Request{Model: "qwen2.5-coder-7b"}
 	resp, err := r.Complete(context.Background(), req)
 	if err != nil {
-		t.Fatalf("step 3: unexpected error: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
 	if resp != localResp {
-		t.Fatal("step 3: expected local response from override")
+		t.Fatal("expected local response from override")
 	}
 	if anthropicMock.getCompleteCalls() != 0 {
-		t.Fatal("step 3: anthropic should not have been called")
+		t.Fatal("anthropic should not have been called")
 	}
 
-	// Step 4: Configure local to fail with retriable error.
-	retriableErr := &provider.ProviderError{
+	// Configure local to fail — error returned directly, no fallback.
+	localMock.mu.Lock()
+	localMock.completeResp = nil
+	localMock.completeErr = &provider.ProviderError{
 		Provider:   "local",
 		StatusCode: 503,
 		Message:    "service unavailable",
 		Retriable:  true,
 	}
-	localMock.mu.Lock()
-	localMock.completeResp = nil
-	localMock.completeErr = retriableErr
-	localMock.completeCalls = 0 // Reset counter for this phase.
+	localMock.completeCalls = 0
 	localMock.mu.Unlock()
 
-	// Step 5: Override routes to local (fails), falls back to configured fallback (also local).
 	req = &provider.Request{Model: "qwen2.5-coder-7b"}
 	_, err = r.Complete(context.Background(), req)
-	// Both the override attempt and the fallback attempt go to "local", both fail.
 	if err == nil {
-		t.Fatal("step 5: expected error when both override and fallback fail")
+		t.Fatal("expected error when override provider fails")
 	}
-	if localMock.getCompleteCalls() != 2 {
-		t.Fatalf("step 5: expected 2 local calls (override + fallback), got %d", localMock.getCompleteCalls())
+	if localMock.getCompleteCalls() != 1 {
+		t.Fatalf("expected 1 local call, got %d", localMock.getCompleteCalls())
 	}
 }
 
 func TestIntegration_AuthErrorSurfacesImmediately(t *testing.T) {
 	cfg := RouterConfig{
-		Default:  RouteTarget{Provider: "anthropic", Model: "claude-sonnet-4-6"},
-		Fallback: &RouteTarget{Provider: "local", Model: "qwen2.5-coder-7b"},
+		Default: RouteTarget{Provider: "anthropic", Model: "claude-sonnet-4-6"},
 	}
 	r, _ := NewRouter(cfg, nil, nil)
 
@@ -183,15 +164,10 @@ func TestIntegration_AuthErrorSurfacesImmediately(t *testing.T) {
 			Retriable:  false,
 		},
 	}
-	localMock := &mockProvider{
-		name:         "local",
-		completeResp: &provider.Response{Model: "qwen2.5-coder-7b"},
-	}
 
 	_ = r.RegisterProvider(anthropicMock)
-	_ = r.RegisterProvider(localMock)
 
-	// Step 3: First call.
+	// First call — auth error surfaces immediately.
 	_, err := r.Complete(context.Background(), &provider.Request{})
 	if err == nil {
 		t.Fatal("expected auth error")
@@ -204,18 +180,13 @@ func TestIntegration_AuthErrorSurfacesImmediately(t *testing.T) {
 		t.Fatalf("missing remediation message: %s", errMsg)
 	}
 
-	// Step 4: Local never called.
-	if localMock.getCompleteCalls() != 0 {
-		t.Fatal("local should not have been called")
-	}
-
-	// Step 5: Anthropic should be unhealthy.
+	// Anthropic should be unhealthy.
 	health := r.ProviderHealthMap()
 	if health["anthropic"].Healthy {
 		t.Fatal("expected anthropic unhealthy")
 	}
 
-	// Step 6: Second call, same auth error.
+	// Second call, same auth error.
 	_, err = r.Complete(context.Background(), &provider.Request{})
 	if err == nil {
 		t.Fatal("expected auth error on second call")
@@ -223,116 +194,69 @@ func TestIntegration_AuthErrorSurfacesImmediately(t *testing.T) {
 	if !contains(err.Error(), "authentication failed") {
 		t.Fatalf("unexpected error on second call: %s", err.Error())
 	}
-	if localMock.getCompleteCalls() != 0 {
-		t.Fatal("local should still not have been called")
-	}
 }
 
-func TestIntegration_BothProvidersFail(t *testing.T) {
+func TestIntegration_ProviderFailureReturnsError(t *testing.T) {
 	cfg := RouterConfig{
-		Default:  RouteTarget{Provider: "anthropic", Model: "claude-sonnet-4-6"},
-		Fallback: &RouteTarget{Provider: "local", Model: "qwen2.5-coder-7b"},
+		Default: RouteTarget{Provider: "anthropic", Model: "claude-sonnet-4-6"},
 	}
 	r, _ := NewRouter(cfg, nil, nil)
 
-	anthropicMock := &mockProvider{
-		name: "anthropic",
-		completeErr: &provider.ProviderError{
-			Provider:   "anthropic",
-			StatusCode: 503,
-			Message:    "service unavailable",
-			Retriable:  true,
-		},
-	}
-	localErr := &provider.ProviderError{
-		Provider:   "local",
-		StatusCode: 500,
-		Message:    "internal error",
+	anthropicErr := &provider.ProviderError{
+		Provider:   "anthropic",
+		StatusCode: 503,
+		Message:    "service unavailable",
 		Retriable:  true,
 	}
-	localMock := &mockProvider{
-		name:        "local",
-		completeErr: localErr,
+	anthropicMock := &mockProvider{
+		name:        "anthropic",
+		completeErr: anthropicErr,
 	}
 
 	_ = r.RegisterProvider(anthropicMock)
-	_ = r.RegisterProvider(localMock)
 
-	// Step 3: Returns local's error, not anthropic's.
+	// Error returned directly — no fallback.
 	_, err := r.Complete(context.Background(), &provider.Request{})
-	if err != localErr {
-		t.Fatalf("expected local error, got: %v", err)
+	if err != anthropicErr {
+		t.Fatalf("expected anthropic error returned directly, got: %v", err)
 	}
 
-	// Step 4-5: Both unhealthy.
+	// Provider should be unhealthy.
 	health := r.ProviderHealthMap()
 	if health["anthropic"].Healthy {
 		t.Fatal("expected anthropic unhealthy")
-	}
-	if health["local"].Healthy {
-		t.Fatal("expected local unhealthy")
 	}
 }
 
-func TestIntegration_StreamFallback(t *testing.T) {
+func TestIntegration_StreamErrorReturnsDirectly(t *testing.T) {
 	cfg := RouterConfig{
-		Default:  RouteTarget{Provider: "anthropic", Model: "claude-sonnet-4-6"},
-		Fallback: &RouteTarget{Provider: "local", Model: "qwen2.5-coder-7b"},
+		Default: RouteTarget{Provider: "anthropic", Model: "claude-sonnet-4-6"},
 	}
 	r, _ := NewRouter(cfg, nil, nil)
 
-	anthropicMock := &mockProvider{
-		name: "anthropic",
-		streamErr: &provider.ProviderError{
-			Provider:   "anthropic",
-			StatusCode: 502,
-			Message:    "bad gateway",
-			Retriable:  true,
-		},
+	streamErr := &provider.ProviderError{
+		Provider:   "anthropic",
+		StatusCode: 502,
+		Message:    "bad gateway",
+		Retriable:  true,
 	}
-
-	ch := make(chan provider.StreamEvent, 2)
-	ch <- provider.TokenDelta{Text: "hello"}
-	ch <- provider.StreamDone{StopReason: provider.StopReasonEndTurn}
-	close(ch)
-
-	localMock := &mockProvider{
-		name:     "local",
-		streamCh: ch,
+	anthropicMock := &mockProvider{
+		name:      "anthropic",
+		streamErr: streamErr,
 	}
 
 	_ = r.RegisterProvider(anthropicMock)
-	_ = r.RegisterProvider(localMock)
 
-	// Step 3: Stream falls back to local.
-	got, err := r.Stream(context.Background(), &provider.Request{})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	// Error returned directly — no fallback.
+	_, err := r.Stream(context.Background(), &provider.Request{})
+	if err != streamErr {
+		t.Fatalf("expected stream error returned directly, got: %v", err)
 	}
 
-	// Step 4: Read events.
-	event1 := <-got
-	td, ok := event1.(provider.TokenDelta)
-	if !ok {
-		t.Fatal("expected TokenDelta")
-	}
-	if td.Text != "hello" {
-		t.Fatalf("expected 'hello', got %s", td.Text)
-	}
-
-	event2 := <-got
-	_, ok = event2.(provider.StreamDone)
-	if !ok {
-		t.Fatal("expected StreamDone")
-	}
-
-	// Step 5-6: Health checks.
+	// Health checks.
 	health := r.ProviderHealthMap()
 	if health["anthropic"].Healthy {
 		t.Fatal("expected anthropic unhealthy")
-	}
-	if !health["local"].Healthy {
-		t.Fatal("expected local healthy")
 	}
 }
 
@@ -346,7 +270,7 @@ func TestIntegration_Validate_NoProviders(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for no providers")
 	}
-	if !contains(err.Error(), "no providers configured; add at least one provider to sirtopham.yaml") {
+	if !contains(err.Error(), "no providers configured; add at least one provider to the project's YAML config") {
 		t.Fatalf("unexpected error: %s", err.Error())
 	}
 }
@@ -357,8 +281,11 @@ func TestIntegration_Validate_DefaultProviderUnavailable(t *testing.T) {
 	}
 	r, _ := NewRouter(cfg, nil, nil)
 
-	// Register both providers.
-	anthropicMock := &mockProvider{name: "anthropic"}
+	// Register both providers but anthropic fails.
+	anthropicMock := &mockProvider{
+		name:      "anthropic",
+		modelsErr: fmt.Errorf("unauthorized"),
+	}
 	localMock := &mockProvider{
 		name:   "local",
 		models: []provider.Model{{ID: "local-model"}},
@@ -366,28 +293,13 @@ func TestIntegration_Validate_DefaultProviderUnavailable(t *testing.T) {
 	_ = r.RegisterProvider(anthropicMock)
 	_ = r.RegisterProvider(localMock)
 
-	// Simulate anthropic being unregistered before Validate.
-	r.mu.Lock()
-	delete(r.providers, "anthropic")
-	delete(r.health, "anthropic")
-	r.mu.Unlock()
-
+	// Hard stop — no fallback.
 	err := r.Validate(context.Background())
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if err == nil {
+		t.Fatal("expected hard error when default provider is unavailable")
 	}
-
-	// Default should now point to the remaining provider.
-	r.mu.RLock()
-	defaultProvider := r.config.Default.Provider
-	defaultModel := r.config.Default.Model
-	r.mu.RUnlock()
-
-	if defaultProvider != "local" {
-		t.Fatalf("expected default to be 'local', got '%s'", defaultProvider)
-	}
-	if defaultModel != "local-model" {
-		t.Fatalf("expected default model to be 'local-model', got '%s'", defaultModel)
+	if !contains(err.Error(), "default provider") {
+		t.Fatalf("unexpected error: %s", err.Error())
 	}
 }
 
@@ -444,13 +356,8 @@ func TestIntegration_ConcurrentRequests(t *testing.T) {
 		name:         "anthropic",
 		completeResp: &provider.Response{Model: "claude-sonnet-4-6"},
 	}
-	localMock := &mockProvider{
-		name:         "local",
-		completeResp: &provider.Response{Model: "qwen2.5-coder-7b"},
-	}
 
 	_ = r.RegisterProvider(anthropicMock)
-	_ = r.RegisterProvider(localMock)
 
 	const numGoroutines = 20
 	var wg sync.WaitGroup
@@ -501,10 +408,11 @@ func TestIntegration_ConcurrentRequests_Timing(t *testing.T) {
 	}
 	_ = r.RegisterProvider(anthropicMock)
 
-	start := time.Now()
-	const numGoroutines = 20
+	const numGoroutines = 50
 	var wg sync.WaitGroup
 	wg.Add(numGoroutines)
+
+	start := time.Now()
 
 	for i := 0; i < numGoroutines; i++ {
 		go func() {
@@ -516,8 +424,7 @@ func TestIntegration_ConcurrentRequests_Timing(t *testing.T) {
 	wg.Wait()
 	elapsed := time.Since(start)
 
-	// With no simulated delay, 20 concurrent calls should complete very quickly.
 	if elapsed > 2*time.Second {
-		t.Fatalf("concurrent calls took too long: %v", elapsed)
+		t.Fatalf("concurrent requests took %v, expected < 2s (possible lock contention)", elapsed)
 	}
 }

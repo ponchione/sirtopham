@@ -2,11 +2,12 @@ package indexer
 
 import (
 	"fmt"
-	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ponchione/sirtopham/internal/codeintel"
+	"github.com/ponchione/sirtopham/internal/pathglob"
 )
 
 // langFromExt maps a file extension to the language identifier.
@@ -29,47 +30,17 @@ func langFromExt(ext string) string {
 
 // matchesAnyGlob returns true if relPath matches any of the provided glob patterns.
 func matchesAnyGlob(patterns []string, relPath string) bool {
-	for _, pat := range patterns {
-		if matchesGlob(pat, relPath) {
-			return true
-		}
-	}
-	return false
+	return pathglob.MatchAny(patterns, relPath)
 }
 
 // matchesGlob checks a single glob pattern against a relative path.
 func matchesGlob(pattern, relPath string) bool {
-	// Handle **/ prefix: match any directory depth.
-	if strings.HasPrefix(pattern, "**/") {
-		suffix := pattern[3:]
-		if matched, _ := filepath.Match(suffix, filepath.Base(relPath)); matched {
-			return true
-		}
-		parts := strings.Split(relPath, "/")
-		for i := range parts {
-			sub := strings.Join(parts[i:], "/")
-			if matched, _ := filepath.Match(suffix, sub); matched {
-				return true
-			}
-		}
-		return false
-	}
-
-	// Trailing / means directory prefix match.
-	if trimmed, ok := strings.CutSuffix(pattern, "/"); ok {
-		return strings.HasPrefix(relPath, pattern) || strings.HasPrefix(relPath, trimmed)
-	}
-
-	matched, _ := filepath.Match(pattern, relPath)
-	return matched
+	return pathglob.Match(pattern, relPath)
 }
 
 // newChunk creates a fully populated Chunk from a RawChunk.
 func newChunk(raw codeintel.RawChunk, projectName, filePath, language, description string) codeintel.Chunk {
-	body := raw.Body
-	if len(body) > codeintel.MaxBodyLength {
-		body = body[:codeintel.MaxBodyLength]
-	}
+	body := truncateUTF8(raw.Body, codeintel.MaxBodyLength)
 
 	return codeintel.Chunk{
 		ID:               codeintel.ChunkID(filePath, raw.ChunkType, raw.Name, raw.LineStart),
@@ -94,6 +65,21 @@ func newChunk(raw codeintel.RawChunk, projectName, filePath, language, descripti
 
 // formatRelationshipContext renders chunk relationship metadata as text
 // for the describer's relationshipContext parameter.
+func truncateUTF8(value string, maxBytes int) string {
+	if maxBytes <= 0 || len(value) <= maxBytes {
+		return value
+	}
+	truncated := value[:maxBytes]
+	for len(truncated) > 0 && !utf8.ValidString(truncated) {
+		_, size := utf8.DecodeLastRuneInString(truncated)
+		if size <= 0 {
+			break
+		}
+		truncated = truncated[:len(truncated)-size]
+	}
+	return truncated
+}
+
 func formatRelationshipContext(chunks []codeintel.Chunk) string {
 	if len(chunks) == 0 {
 		return ""

@@ -30,8 +30,7 @@ type RouteTarget struct {
 // RouterConfig holds the routing configuration parsed from the routing section
 // of sirtopham.yaml.
 type RouterConfig struct {
-	Default  RouteTarget  `yaml:"default"`
-	Fallback *RouteTarget `yaml:"fallback"` // nil when no fallback configured
+	Default RouteTarget `yaml:"default"`
 }
 
 // ProviderHealth tracks the health status of a registered provider.
@@ -46,12 +45,13 @@ type ProviderHealth struct {
 // implements provider.Provider so consumers interact with a single interface
 // regardless of which backend is chosen.
 type Router struct {
-	providers map[string]provider.Provider // keyed by provider Name()
-	config    RouterConfig
-	health    map[string]*ProviderHealth
-	mu        sync.RWMutex
-	logger    *slog.Logger
-	store     tracking.SubCallStore
+	providers  map[string]provider.Provider // keyed by provider Name()
+	config     RouterConfig
+	health     map[string]*ProviderHealth
+	mu         sync.RWMutex
+	logger     *slog.Logger
+	store      tracking.SubCallStore
+	modelIndex map[string]string // modelID → provider name; rebuilt on RegisterProvider
 }
 
 // NewRouter creates a Router from the given configuration. The store may be nil
@@ -68,11 +68,12 @@ func NewRouter(config RouterConfig, store tracking.SubCallStore, logger *slog.Lo
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
 	return &Router{
-		providers: make(map[string]provider.Provider),
-		config:    config,
-		health:    make(map[string]*ProviderHealth),
-		logger:    logger,
-		store:     store,
+		providers:  make(map[string]provider.Provider),
+		config:     config,
+		health:     make(map[string]*ProviderHealth),
+		logger:     logger,
+		store:      store,
+		modelIndex: make(map[string]string),
 	}, nil
 }
 
@@ -96,6 +97,14 @@ func (r *Router) RegisterProvider(p provider.Provider) error {
 
 	r.providers[name] = p
 	r.health[name] = &ProviderHealth{Healthy: true}
+
+	// Index this provider's models for fast override resolution.
+	if models, err := p.Models(context.Background()); err == nil {
+		for _, m := range models {
+			r.modelIndex[m.ID] = name
+		}
+	}
+
 	r.logger.Info("provider registered", "provider", name)
 	return nil
 }
@@ -125,7 +134,7 @@ func (r *Router) ProviderHealthMap() map[string]*ProviderHealth {
 }
 
 // Complete routes a completion request to the appropriate provider based on
-// per-request override, default configuration, and fallback logic.
+// per-request override and default configuration.
 func (r *Router) Complete(ctx context.Context, req *provider.Request) (*provider.Response, error) {
 	target, targetName, err := r.resolveTarget(ctx, req)
 	if err != nil {
@@ -142,12 +151,16 @@ func (r *Router) Complete(ctx context.Context, req *provider.Request) (*provider
 
 	r.markFailure(targetName, callErr)
 
-	// Classify the error and decide whether to fall back.
-	return r.handleCompleteError(ctx, req, targetName, callErr)
+	// Wrap auth errors with actionable message.
+	var pe *provider.ProviderError
+	if errors.As(callErr, &pe) && (pe.StatusCode == 401 || pe.StatusCode == 403) {
+		return nil, wrapAuthError(targetName, callErr)
+	}
+	return nil, callErr
 }
 
 // Stream routes a streaming request to the appropriate provider based on
-// per-request override, default configuration, and fallback logic.
+// per-request override and default configuration.
 func (r *Router) Stream(ctx context.Context, req *provider.Request) (<-chan provider.StreamEvent, error) {
 	target, targetName, err := r.resolveTarget(ctx, req)
 	if err != nil {
@@ -164,7 +177,12 @@ func (r *Router) Stream(ctx context.Context, req *provider.Request) (<-chan prov
 
 	r.markFailure(targetName, callErr)
 
-	return r.handleStreamError(ctx, req, targetName, callErr)
+	// Wrap auth errors with actionable message.
+	var pe *provider.ProviderError
+	if errors.As(callErr, &pe) && (pe.StatusCode == 401 || pe.StatusCode == 403) {
+		return nil, wrapAuthError(targetName, callErr)
+	}
+	return nil, callErr
 }
 
 // Models aggregates models from all registered providers. If a provider's
@@ -184,7 +202,12 @@ func (r *Router) Models(ctx context.Context) ([]provider.Model, error) {
 			r.logger.Warn("failed to list models from provider", "provider", name, "error", err)
 			continue
 		}
-		all = append(all, models...)
+		for _, m := range models {
+			if m.Provider == "" {
+				m.Provider = name
+			}
+			all = append(all, m)
+		}
 	}
 	return all, nil
 }
@@ -217,29 +240,21 @@ func (r *Router) resolveTarget(ctx context.Context, req *provider.Request) (prov
 	return p, defaultName, nil
 }
 
-// resolveOverride searches all registered providers for one that offers the
+// resolveOverride searches the model index for a provider that offers the
 // requested model. Returns (nil, nil) if no provider offers the model.
-func (r *Router) resolveOverride(ctx context.Context, modelID string) (provider.Provider, error) {
+func (r *Router) resolveOverride(_ context.Context, modelID string) (provider.Provider, error) {
 	r.mu.RLock()
-	providers := make(map[string]provider.Provider, len(r.providers))
-	for k, v := range r.providers {
-		providers[k] = v
-	}
-	r.mu.RUnlock()
+	defer r.mu.RUnlock()
 
-	for name, p := range providers {
-		models, err := p.Models(ctx)
-		if err != nil {
-			r.logger.Warn("failed to list models for provider", "provider", name, "error", err)
-			continue
-		}
-		for _, m := range models {
-			if m.ID == modelID {
-				return p, nil
-			}
-		}
+	name, ok := r.modelIndex[modelID]
+	if !ok {
+		return nil, nil
 	}
-	return nil, nil
+	p, ok := r.providers[name]
+	if !ok {
+		return nil, nil
+	}
+	return p, nil
 }
 
 // resolvedModel returns the model string that should be set on the request
@@ -266,106 +281,11 @@ func cloneRequestWithModel(req *provider.Request, model string) *provider.Reques
 	return &cloned
 }
 
-// handleCompleteError classifies the error from a Complete call and optionally
-// dispatches a fallback attempt.
-func (r *Router) handleCompleteError(ctx context.Context, req *provider.Request, primaryName string, primaryErr error) (*provider.Response, error) {
-	cls := classifyError(primaryErr)
-
-	// Auth errors: wrap with actionable message, never fall back.
-	if cls == errorClassAuth {
-		return nil, wrapAuthError(primaryName, primaryErr)
-	}
-
-	// Non-retriable or no fallback configured: return original error.
-	if cls != errorClassRetriable || r.config.Fallback == nil {
-		return nil, primaryErr
-	}
-
-	// Attempt fallback.
-	fallbackName := r.config.Fallback.Provider
-	r.logger.Warn("primary provider failed, attempting fallback",
-		"primary_provider", primaryName,
-		"error", primaryErr,
-		"fallback_provider", fallbackName,
-	)
-
-	r.mu.RLock()
-	fbProvider, ok := r.providers[fallbackName]
-	r.mu.RUnlock()
-
-	if !ok {
-		return nil, fmt.Errorf("primary provider failed and fallback provider not available: %s", fallbackName)
-	}
-
-	fallbackReq := cloneRequestWithModel(req, r.config.Fallback.Model)
-	resp, fbErr := fbProvider.Complete(ctx, fallbackReq)
-
-	if fbErr == nil {
-		r.markSuccess(fallbackName)
-		return resp, nil
-	}
-
-	r.markFailure(fallbackName, fbErr)
-	r.logger.Warn("both primary and fallback providers failed",
-		"primary_provider", primaryName,
-		"primary_error", primaryErr,
-		"fallback_provider", fallbackName,
-		"fallback_error", fbErr,
-	)
-	return nil, fbErr
-}
-
-// handleStreamError classifies the error from a Stream call and optionally
-// dispatches a fallback attempt.
-func (r *Router) handleStreamError(ctx context.Context, req *provider.Request, primaryName string, primaryErr error) (<-chan provider.StreamEvent, error) {
-	cls := classifyError(primaryErr)
-
-	if cls == errorClassAuth {
-		return nil, wrapAuthError(primaryName, primaryErr)
-	}
-
-	if cls != errorClassRetriable || r.config.Fallback == nil {
-		return nil, primaryErr
-	}
-
-	fallbackName := r.config.Fallback.Provider
-	r.logger.Warn("primary provider failed, attempting fallback",
-		"primary_provider", primaryName,
-		"error", primaryErr,
-		"fallback_provider", fallbackName,
-	)
-
-	r.mu.RLock()
-	fbProvider, ok := r.providers[fallbackName]
-	r.mu.RUnlock()
-
-	if !ok {
-		return nil, fmt.Errorf("primary provider failed and fallback provider not available: %s", fallbackName)
-	}
-
-	fallbackReq := cloneRequestWithModel(req, r.config.Fallback.Model)
-	ch, fbErr := fbProvider.Stream(ctx, fallbackReq)
-
-	if fbErr == nil {
-		r.markSuccess(fallbackName)
-		return ch, nil
-	}
-
-	r.markFailure(fallbackName, fbErr)
-	r.logger.Warn("both primary and fallback providers failed",
-		"primary_provider", primaryName,
-		"primary_error", primaryErr,
-		"fallback_provider", fallbackName,
-		"fallback_error", fbErr,
-	)
-	return nil, fbErr
-}
-
 // wrapAuthError wraps an error with an actionable authentication failure message.
 func wrapAuthError(providerName string, err error) error {
 	var pe *provider.ProviderError
 	if errors.As(err, &pe) {
-		return fmt.Errorf("authentication failed for provider %s (HTTP %d): %s. Check your API key in sirtopham.yaml or environment variables.", providerName, pe.StatusCode, pe.Message)
+		return fmt.Errorf("authentication failed for provider %s (HTTP %d): %s. Check your API key in the project's YAML config or environment variables.", providerName, pe.StatusCode, pe.Message)
 	}
 	return err
 }

@@ -124,6 +124,29 @@ func TestSearchTextContextLines(t *testing.T) {
 	}
 }
 
+func TestSearchTextMaxResultsIsGlobalAcrossFiles(t *testing.T) {
+	requireRipgrep(t)
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "a.txt"), []byte("target one\ntarget two\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "b.txt"), []byte("target three\ntarget four\n"), 0o644)
+
+	result, err := SearchText{}.Execute(context.Background(), dir,
+		json.RawMessage(`{"pattern":"target","max_results":2,"context_lines":0}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("expected success, got: %s", result.Content)
+	}
+
+	if count := strings.Count(result.Content, "target "); count != 2 {
+		t.Fatalf("expected exactly 2 matches in output, got %d\n%s", count, result.Content)
+	}
+	if strings.Contains(result.Content, "(4 matches)") {
+		t.Fatalf("expected global limit to prevent all matches from being reported, got:\n%s", result.Content)
+	}
+}
+
 func TestSearchTextEmptyPattern(t *testing.T) {
 	dir := t.TempDir()
 	result, err := SearchText{}.Execute(context.Background(), dir,

@@ -27,6 +27,7 @@ DROP TABLE IF EXISTS projects;
 `
 
 // Init recreates the full SQLite schema from scratch.
+// WARNING: This drops all existing tables first. Use InitIfNeeded for idempotent setup.
 func Init(ctx context.Context, db *sql.DB) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -49,4 +50,39 @@ func Init(ctx context.Context, db *sql.DB) error {
 		return fmt.Errorf("commit schema init transaction: %w", err)
 	}
 	return nil
+}
+
+// InitIfNeeded creates the schema only if the core tables do not yet exist.
+// Safe to call repeatedly — returns (true, nil) if schema was created,
+// (false, nil) if it already existed.
+func InitIfNeeded(ctx context.Context, db *sql.DB) (created bool, err error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	var count int
+	err = db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='projects'`,
+	).Scan(&count)
+	if err != nil {
+		return false, fmt.Errorf("check existing schema: %w", err)
+	}
+	if count > 0 {
+		return false, nil
+	}
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("begin schema init transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx, schemaSQL); err != nil {
+		return false, fmt.Errorf("apply schema: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("commit schema init transaction: %w", err)
+	}
+	return true, nil
 }

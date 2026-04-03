@@ -12,6 +12,7 @@ import (
 type Model struct {
 	ID               string `json:"id"`
 	Name             string `json:"name"`
+	Provider         string `json:"provider,omitempty"`
 	ContextWindow    int    `json:"context_window"`
 	SupportsTools    bool   `json:"supports_tools"`
 	SupportsThinking bool   `json:"supports_thinking"`

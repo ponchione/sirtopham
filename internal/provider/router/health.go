@@ -51,7 +51,7 @@ func (r *Router) Validate(ctx context.Context) error {
 	r.mu.RLock()
 	if len(r.providers) == 0 {
 		r.mu.RUnlock()
-		return fmt.Errorf("no providers configured; add at least one provider to sirtopham.yaml")
+		return fmt.Errorf("no providers configured; add at least one provider to the project's YAML config")
 	}
 	snapshot := make(map[string]provider.Provider, len(r.providers))
 	for k, v := range r.providers {
@@ -120,48 +120,8 @@ func (r *Router) Validate(ctx context.Context) error {
 
 	// After all checks, verify the default provider is still registered.
 	if _, ok := r.providers[r.config.Default.Provider]; !ok {
-		r.logger.Error("configured default provider not available, selecting deterministic fallback provider",
-			"configured", r.config.Default.Provider,
-		)
-		fallbackName, fallbackModel, ok := r.startupFallbackProvider()
-		if !ok {
-			return fmt.Errorf("no providers available after startup validation; check provider configuration and connectivity")
-		}
-		if r.config.Fallback != nil && fallbackName == r.config.Fallback.Provider {
-			r.logger.Info("configured default provider unavailable after validation, switching startup default to configured fallback",
-				"configured", r.config.Default.Provider,
-				"fallback", fallbackName,
-			)
-		}
-		r.config.Default.Provider = fallbackName
-		r.config.Default.Model = fallbackModel
+		return fmt.Errorf("default provider %q not available after startup validation; check provider configuration and connectivity", r.config.Default.Provider)
 	}
 
 	return nil
-}
-
-func (r *Router) startupFallbackProvider() (string, string, bool) {
-	if r.config.Fallback != nil {
-		if _, ok := r.providers[r.config.Fallback.Provider]; ok {
-			return r.config.Fallback.Provider, r.config.Fallback.Model, true
-		}
-	}
-
-	providerNames := make([]string, 0, len(r.providers))
-	for name := range r.providers {
-		providerNames = append(providerNames, name)
-	}
-	if len(providerNames) == 0 {
-		return "", "", false
-	}
-
-	slices.Sort(providerNames)
-	for _, name := range providerNames {
-		models, err := r.providers[name].Models(context.Background())
-		if err != nil || len(models) == 0 {
-			continue
-		}
-		return name, models[0].ID, true
-	}
-	return "", "", false
 }

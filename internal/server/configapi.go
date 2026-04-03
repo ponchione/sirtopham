@@ -48,12 +48,10 @@ func NewConfigHandler(s *Server, cfg *config.Config, modelLister ModelLister, lo
 // ── GET /api/config ──────────────────────────────────────────────────
 
 type configResponse struct {
-	DefaultProvider  string         `json:"default_provider"`
-	DefaultModel     string         `json:"default_model"`
-	FallbackProvider string         `json:"fallback_provider"`
-	FallbackModel    string         `json:"fallback_model"`
-	Agent            agentSettings  `json:"agent"`
-	Providers        []providerInfo `json:"providers"`
+	DefaultProvider string         `json:"default_provider"`
+	DefaultModel    string         `json:"default_model"`
+	Agent           agentSettings  `json:"agent"`
+	Providers       []providerInfo `json:"providers"`
 }
 
 type agentSettings struct {
@@ -104,10 +102,8 @@ func (h *ConfigHandler) handleGetConfig(w http.ResponseWriter, r *http.Request) 
 	}
 
 	writeJSON(w, http.StatusOK, configResponse{
-		DefaultProvider:  defaultProvider,
-		DefaultModel:     defaultModel,
-		FallbackProvider: h.cfg.Routing.Fallback.Provider,
-		FallbackModel:    h.cfg.Routing.Fallback.Model,
+		DefaultProvider: defaultProvider,
+		DefaultModel:    defaultModel,
 		Agent: agentSettings{
 			MaxIterations:       h.cfg.Agent.MaxIterationsPerTurn,
 			ExtendedThinking:    h.cfg.Agent.ExtendedThinking,
@@ -124,9 +120,12 @@ func (h *ConfigHandler) buildProviderList(models []provider.Model) []providerInf
 		provModels[name] = []string{}
 	}
 	for _, m := range models {
-		// Models don't inherently carry a provider name, so list them globally
-		// under all providers as available models.
-		for name := range h.providers {
+		name := m.Provider
+		if name == "" {
+			// Fallback: no provider tag — skip to avoid duplicating across all.
+			continue
+		}
+		if _, ok := provModels[name]; ok {
 			provModels[name] = append(provModels[name], m.ID)
 		}
 	}
@@ -184,26 +183,30 @@ type providerStatus struct {
 }
 
 func (h *ConfigHandler) handleProviders(w http.ResponseWriter, r *http.Request) {
-	var result []providerStatus
+	// Build a provider→models map from the aggregated model list.
+	provModels := map[string][]provider.Model{}
+	if h.models != nil {
+		all, err := h.models.Models(r.Context())
+		if err == nil {
+			for _, m := range all {
+				if m.Provider != "" {
+					provModels[m.Provider] = append(provModels[m.Provider], m)
+				}
+			}
+		}
+	}
 
+	var result []providerStatus
 	for name, pc := range h.providers {
 		ps := providerStatus{
 			Name:   name,
 			Type:   pc.Type,
-			Status: "available", // Default — we don't have health checks wired yet.
-			Models: []provider.Model{},
+			Status: "available",
+			Models: provModels[name],
 		}
-
-		// Try to get models from the router.
-		if h.models != nil {
-			models, err := h.models.Models(r.Context())
-			if err != nil {
-				ps.Status = "unavailable"
-			} else {
-				ps.Models = models
-			}
+		if ps.Models == nil {
+			ps.Models = []provider.Model{}
 		}
-
 		result = append(result, ps)
 	}
 

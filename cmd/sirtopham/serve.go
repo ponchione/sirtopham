@@ -17,6 +17,10 @@ import (
 
 	"github.com/ponchione/sirtopham/internal/agent"
 	"github.com/ponchione/sirtopham/internal/brain"
+	"github.com/ponchione/sirtopham/internal/brain/mcpclient"
+	"github.com/ponchione/sirtopham/internal/codeintel/embedder"
+	codesearcher "github.com/ponchione/sirtopham/internal/codeintel/searcher"
+	"github.com/ponchione/sirtopham/internal/codestore"
 	appconfig "github.com/ponchione/sirtopham/internal/config"
 	contextpkg "github.com/ponchione/sirtopham/internal/context"
 	"github.com/ponchione/sirtopham/internal/conversation"
@@ -53,6 +57,18 @@ func newServeCmd(configPath *string) *cobra.Command {
 	cmd.Flags().BoolVar(&devMode, "dev", false, "Enable development mode")
 
 	return cmd
+}
+
+func buildBrainBackend(ctx context.Context, cfg appconfig.BrainConfig, logger *slog.Logger) (brain.Backend, func(), error) {
+	if !cfg.Enabled {
+		return nil, func() {}, nil
+	}
+	client, err := mcpclient.Connect(ctx, cfg.VaultPath)
+	if err != nil {
+		return nil, func() {}, err
+	}
+	logger.Info("brain backend: MCP (in-process)", "vault", cfg.VaultPath)
+	return client, func() { _ = client.Close() }, nil
 }
 
 func runServe(cmd *cobra.Command, configPath string, portOverride int, hostOverride string, devMode bool) error {
@@ -107,12 +123,6 @@ func runServe(cmd *cobra.Command, configPath string, portOverride int, hostOverr
 			Model:    cfg.Routing.Default.Model,
 		},
 	}
-	if cfg.Routing.Fallback.Provider != "" {
-		routerCfg.Fallback = &router.RouteTarget{
-			Provider: cfg.Routing.Fallback.Provider,
-			Model:    cfg.Routing.Fallback.Model,
-		}
-	}
 
 	subCallStore := tracking.NewSQLiteSubCallStore(queries)
 	provRouter, err := router.NewRouter(routerCfg, subCallStore, logger)
@@ -132,7 +142,17 @@ func runServe(cmd *cobra.Command, configPath string, portOverride int, hostOverr
 		logger.Info("registered provider", "name", name, "type", provCfg.Type)
 	}
 
-	// ── 5. Build tool registry + executor ──────────────────────────────
+	// ── 5. Build semantic retrieval runtime ────────────────────────────
+	codeStore, err := codestore.Open(cmd.Context(), cfg.CodeLanceDBPath())
+	if err != nil {
+		return fmt.Errorf("open code vectorstore: %w", err)
+	}
+	defer codeStore.Close()
+	semanticEmbedder := embedder.New(cfg.Embedding)
+	semanticSearcher := codesearcher.New(codeStore, semanticEmbedder)
+	retrievalOrchestrator := contextpkg.NewRetrievalOrchestrator(semanticSearcher, nil, nil, cfg.ProjectRoot)
+
+	// ── 6. Build tool registry + executor ──────────────────────────────
 	registry := tool.NewRegistry()
 	tool.RegisterFileTools(registry)
 	tool.RegisterGitTools(registry)
@@ -140,18 +160,14 @@ func runServe(cmd *cobra.Command, configPath string, portOverride int, hostOverr
 		TimeoutSeconds: cfg.Agent.ShellTimeoutSeconds,
 		Denylist:       cfg.Agent.ShellDenylist,
 	})
-	tool.RegisterSearchTools(registry, nil) // No semantic searcher in v0.1 serve
+	tool.RegisterSearchTools(registry, semanticSearcher)
 
-	// Brain tools — connect to Obsidian REST API if brain is enabled.
-	var brainClient *brain.ObsidianClient
-	if cfg.Brain.Enabled {
-		apiURL := cfg.Brain.ObsidianAPIURL
-		if apiURL == "" {
-			apiURL = "http://localhost:27124"
-		}
-		brainClient = brain.NewObsidianClient(apiURL, cfg.Brain.ObsidianAPIKey)
+	brainBackend, closeBrainBackend, err := buildBrainBackend(cmd.Context(), cfg.Brain, logger)
+	if err != nil {
+		return fmt.Errorf("build brain backend: %w", err)
 	}
-	tool.RegisterBrainTools(registry, brainClient, cfg.Brain)
+	defer closeBrainBackend()
+	tool.RegisterBrainTools(registry, brainBackend, cfg.Brain)
 
 	executor := tool.NewExecutor(registry, tool.ExecutorConfig{
 		MaxOutputTokens: cfg.Agent.ToolOutputMaxTokens,
@@ -163,22 +179,22 @@ func runServe(cmd *cobra.Command, configPath string, portOverride int, hostOverr
 
 	adapter := tool.NewAgentLoopAdapter(executor)
 
-	// ── 6. Build conversation manager ──────────────────────────────────
+	// ── 7. Build conversation manager ──────────────────────────────────
 	convManager := conversation.NewManager(database, nil, logger)
 
-	// ── 7. Build context assembler ─────────────────────────────────────
+	// ── 8. Build context assembler ─────────────────────────────────────
 	contextAssembler := contextpkg.NewContextAssembler(
 		contextpkg.RuleBasedAnalyzer{},
 		contextpkg.HeuristicQueryExtractor{},
 		contextpkg.HistoryMomentumTracker{},
-		contextpkg.NewRetrievalOrchestrator(nil, nil, nil, cfg.ProjectRoot),
+		retrievalOrchestrator,
 		contextpkg.PriorityBudgetManager{},
 		contextpkg.MarkdownSerializer{},
 		cfg.Context,
 		database,
 	)
 
-	// ── 8. Build title generator ───────────────────────────────────────
+	// ── 9. Build title generator ───────────────────────────────────────
 	titleGen := conversation.NewTitleGen(
 		convManager,
 		provRouter,
@@ -186,7 +202,7 @@ func runServe(cmd *cobra.Command, configPath string, portOverride int, hostOverr
 		logger,
 	)
 
-	// ── 9. Build agent loop ────────────────────────────────────────────
+	// ── 10. Build agent loop ───────────────────────────────────────────
 	agentLoop := agent.NewAgentLoop(agent.AgentLoopDeps{
 		ContextAssembler:    contextAssembler,
 		ConversationManager: convManager,
@@ -211,7 +227,7 @@ func runServe(cmd *cobra.Command, configPath string, portOverride int, hostOverr
 	})
 	defer agentLoop.Close()
 
-	// ── 10. Build HTTP server ──────────────────────────────────────────
+	// ── 11. Build HTTP server ──────────────────────────────────────────
 	serverCfg := server.Config{
 		Host:    cfg.Server.Host,
 		Port:    cfg.Server.Port,
@@ -237,7 +253,7 @@ func runServe(cmd *cobra.Command, configPath string, portOverride int, hostOverr
 	server.NewConfigHandler(srv, cfg, provRouter, logger)
 	server.NewMetricsHandler(srv, queries, logger)
 
-	// ── 11. Signal handling + graceful shutdown ────────────────────────
+	// ── 12. Signal handling + graceful shutdown ────────────────────────
 	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -294,8 +310,6 @@ func buildProvider(name string, cfg appconfig.ProviderConfig) (provider.Provider
 		return nil, fmt.Errorf("unsupported provider type: %q", cfg.Type)
 	}
 }
-
-
 
 func ensureProjectRecord(ctx context.Context, database *sql.DB, cfg *appconfig.Config) error {
 	if ctx == nil {

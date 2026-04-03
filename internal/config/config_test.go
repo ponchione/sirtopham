@@ -7,8 +7,34 @@ import (
 	"testing"
 )
 
+func withWorkingDir(t *testing.T, dir string) {
+	t.Helper()
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd returned error: %v", err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("Chdir(%q) returned error: %v", dir, err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(wd); err != nil {
+			t.Fatalf("restore working directory to %q: %v", wd, err)
+		}
+	})
+}
+
+func ensureDir(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) returned error: %v", dir, err)
+	}
+}
+
 func TestLoadMissingFileReturnsDefaults(t *testing.T) {
-	missing := filepath.Join(t.TempDir(), "does-not-exist.yaml")
+	projectRoot := t.TempDir()
+	ensureDir(t, filepath.Join(projectRoot, ".brain"))
+	withWorkingDir(t, projectRoot)
+	missing := filepath.Join(projectRoot, "does-not-exist.yaml")
 
 	cfg, err := Load(missing)
 	if err != nil {
@@ -94,7 +120,10 @@ func TestLoadPartialYAMLOverridesSpecifiedFields(t *testing.T) {
 }
 
 func TestLoadProvidesEmbeddingDefaults(t *testing.T) {
-	missing := filepath.Join(t.TempDir(), "does-not-exist.yaml")
+	projectRoot := t.TempDir()
+	ensureDir(t, filepath.Join(projectRoot, ".brain"))
+	withWorkingDir(t, projectRoot)
+	missing := filepath.Join(projectRoot, "does-not-exist.yaml")
 
 	cfg, err := Load(missing)
 	if err != nil {
@@ -120,6 +149,7 @@ func TestLoadProvidesEmbeddingDefaults(t *testing.T) {
 
 func TestLoadAppliesPartialEmbeddingOverrides(t *testing.T) {
 	projectRoot := t.TempDir()
+	ensureDir(t, filepath.Join(projectRoot, ".brain"))
 	configPath := filepath.Join(t.TempDir(), "sirtopham.yaml")
 	content := "project_root: \"" + projectRoot + "\"\n" +
 		"embedding:\n" +
@@ -154,6 +184,7 @@ func TestLoadAppliesPartialEmbeddingOverrides(t *testing.T) {
 
 func TestLoadRejectsInvalidEmbeddingConfig(t *testing.T) {
 	projectRoot := t.TempDir()
+	ensureDir(t, filepath.Join(projectRoot, ".brain"))
 
 	tests := []struct {
 		name       string
@@ -240,6 +271,29 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 				t.Fatalf("error %q does not contain %q", err.Error(), tt.wantSubstr)
 			}
 		})
+	}
+}
+
+func TestProjectSpecificPathsFollowProjectRootName(t *testing.T) {
+	cfg := &Config{ProjectRoot: filepath.Join(string(filepath.Separator), "tmp", "eyebox")}
+
+	if got := cfg.ProjectName(); got != "eyebox" {
+		t.Fatalf("ProjectName() = %q, want eyebox", got)
+	}
+	if got := DefaultConfigFilename(cfg.ProjectRoot); got != "eyebox.yaml" {
+		t.Fatalf("DefaultConfigFilename() = %q, want eyebox.yaml", got)
+	}
+	if got := cfg.StateDir(); got != filepath.Join(cfg.ProjectRoot, ".eyebox") {
+		t.Fatalf("StateDir() = %q, want %q", got, filepath.Join(cfg.ProjectRoot, ".eyebox"))
+	}
+	if got := cfg.DatabasePath(); got != filepath.Join(cfg.ProjectRoot, ".eyebox", "sirtopham.db") {
+		t.Fatalf("DatabasePath() = %q, want %q", got, filepath.Join(cfg.ProjectRoot, ".eyebox", "sirtopham.db"))
+	}
+	if got := cfg.CodeLanceDBPath(); got != filepath.Join(cfg.ProjectRoot, ".eyebox", "lancedb", "code") {
+		t.Fatalf("CodeLanceDBPath() = %q, want %q", got, filepath.Join(cfg.ProjectRoot, ".eyebox", "lancedb", "code"))
+	}
+	if got := cfg.BrainLanceDBPath(); got != filepath.Join(cfg.ProjectRoot, ".eyebox", "lancedb", "brain") {
+		t.Fatalf("BrainLanceDBPath() = %q, want %q", got, filepath.Join(cfg.ProjectRoot, ".eyebox", "lancedb", "brain"))
 	}
 }
 

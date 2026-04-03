@@ -12,14 +12,14 @@ import (
 )
 
 // BrainSearch implements the brain_search tool — keyword search against the
-// project brain via the Obsidian REST API.
+// project brain backend.
 type BrainSearch struct {
-	client *brain.ObsidianClient
+	client brain.Backend
 	config config.BrainConfig
 }
 
-// NewBrainSearch creates a brain_search tool backed by the given Obsidian client.
-func NewBrainSearch(client *brain.ObsidianClient, cfg config.BrainConfig) *BrainSearch {
+// NewBrainSearch creates a brain_search tool backed by the given brain backend.
+func NewBrainSearch(client brain.Backend, cfg config.BrainConfig) *BrainSearch {
 	return &BrainSearch{client: client, config: cfg}
 }
 
@@ -70,7 +70,7 @@ func (b *BrainSearch) Execute(ctx context.Context, projectRoot string, input jso
 	if !b.config.Enabled {
 		return &ToolResult{
 			Success: false,
-			Content: "Project brain is not configured. See sirtopham.yaml brain section.",
+			Content: "Project brain is not configured. See the project's YAML config brain section.",
 		}, nil
 	}
 
@@ -133,27 +133,23 @@ func (b *BrainSearch) Execute(ctx context.Context, projectRoot string, input jso
 		}, nil
 	}
 
-	var sb strings.Builder
-	if semanticNotice != "" {
-		sb.WriteString(semanticNotice)
+	formatted := make([]formattedSearchHit, 0, len(hits))
+	for _, hit := range hits {
+		formatted = append(formatted, formattedSearchHit{
+			Path:    hit.Path,
+			Title:   titleFromPath(hit.Path),
+			Snippet: compactSnippet(hit.Snippet),
+		})
 	}
-	sb.WriteString(fmt.Sprintf("Found %d results for: '%s'\n\n", len(hits), params.Query))
-	for i, hit := range hits {
-		title := titleFromPath(hit.Path)
-		sb.WriteString(fmt.Sprintf("%d. %s\n", i+1, hit.Path))
-		sb.WriteString(fmt.Sprintf("   Title: %s\n", title))
-		if hit.Snippet != "" {
-			sb.WriteString(fmt.Sprintf("   Snippet: %s\n", strings.TrimSpace(hit.Snippet)))
-		}
-		sb.WriteString(fmt.Sprintf("   Score: %.2f\n", hit.Score))
-		if i < len(hits)-1 {
-			sb.WriteString("\n")
-		}
+
+	content := formatBrainSearchResult(params.Query, formatted)
+	if semanticNotice != "" {
+		content = semanticNotice + content
 	}
 
 	return &ToolResult{
 		Success: true,
-		Content: sb.String(),
+		Content: content,
 	}, nil
 }
 
