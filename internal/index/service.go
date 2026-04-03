@@ -1,0 +1,348 @@
+package index
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"sync"
+	"time"
+	"unicode/utf8"
+
+	"github.com/ponchione/sirtopham/internal/codeintel"
+	"github.com/ponchione/sirtopham/internal/codeintel/embedder"
+	"github.com/ponchione/sirtopham/internal/codeintel/goparser"
+	"github.com/ponchione/sirtopham/internal/codeintel/indexer"
+	"github.com/ponchione/sirtopham/internal/codeintel/treesitter"
+	"github.com/ponchione/sirtopham/internal/codestore"
+	"github.com/ponchione/sirtopham/internal/config"
+	appdb "github.com/ponchione/sirtopham/internal/db"
+	"github.com/ponchione/sirtopham/internal/pathglob"
+)
+
+var ErrIndexAlreadyRunning = errors.New("index already running for project")
+
+var indexLocks = struct {
+	mu     sync.Mutex
+	active map[string]struct{}
+}{active: map[string]struct{}{}}
+
+type dependencies struct {
+	openDB      func(context.Context, string) (*sql.DB, error)
+	newStore    func(context.Context, string) (codeintel.Store, error)
+	newParser   func(string) (codeintel.Parser, error)
+	newEmbedder func(config.Embedding) codeintel.Embedder
+	now         func() time.Time
+}
+
+func defaultDependencies() dependencies {
+	return dependencies{
+		openDB:   appdb.OpenDB,
+		newStore: codestore.Open,
+		newParser: func(projectRoot string) (codeintel.Parser, error) {
+			parser, err := goparser.New(projectRoot)
+			if err != nil {
+				return nil, err
+			}
+			return parser.WithFallback(treesitter.New()), nil
+		},
+		newEmbedder: func(cfg config.Embedding) codeintel.Embedder {
+			return embedder.New(cfg)
+		},
+		now: time.Now,
+	}
+}
+
+func Run(ctx context.Context, opts Options) (*Result, error) {
+	return runWithDependencies(ctx, opts, defaultDependencies())
+}
+
+func runWithDependencies(ctx context.Context, opts Options, deps dependencies) (*Result, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	cfg, err := resolveConfig(opts)
+	if err != nil {
+		return nil, err
+	}
+
+	projectRoot := cfg.ProjectRoot
+	if projectRoot == "" {
+		projectRoot = opts.ProjectRoot
+	}
+	if projectRoot == "" {
+		return nil, fmt.Errorf("index: project root is required")
+	}
+	projectRoot, err = filepath.Abs(projectRoot)
+	if err != nil {
+		return nil, fmt.Errorf("index: resolve project root: %w", err)
+	}
+	cfg.ProjectRoot = projectRoot
+
+	if err := acquireProjectLock(projectRoot); err != nil {
+		return nil, err
+	}
+	defer releaseProjectLock(projectRoot)
+
+	if err := runIndexPrecheck(ctx, cfg); err != nil {
+		return nil, err
+	}
+
+	startedAt := deps.now().UTC()
+	result := &Result{
+		Mode:      modeFromFull(opts.Full),
+		StartedAt: startedAt,
+	}
+
+	database, err := deps.openDB(ctx, cfg.DatabasePath())
+	if err != nil {
+		return nil, fmt.Errorf("index: open database: %w", err)
+	}
+	defer database.Close()
+
+	if _, err := appdb.InitIfNeeded(ctx, database); err != nil {
+		return nil, fmt.Errorf("index: init database schema: %w", err)
+	}
+	if err := ensureProjectRecord(ctx, database, cfg); err != nil {
+		return nil, err
+	}
+
+	projectState, err := loadProjectState(ctx, database, cfg.ProjectRoot)
+	if err != nil {
+		return nil, err
+	}
+	fileStates, err := loadFileStates(ctx, database, cfg.ProjectRoot)
+	if err != nil {
+		return nil, err
+	}
+
+	currentRevision, err := currentRevision(ctx, projectRoot)
+	if err != nil {
+		return nil, err
+	}
+	dirtyFiles, err := dirtyTrackedFiles(ctx, projectRoot)
+	if err != nil {
+		return nil, err
+	}
+	result.WorktreeDirty = len(dirtyFiles) > 0
+	result.PreviousRevision = projectState.LastIndexedCommit
+	result.CurrentRevision = currentRevision
+
+	currentFiles, filesSeen, skippedFiles, err := scanProjectFiles(cfg)
+	if err != nil {
+		return nil, err
+	}
+	result.FilesSeen = filesSeen
+	result.SkippedFiles = skippedFiles
+	result.FilesSkipped = len(skippedFiles)
+
+	changedFiles, deletedFiles := diffIndexState(currentFiles, fileStates, opts.Full)
+	result.ChangedFiles = changedFiles
+	result.DeletedFiles = deletedFiles
+	result.FilesChanged = len(changedFiles)
+	result.FilesDeleted = len(deletedFiles)
+
+	store, err := deps.newStore(ctx, cfg.CodeLanceDBPath())
+	if err != nil {
+		return nil, fmt.Errorf("index: open vectorstore: %w", err)
+	}
+	defer store.Close()
+
+	for _, deleted := range deletedFiles {
+		if err := store.DeleteByFilePath(ctx, deleted); err != nil {
+			return nil, fmt.Errorf("index: delete stale chunks for %s: %w", deleted, err)
+		}
+	}
+	for _, changed := range changedFiles {
+		if err := store.DeleteByFilePath(ctx, changed); err != nil {
+			return nil, fmt.Errorf("index: clear existing chunks for %s: %w", changed, err)
+		}
+	}
+
+	indexedStates := make([]fileState, 0, len(changedFiles))
+	if len(changedFiles) > 0 {
+		parser, err := deps.newParser(projectRoot)
+		if err != nil {
+			return nil, fmt.Errorf("index: build parser: %w", err)
+		}
+		indexResult, err := indexer.IndexFiles(ctx, indexer.IndexConfig{
+			ProjectName: cfg.ProjectName(),
+			ProjectRoot: projectRoot,
+			Include:     cfg.Index.Include,
+			Exclude:     cfg.Index.Exclude,
+		}, parser, store, deps.newEmbedder(cfg.Embedding), noopDescriber{}, changedFiles)
+		if err != nil {
+			return nil, fmt.Errorf("index: run indexer: %w", err)
+		}
+		result.ChunksWritten = indexResult.TotalChunks
+		for _, indexed := range indexResult.Files {
+			result.IndexedFiles = append(result.IndexedFiles, indexed.Path)
+			indexedStates = append(indexedStates, fileState{
+				FilePath:   indexed.Path,
+				FileHash:   indexed.FileHash,
+				ChunkCount: indexed.ChunkCount,
+			})
+		}
+	}
+
+	finishedAt := deps.now().UTC()
+	if err := persistState(ctx, database, cfg.ProjectRoot, currentRevision, finishedAt, indexedStates, deletedFiles); err != nil {
+		return nil, err
+	}
+
+	result.FinishedAt = finishedAt
+	result.Duration = finishedAt.Sub(startedAt)
+	return result, nil
+}
+
+func resolveConfig(opts Options) (*config.Config, error) {
+	if opts.Config == nil {
+		return nil, fmt.Errorf("index: config is required")
+	}
+	cfg := *opts.Config
+	if opts.ProjectRoot != "" {
+		cfg.ProjectRoot = opts.ProjectRoot
+	}
+	return &cfg, nil
+}
+
+func persistState(ctx context.Context, db *sql.DB, projectID, revision string, indexedAt time.Time, indexed []fileState, deletedFiles []string) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("index: begin metadata transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	if err := deleteFileStates(ctx, tx, projectID, deletedFiles); err != nil {
+		return err
+	}
+	if err := upsertFileStates(ctx, tx, projectID, indexedAt, indexed); err != nil {
+		return err
+	}
+	if err := updateProjectMetadata(ctx, tx, projectID, revision, indexedAt); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("index: commit metadata transaction: %w", err)
+	}
+	return nil
+}
+
+func scanProjectFiles(cfg *config.Config) (map[string]string, int, []string, error) {
+	currentFiles := make(map[string]string)
+	skipped := make([]string, 0)
+	filesSeen := 0
+	maxFileSize := cfg.Index.MaxFileSizeBytes
+
+	err := filepath.WalkDir(cfg.ProjectRoot, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() {
+			return nil
+		}
+
+		relPath, err := filepath.Rel(cfg.ProjectRoot, path)
+		if err != nil {
+			return err
+		}
+		relPath = filepath.ToSlash(relPath)
+		filesSeen++
+
+		if len(cfg.Index.Include) > 0 && !indexerMatchesAny(cfg.Index.Include, relPath) {
+			return nil
+		}
+		if indexerMatchesAny(cfg.Index.Exclude, relPath) {
+			return nil
+		}
+
+		if maxFileSize > 0 {
+			info, err := d.Info()
+			if err != nil {
+				return err
+			}
+			if info.Size() > int64(maxFileSize) {
+				skipped = append(skipped, relPath)
+				return nil
+			}
+		}
+
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if !utf8.Valid(content) {
+			skipped = append(skipped, relPath)
+			return nil
+		}
+		currentFiles[relPath] = codeintel.ContentHash(string(content))
+		return nil
+	})
+	if err != nil {
+		return nil, 0, nil, fmt.Errorf("index: scan project files: %w", err)
+	}
+
+	sort.Strings(skipped)
+	return currentFiles, filesSeen, skipped, nil
+}
+
+func diffIndexState(currentFiles map[string]string, existing map[string]fileState, full bool) ([]string, []string) {
+	changed := make([]string, 0)
+	deleted := make([]string, 0)
+
+	for path, hash := range currentFiles {
+		if full {
+			changed = append(changed, path)
+			continue
+		}
+		state, ok := existing[path]
+		if !ok || state.FileHash != hash {
+			changed = append(changed, path)
+		}
+	}
+	for path := range existing {
+		if _, ok := currentFiles[path]; !ok {
+			deleted = append(deleted, path)
+		}
+	}
+
+	sort.Strings(changed)
+	sort.Strings(deleted)
+	return changed, deleted
+}
+
+func indexerMatchesAny(patterns []string, relPath string) bool {
+	return pathglob.MatchAny(patterns, relPath)
+}
+
+func acquireProjectLock(projectRoot string) error {
+	indexLocks.mu.Lock()
+	defer indexLocks.mu.Unlock()
+	if _, ok := indexLocks.active[projectRoot]; ok {
+		return ErrIndexAlreadyRunning
+	}
+	indexLocks.active[projectRoot] = struct{}{}
+	return nil
+}
+
+func releaseProjectLock(projectRoot string) {
+	indexLocks.mu.Lock()
+	defer indexLocks.mu.Unlock()
+	delete(indexLocks.active, projectRoot)
+}
+
+func modeFromFull(full bool) string {
+	if full {
+		return "full"
+	}
+	return "incremental"
+}
+
+type noopDescriber struct{}
+
+func (noopDescriber) DescribeFile(context.Context, string, string) ([]codeintel.Description, error) {
+	return nil, nil
+}

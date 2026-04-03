@@ -3,6 +3,7 @@ package indexer
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/ponchione/sirtopham/internal/codeintel"
 )
@@ -40,6 +41,24 @@ func TestMatchesAnyGlob(t *testing.T) {
 	}
 	if matchesAnyGlob(nil, "anything.go") {
 		t.Error("nil patterns should not match")
+	}
+}
+
+func TestMatchesGlob_YAMLExcludesNodeModulesAndHiddenState(t *testing.T) {
+	tests := []struct {
+		pattern string
+		path    string
+		want    bool
+	}{
+		{pattern: "**/node_modules/**", path: "web/node_modules/react/index.js", want: true},
+		{pattern: "**/.brain/**", path: ".brain/notes/hello.md", want: true},
+		{pattern: "**/.sirtopham/**", path: ".sirtopham/lancedb/code/0001.lance", want: true},
+		{pattern: "**/node_modules/**", path: "web/src/main.tsx", want: false},
+	}
+	for _, tt := range tests {
+		if got := matchesGlob(tt.pattern, tt.path); got != tt.want {
+			t.Fatalf("matchesGlob(%q, %q) = %v, want %v", tt.pattern, tt.path, got, tt.want)
+		}
 	}
 }
 
@@ -97,6 +116,17 @@ func TestNewChunk_TruncatesBody(t *testing.T) {
 	chunk := newChunk(raw, "proj", "big.go", "go", "")
 	if len(chunk.Body) != codeintel.MaxBodyLength {
 		t.Errorf("Body length = %d, want %d", len(chunk.Body), codeintel.MaxBodyLength)
+	}
+}
+
+func TestTruncateUTF8_PreservesValidUTF8(t *testing.T) {
+	input := strings.Repeat("é", codeintel.MaxBodyLength/2) + "🙂"
+	got := truncateUTF8(input, codeintel.MaxBodyLength+1)
+	if !utf8.ValidString(got) {
+		t.Fatal("truncateUTF8 returned invalid UTF-8")
+	}
+	if len(got) > codeintel.MaxBodyLength+1 {
+		t.Fatalf("len(got) = %d, want <= %d", len(got), codeintel.MaxBodyLength+1)
 	}
 }
 

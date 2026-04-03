@@ -17,6 +17,7 @@ import { TurnUsageBadge } from "@/components/chat/turn-usage-badge";
 import { MarkdownContent } from "@/components/chat/markdown-content";
 import { ContextInspector } from "@/components/inspector/context-inspector";
 import { ConversationMetricsPanel } from "@/components/chat/conversation-metrics";
+import { getDisplayBlocks } from "@/lib/tool-transcript";
 
 export function ConversationPage() {
   const { id } = useParams<{ id: string }>();
@@ -313,6 +314,7 @@ function MessageBubble({
   const isUser = message.role === "user";
   const isSystem = message.role === "system";
   const isCompressed = message.isCompressed || message.isSummary;
+  const displayBlocks = getDisplayBlocks(message.blocks);
 
   // System messages — amber dashed border.
   if (isSystem) {
@@ -331,7 +333,11 @@ function MessageBubble({
   }
 
   // User messages — augmented with br-clip, cyan border.
-  if (isUser || message.blocks.length === 0) {
+  if (!isUser && displayBlocks.length === 0) {
+    return null;
+  }
+
+  if (isUser) {
     return (
       <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
         <div
@@ -385,8 +391,8 @@ function MessageBubble({
             compressed
           </span>
         )}
-        {message.blocks.map((block, i) => {
-          const isLastBlock = i === message.blocks.length - 1;
+        {displayBlocks.map((block, i) => {
+          const isLastBlock = i === displayBlocks.length - 1;
           return (
             <div key={i} data-augmented-ui-reset>
               <BlockRenderer

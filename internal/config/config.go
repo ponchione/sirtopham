@@ -46,8 +46,7 @@ type ServerConfig struct {
 }
 
 type RoutingConfig struct {
-	Default  RouteConfig `yaml:"default"`
-	Fallback RouteConfig `yaml:"fallback"`
+	Default RouteConfig `yaml:"default"`
 }
 
 type RouteConfig struct {
@@ -123,8 +122,6 @@ type ContextConfig struct {
 type BrainConfig struct {
 	Enabled                 bool    `yaml:"enabled"`
 	VaultPath               string  `yaml:"vault_path"`
-	ObsidianAPIURL          string  `yaml:"obsidian_api_url"`
-	ObsidianAPIKey          string  `yaml:"obsidian_api_key"`
 	EmbeddingModel          string  `yaml:"embedding_model"`
 	ChunkAtHeadings         bool    `yaml:"chunk_at_headings"`
 	ReindexOnStartup        bool    `yaml:"reindex_on_startup"`
@@ -158,10 +155,6 @@ func Default() *Config {
 				Provider: "anthropic",
 				Model:    "claude-sonnet-4-6",
 			},
-			Fallback: RouteConfig{
-				Provider: "local",
-				Model:    "qwen2.5-coder-7b",
-			},
 		},
 		Providers: map[string]ProviderConfig{
 			"anthropic": {
@@ -169,12 +162,6 @@ func Default() *Config {
 				Model:         "claude-sonnet-4-6",
 				APIKeyEnv:     "ANTHROPIC_API_KEY",
 				ContextLength: 200000,
-			},
-			"local": {
-				Type:          "openai-compatible",
-				BaseURL:       "http://localhost:8080/v1",
-				Model:         "qwen2.5-coder-7b",
-				ContextLength: 32768,
 			},
 			"openrouter": {
 				Type:          "openai-compatible",
@@ -235,9 +222,7 @@ func Default() *Config {
 		},
 		Brain: BrainConfig{
 			Enabled:                 true,
-			VaultPath:               wd,
-			ObsidianAPIURL:          "https://localhost:27124",
-			ObsidianAPIKey:          "",
+			VaultPath:               ".brain",
 			EmbeddingModel:          "nomic-embed-code",
 			ChunkAtHeadings:         true,
 			ReindexOnStartup:        true,
@@ -335,12 +320,69 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-func (c *Config) DatabasePath() string {
+func DefaultProjectName(projectRoot string) string {
+	root := strings.TrimSpace(projectRoot)
+	if root == "" {
+		if wd, err := os.Getwd(); err == nil && wd != "" {
+			root = wd
+		} else {
+			return "sirtopham"
+		}
+	}
+	base := filepath.Base(filepath.Clean(root))
+	base = strings.TrimSpace(base)
+	base = strings.TrimPrefix(base, ".")
+	if base == "" || base == "." || base == string(filepath.Separator) {
+		return "sirtopham"
+	}
+	return base
+}
+
+func DefaultConfigFilename(projectRoot string) string {
+	return DefaultProjectName(projectRoot) + ".yaml"
+}
+
+func (c *Config) ProjectName() string {
+	return DefaultProjectName(c.ProjectRoot)
+}
+
+func (c *Config) StateDir() string {
 	root := c.ProjectRoot
 	if root == "" {
 		root = "."
 	}
-	return filepath.Join(root, ".sirtopham", "sirtopham.db")
+	return filepath.Join(root, "."+c.ProjectName())
+}
+
+func (c *Config) DatabasePath() string {
+	return filepath.Join(c.StateDir(), "sirtopham.db")
+}
+
+// CodeLanceDBPath returns the directory for the code vectorstore.
+func (c *Config) CodeLanceDBPath() string {
+	return filepath.Join(c.StateDir(), "lancedb", "code")
+}
+
+// BrainLanceDBPath returns the directory for the brain vectorstore.
+func (c *Config) BrainLanceDBPath() string {
+	return filepath.Join(c.StateDir(), "lancedb", "brain")
+}
+
+// BrainVaultPath returns the resolved brain vault directory.
+// If the config vault_path is relative, it is resolved against ProjectRoot.
+func (c *Config) BrainVaultPath() string {
+	vp := c.Brain.VaultPath
+	if vp == "" {
+		vp = ".brain"
+	}
+	if filepath.IsAbs(vp) {
+		return vp
+	}
+	root := c.ProjectRoot
+	if root == "" {
+		root = "."
+	}
+	return filepath.Join(root, vp)
 }
 
 func (c *Config) ServerAddress() string {
@@ -420,7 +462,12 @@ func (c *Config) validatePaths() error {
 		return nil
 	}
 
-	vaultPath, err := expandPath(c.Brain.VaultPath)
+	// Resolve vault path: if relative, join with project root.
+	vaultPath := c.Brain.VaultPath
+	if !filepath.IsAbs(vaultPath) {
+		vaultPath = filepath.Join(c.ProjectRoot, vaultPath)
+	}
+	vaultPath, err = expandPath(vaultPath)
 	if err != nil {
 		return fmt.Errorf("invalid field brain.vault_path=%q: %w", c.Brain.VaultPath, err)
 	}
@@ -442,12 +489,6 @@ func (c *Config) validateRouting() error {
 	}
 	if _, ok := c.Providers[c.Routing.Default.Provider]; !ok {
 		return fmt.Errorf("invalid field routing.default.provider=%q (provider not configured)", c.Routing.Default.Provider)
-	}
-	if c.Routing.Fallback.Provider == "" {
-		return errors.New("invalid field routing.fallback.provider=\"\" (must name a configured provider)")
-	}
-	if _, ok := c.Providers[c.Routing.Fallback.Provider]; !ok {
-		return fmt.Errorf("invalid field routing.fallback.provider=%q (provider not configured)", c.Routing.Fallback.Provider)
 	}
 	return nil
 }

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { ToolCallBlock } from "@/hooks/use-conversation";
+import { isBrainToolName } from "@/lib/tool-transcript";
 
 interface ToolCallCardProps {
   block: ToolCallBlock;
@@ -13,7 +14,8 @@ function formatDuration(ns?: number): string {
 }
 
 export function ToolCallCard({ block }: ToolCallCardProps) {
-  const [open, setOpen] = useState(false);
+  const isBrainTool = isBrainToolName(block.toolName);
+  const [open, setOpen] = useState(isBrainTool);
 
   const statusColor = block.done
     ? block.success !== false
@@ -51,6 +53,11 @@ export function ToolCallCard({ block }: ToolCallCardProps) {
         </svg>
         <span className={statusColor}>{statusIcon}</span>
         <span className="font-medium text-foreground">{block.toolName}</span>
+        {isBrainTool && (
+          <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-primary">
+            brain
+          </span>
+        )}
         {block.duration != null && (
           <span className="text-muted-foreground/60">{formatDuration(block.duration)}</span>
         )}
@@ -82,7 +89,7 @@ export function ToolCallCard({ block }: ToolCallCardProps) {
           )}
 
           {/* Streaming output */}
-          {block.output && (
+          {block.output && block.output !== block.result && (
             <div>
               <div className="mb-0.5 font-semibold text-muted-foreground uppercase tracking-wider text-[10px]">Output</div>
               <pre className="whitespace-pre-wrap text-foreground/80 max-h-48 overflow-y-auto">
@@ -95,9 +102,11 @@ export function ToolCallCard({ block }: ToolCallCardProps) {
           )}
 
           {/* Final result (if different from streaming output) */}
-          {block.done && block.result && block.result !== block.output && (
+          {block.done && block.result && (
             <div>
-              <div className="mb-0.5 font-semibold text-muted-foreground uppercase tracking-wider text-[10px]">Result</div>
+              <div className="mb-0.5 font-semibold text-muted-foreground uppercase tracking-wider text-[10px]">
+                {isBrainTool ? "Brain result" : "Result"}
+              </div>
               <pre className="whitespace-pre-wrap text-foreground/80 max-h-48 overflow-y-auto">
                 {block.result}
               </pre>

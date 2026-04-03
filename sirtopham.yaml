@@ -1,0 +1,53 @@
+project_root: /home/gernsback/source/sirtopham
+log_level: info
+log_format: text
+
+server:
+  host: localhost
+  port: 8090
+  dev_mode: false
+  open_browser: false
+
+routing:
+  default:
+    provider: codex
+    model: gpt-5.1-codex-mini
+
+providers:
+  codex:
+    type: codex
+    model: gpt-5.1-codex-mini
+
+index:
+  include:
+    - "**/*.go"
+    - "**/*.sql"
+    - "**/*.md"
+    - "**/*.ts"
+    - "**/*.tsx"
+    - "**/*.js"
+    - "**/*.jsx"
+    - "**/*.json"
+    - "**/*.yaml"
+    - "**/*.yml"
+  exclude:
+    - "**/.git/**"
+    - "**/.sirtopham/**"
+    - "**/.brain/**"
+    - "**/.hermes/**"
+    - "**/.claude/**"
+    - "**/node_modules/**"
+    - "**/vendor/**"
+    - "**/dist/**"
+    - "**/build/**"
+    - "**/coverage/**"
+    - "**/tmp/**"
+    - "**/.next/**"
+    - "**/.turbo/**"
+    - "**/*.min.js"
+
+brain:
+  enabled: true
+  vault_path: .brain
+  reindex_on_startup: true
+  log_brain_queries: true

@@ -17,12 +17,12 @@ var wikilinkRegexp = regexp.MustCompile(`\[\[([^\]]+)\]\]`)
 // BrainRead implements the brain_read tool — read a specific brain document
 // by its vault-relative path.
 type BrainRead struct {
-	client *brain.ObsidianClient
+	client brain.Backend
 	config config.BrainConfig
 }
 
-// NewBrainRead creates a brain_read tool backed by the given Obsidian client.
-func NewBrainRead(client *brain.ObsidianClient, cfg config.BrainConfig) *BrainRead {
+// NewBrainRead creates a brain_read tool backed by the given brain backend.
+func NewBrainRead(client brain.Backend, cfg config.BrainConfig) *BrainRead {
 	return &BrainRead{client: client, config: cfg}
 }
 
@@ -60,7 +60,7 @@ func (b *BrainRead) Execute(ctx context.Context, projectRoot string, input json.
 	if !b.config.Enabled {
 		return &ToolResult{
 			Success: false,
-			Content: "Project brain is not configured. See sirtopham.yaml brain section.",
+			Content: "Project brain is not configured. See the project's YAML config brain section.",
 		}, nil
 	}
 
@@ -108,47 +108,28 @@ func (b *BrainRead) Execute(ctx context.Context, projectRoot string, input json.
 	frontmatter, bodyContent := extractFrontmatter(content)
 	wikilinks := extractWikilinks(content)
 
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Path: %s\n", params.Path))
-
-	if frontmatter != "" {
-		sb.WriteString("\nFrontmatter:\n")
-		for _, line := range strings.Split(frontmatter, "\n") {
-			line = strings.TrimSpace(line)
-			if line != "" {
-				sb.WriteString("  " + line + "\n")
-			}
-		}
-	}
-
-	if len(wikilinks) > 0 {
-		linkStrs := make([]string, len(wikilinks))
-		for i, link := range wikilinks {
-			linkStrs[i] = "[[" + link + "]]"
-		}
-		sb.WriteString(fmt.Sprintf("\nOutgoing links: %s\n", strings.Join(linkStrs, ", ")))
-	}
-
 	// Backlinks via heuristic keyword search.
+	backlinks := []string{}
 	if params.IncludeBacklinks {
 		basename := strings.TrimSuffix(filepath.Base(params.Path), filepath.Ext(params.Path))
 		hits, searchErr := b.client.SearchKeyword(ctx, basename)
 		if searchErr == nil && len(hits) > 0 {
-			sb.WriteString("\nReferenced by:\n")
 			for _, hit := range hits {
 				if hit.Path != params.Path {
-					sb.WriteString("  " + hit.Path + "\n")
+					backlinks = append(backlinks, hit.Path)
 				}
 			}
 		}
 	}
 
-	sb.WriteString("\nContent:\n")
-	sb.WriteString(bodyContent)
+	contentOut := formatBrainReadDocument(params.Path, frontmatter, wikilinks, bodyContent)
+	if len(backlinks) > 0 {
+		contentOut += "\n\nReferenced by:\n" + formatHeadingList(backlinks)
+	}
 
 	return &ToolResult{
 		Success: true,
-		Content: sb.String(),
+		Content: contentOut,
 	}, nil
 }
 

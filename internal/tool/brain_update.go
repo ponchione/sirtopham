@@ -14,12 +14,12 @@ import (
 // BrainUpdate implements the brain_update tool — append, prepend, or replace
 // a section of an existing brain document.
 type BrainUpdate struct {
-	client *brain.ObsidianClient
+	client brain.Backend
 	config config.BrainConfig
 }
 
-// NewBrainUpdate creates a brain_update tool backed by the given Obsidian client.
-func NewBrainUpdate(client *brain.ObsidianClient, cfg config.BrainConfig) *BrainUpdate {
+// NewBrainUpdate creates a brain_update tool backed by the given brain backend.
+func NewBrainUpdate(client brain.Backend, cfg config.BrainConfig) *BrainUpdate {
 	return &BrainUpdate{client: client, config: cfg}
 }
 
@@ -68,7 +68,7 @@ func (b *BrainUpdate) Execute(ctx context.Context, projectRoot string, input jso
 	if !b.config.Enabled {
 		return &ToolResult{
 			Success: false,
-			Content: "Project brain is not configured. See sirtopham.yaml brain section.",
+			Content: "Project brain is not configured. See the project's YAML config brain section.",
 		}, nil
 	}
 
@@ -107,9 +107,19 @@ func (b *BrainUpdate) Execute(ctx context.Context, projectRoot string, input jso
 		}, nil
 	}
 
-	// Read current document.
-	current, err := b.client.ReadDocument(ctx, params.Path)
-	if err != nil {
+	patchContent := params.Content
+	if params.Operation == "replace_section" {
+		if params.Section == "" {
+			return &ToolResult{
+				Success: false,
+				Content: "The 'section' parameter is required for replace_section operation.",
+				Error:   "missing section",
+			}, nil
+		}
+		patchContent = params.Section + "\n\n" + params.Content
+	}
+
+	if err := b.client.PatchDocument(ctx, params.Path, params.Operation, patchContent); err != nil {
 		errMsg := err.Error()
 		if strings.Contains(errMsg, "Document not found") {
 			dir := filepath.Dir(params.Path)
@@ -123,57 +133,46 @@ func (b *BrainUpdate) Execute(ctx context.Context, projectRoot string, input jso
 				}, nil
 			}
 		}
+		if strings.Contains(errMsg, "Section '") && strings.Contains(errMsg, "Available headings:") {
+			prefix := "Section '"
+			sectionStart := strings.Index(errMsg, prefix)
+			sectionEnd := strings.Index(errMsg, "' not found")
+			headingListStart := strings.Index(errMsg, "Available headings:")
+			if sectionStart >= 0 && sectionEnd > sectionStart && headingListStart >= 0 {
+				section := errMsg[sectionStart+len(prefix) : sectionEnd]
+				headingsRaw := strings.TrimSpace(errMsg[headingListStart+len("Available headings:"):])
+				headings := []string{}
+				if headingsRaw != "" {
+					for _, heading := range strings.Split(headingsRaw, ",") {
+						headings = append(headings, strings.TrimSpace(heading))
+					}
+				}
+				return &ToolResult{
+					Success: false,
+					Content: fmt.Sprintf("Section not found in %s: %s\n\nAvailable headings:\n%s", params.Path, section, formatHeadingList(headings)),
+					Error:   errMsg,
+				}, nil
+			}
+		}
 		return &ToolResult{
 			Success: false,
-			Content: fmt.Sprintf("Failed to read brain document: %v", err),
+			Content: fmt.Sprintf("Failed to update brain document: %v", err),
 			Error:   errMsg,
 		}, nil
 	}
 
-	var updated string
-	switch params.Operation {
-	case "append":
-		updated = appendContent(current, params.Content)
-	case "prepend":
-		updated = prependContent(current, params.Content)
-	case "replace_section":
-		if params.Section == "" {
-			return &ToolResult{
-				Success: false,
-				Content: "The 'section' parameter is required for replace_section operation.",
-				Error:   "missing section",
-			}, nil
-		}
-		var replaceErr error
-		updated, replaceErr = replaceSectionContent(current, params.Section, params.Content)
-		if replaceErr != nil {
-			return &ToolResult{
-				Success: false,
-				Content: replaceErr.Error(),
-				Error:   "section not found",
-			}, nil
-		}
-	}
-
-	// Write back.
-	if err := b.client.WriteDocument(ctx, params.Path, updated); err != nil {
+	updated, err := b.client.ReadDocument(ctx, params.Path)
+	if err != nil {
 		return &ToolResult{
 			Success: false,
-			Content: fmt.Sprintf("Failed to write updated document: %v", err),
+			Content: fmt.Sprintf("Brain document updated, but failed to read back final content: %v", err),
 			Error:   err.Error(),
 		}, nil
 	}
 
-	// Return first 100 lines.
-	lines := strings.Split(updated, "\n")
-	content := updated
-	if len(lines) > 100 {
-		content = strings.Join(lines[:100], "\n") + fmt.Sprintf("\n\n[showing first 100 of %d lines]", len(lines))
-	}
-
 	return &ToolResult{
 		Success: true,
-		Content: fmt.Sprintf("Brain document updated (%s): %s\n\n%s", params.Operation, params.Path, content),
+		Content: fmt.Sprintf("Updated brain document: %s (%s)\n\nContent preview:\n%s", params.Path, params.Operation, formatBrainDocumentPreview(updated, 100)),
 	}, nil
 }
 

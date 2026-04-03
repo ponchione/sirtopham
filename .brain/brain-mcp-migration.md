@@ -258,8 +258,7 @@ import "context"
 
 // Backend defines the operations the brain tools need from their backing store.
 // Implementations:
-//   - *mcpclient.Client (MCP, default) — in-process MCP client→server→filesystem
-//   - *ObsidianClient (REST, legacy) — HTTP calls to Obsidian Local REST API
+//   - *mcpclient.Client — in-process MCP client→server→filesystem
 type Backend interface {
     ReadDocument(ctx context.Context, path string) (string, error)
     WriteDocument(ctx context.Context, path string, content string) error
@@ -278,59 +277,32 @@ type Closer interface {
 
 ## Config Changes
 
-### Before
-
-```yaml
-brain:
-  enabled: true
-  vault_path: /home/mitchell/vault
-  obsidian_api_url: "http://localhost:27124"
-  obsidian_api_key: "abc123"
-```
-
 ### After
 
 ```yaml
 brain:
   enabled: true
   vault_path: /home/mitchell/vault
-  backend: mcp           # "mcp" (default, new) or "rest" (legacy)
-  # Legacy REST fields — only used when backend: rest
-  obsidian_api_url: "http://localhost:27124"
-  obsidian_api_key: ""
 ```
 
-The `backend` field defaults to `"mcp"`. Setting `"rest"` preserves the existing REST API path as a fallback during transition. No new config fields needed for MCP — the vault path is all the server needs.
+The MCP-backed vault path is the only supported runtime configuration after this migration. No backend selector is needed — the vault path is all the server needs.
 
 ---
 
 ## Wiring in `serve.go`
 
 ```go
-// Brain backend — MCP (default) or REST (legacy).
+// Brain backend — always MCP-backed via the vault filesystem.
 var brainBackend brain.Backend
 if cfg.Brain.Enabled {
-    switch cfg.Brain.Backend {
-    case "rest":
-        // Legacy path: Obsidian REST API.
-        apiURL := cfg.Brain.ObsidianAPIURL
-        if apiURL == "" {
-            apiURL = "http://localhost:27124"
-        }
-        brainBackend = brain.NewObsidianClient(apiURL, cfg.Brain.ObsidianAPIKey)
-        logger.Info("brain backend: REST API", "url", apiURL)
-
-    default: // "mcp" or empty
-        // New default: in-process MCP server against vault filesystem.
-        client, err := mcpclient.Connect(ctx, cfg.Brain.VaultPath)
-        if err != nil {
-            logger.Error("brain MCP server failed to start, disabling brain", "error", err)
-            cfg.Brain.Enabled = false
-        } else {
-            brainBackend = client
-            logger.Info("brain backend: MCP (in-process)", "vault", cfg.Brain.VaultPath)
-            defer client.Close()
-        }
+    client, err := mcpclient.Connect(ctx, cfg.Brain.VaultPath)
+    if err != nil {
+        logger.Error("brain MCP server failed to start, disabling brain", "error", err)
+        cfg.Brain.Enabled = false
+    } else {
+        brainBackend = client
+        logger.Info("brain backend: MCP (in-process)", "vault", cfg.Brain.VaultPath)
+        defer client.Close()
     }
 }
 tool.RegisterBrainTools(registry, brainBackend, cfg.Brain)
@@ -416,22 +388,21 @@ Same logic, just without the HTTP round-trips. The `appendContent`, `prependCont
 
 | File | Change |
 |------|--------|
-| `internal/brain/client.go` | Add `PatchDocument` method; verify satisfies `Backend` interface |
-| `internal/brain/client_test.go` | Verify `ObsidianClient` still satisfies `Backend` |
 | `internal/tool/brain_read.go` | Field type `*brain.ObsidianClient` → `brain.Backend` |
 | `internal/tool/brain_search.go` | Same |
 | `internal/tool/brain_write.go` | Same |
 | `internal/tool/brain_update.go` | Same; `appendContent`/`prependContent`/`replaceSectionContent` move to vault package, tool calls `PatchDocument` for append/prepend, read-modify-write for replace_section |
 | `internal/tool/register.go` | `RegisterBrainTools` accepts `brain.Backend` instead of `*brain.ObsidianClient` |
 | `internal/tool/brain_test.go` | Replace `httptest.Server` mock with `fakeBackend` struct satisfying `brain.Backend` |
-| `internal/config/config.go` | Add `Backend` field to `BrainConfig` (default: `"mcp"`) |
-| `cmd/sirtopham/serve.go` | Branch on `cfg.Brain.Backend` to construct MCP or REST client |
+| `internal/config/config.go` | Remove REST-specific brain config fields; keep MCP vault configuration only |
+| `cmd/sirtopham/serve.go` | Construct the MCP client directly from `cfg.Brain.VaultPath` |
 | `cmd/sirtopham/root.go` | Register `brain-serve` subcommand |
 | `go.mod` | Add `github.com/modelcontextprotocol/go-sdk` |
 
 ### Deleted Files
 
-None. `internal/brain/client.go` (REST) is retained as a legacy `Backend` implementation.
+- `internal/brain/client.go`
+- `internal/brain/client_test.go`
 
 ### Unchanged Files
 
@@ -492,11 +463,10 @@ This eliminates all HTTP coupling from tool tests. The 30 existing brain tool te
 Before declaring the migration complete:
 
 1. `sirtopham serve` with default config — brain tools work in agent session via MCP
-2. `sirtopham serve` with `backend: rest` — legacy REST path still works
-3. `sirtopham serve` with Obsidian closed — MCP backend works (REST backend fails gracefully)
-4. `sirtopham brain-serve --vault /path` — external MCP server starts, Claude Code can connect
-5. Vault files written by MCP backend are valid Obsidian markdown (open in Obsidian, verify frontmatter renders, wikilinks resolve, graph view works)
-6. Create, read, update, search cycle through a full agent session
+2. `sirtopham serve` with Obsidian closed — MCP backend still works headlessly against the vault filesystem
+3. `sirtopham brain-serve --vault /path` — external MCP server starts, Claude Code can connect
+4. Vault files written by MCP backend are valid Obsidian markdown (open in Obsidian, verify frontmatter renders, wikilinks resolve, graph view works)
+5. Create, read, update, search cycle through a full agent session
 
 ---
 
@@ -505,14 +475,12 @@ Before declaring the migration complete:
 ### Phase 1: Interface Extraction (no behavior change)
 
 1. Define `brain.Backend` interface in `internal/brain/backend.go`
-2. Add `PatchDocument` to `ObsidianClient` (delegates to read-modify-write, same as current `brain_update` logic)
-3. Verify `*ObsidianClient` satisfies `Backend` (compile check)
-4. Change all four brain tool structs from `*brain.ObsidianClient` to `brain.Backend`
-5. Change `RegisterBrainTools` signature to accept `brain.Backend`
-6. Update `serve.go` to pass the client as `brain.Backend`
-7. Run all existing tests — everything passes, zero behavior change
+2. Change all four brain tool structs from `*brain.ObsidianClient` to `brain.Backend`
+3. Change `RegisterBrainTools` signature to accept `brain.Backend`
+4. Update `serve.go` call sites to pass a `brain.Backend`
+5. Run all existing tests that do not depend on the REST client — everything passes, zero behavior change
 
-**Gate:** All 207 tool tests + 9 brain client tests pass. No new packages, no new deps.
+**Gate:** Brain tools compile against `brain.Backend` and existing tool behavior is unchanged. No new packages, no new deps.
 
 ### Phase 2: Simplify Tool Tests
 
@@ -539,17 +507,18 @@ Before declaring the migration complete:
 2. Implement `internal/brain/mcpserver/server.go` — register vault ops as MCP tools
 3. Implement `internal/brain/mcpclient/client.go` — MCP client satisfying `brain.Backend`
 4. Write end-to-end tests (client → server → vault → filesystem)
-5. Add `Backend` config field to `BrainConfig`
-6. Wire up in `serve.go` — branch on config
+5. Simplify `BrainConfig` to MCP vault settings only
+6. Wire up in `serve.go` to always use the MCP client
 
-**Gate:** `sirtopham serve` works with both `backend: mcp` and `backend: rest`.
+**Gate:** `sirtopham serve` works via MCP with no REST backend remaining in the runtime path.
 
 ### Phase 5: External Exposure + Cleanup
 
 1. Implement `cmd/sirtopham/brain_serve.go` — Cobra subcommand
-2. Manual testing checklist
-3. Update doc 09 to reflect MCP as default backend, `brain-serve` as new command
-4. Update doc 00 index if needed
+2. Delete the REST client and obsolete REST-specific tests/docs/config
+3. Manual testing checklist
+4. Update doc 09 to reflect MCP as the brain architecture and `brain-serve` as a new command
+5. Update doc 00 index if needed
 
 ---
 
@@ -571,7 +540,6 @@ Before declaring the migration complete:
 - **Context assembly** is unchanged. `BrainHit` types, retrieval results, budget fitting — all downstream of tool execution.
 - **Web UI** is unchanged. Context inspector, brain results display — all consume the same report types.
 - **Vault structure and document format** are unchanged. Same markdown, same frontmatter, same wikilinks.
-- **The REST API client** is not deleted. Retained as a `brain.Backend` implementation behind `backend: rest`.
 
 ---
 
@@ -581,7 +549,7 @@ Before declaring the migration complete:
 
 2. **File watching.** The vault package operates on files at call time. If someone edits a file in Obsidian between brain tool calls, sirtopham sees the updated content on the next read — this is correct. But should the MCP server emit `notifications/resources/updated` when vault files change? Out of scope for this migration but worth noting for future.
 
-3. **Concurrent writes.** If the agent writes a brain document while the developer has the same file open in Obsidian, Obsidian detects external changes and prompts to reload. Same behavior as the REST API path. The atomic write (temp + rename) ensures Obsidian never sees a partial file.
+3. **Concurrent writes.** If the agent writes a brain document while the developer has the same file open in Obsidian, Obsidian detects external changes and prompts to reload. The atomic write (temp + rename) ensures Obsidian never sees a partial file.
 
 4. **MCP server tool naming.** The spec uses `vault_read`, `vault_write`, etc. for the MCP server's tools. These are the *server-side* tool names. The *agent-facing* tool names remain `brain_read`, `brain_write`, etc. Two different naming layers — the agent never sees the MCP tool names.
 

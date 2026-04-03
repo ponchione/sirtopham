@@ -13,6 +13,21 @@ import (
 	"github.com/ponchione/sirtopham/internal/provider"
 )
 
+func sendStreamEvent(ctx context.Context, ch chan<- provider.StreamEvent, event provider.StreamEvent) bool {
+	select {
+	case ch <- event:
+		return true
+	default:
+	}
+
+	select {
+	case ch <- event:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
 // streamState tracks in-progress output items during SSE parsing.
 type streamState struct {
 	currentToolCallID   string
@@ -176,11 +191,11 @@ func (p *CodexProvider) Stream(ctx context.Context, req *provider.Request) (<-ch
 
 		for scanner.Scan() {
 			if ctx.Err() != nil {
-				ch <- provider.StreamError{
+				sendStreamEvent(ctx, ch, provider.StreamError{
 					Err:     ctx.Err(),
 					Fatal:   true,
 					Message: "stream cancelled",
-				}
+				})
 				return
 			}
 
@@ -193,7 +208,9 @@ func (p *CodexProvider) Stream(ctx context.Context, req *provider.Request) (<-ch
 
 			if strings.HasPrefix(line, "data: ") {
 				data := strings.TrimPrefix(line, "data: ")
-				p.handleSSEEvent(eventType, []byte(data), state, ch)
+				if !p.handleSSEEvent(ctx, eventType, []byte(data), state, ch) {
+					return
+				}
 				eventType = ""
 				continue
 			}
@@ -202,11 +219,11 @@ func (p *CodexProvider) Stream(ctx context.Context, req *provider.Request) (<-ch
 		}
 
 		if err := scanner.Err(); err != nil {
-			ch <- provider.StreamError{
+			sendStreamEvent(ctx, ch, provider.StreamError{
 				Err:     err,
 				Fatal:   true,
 				Message: fmt.Sprintf("stream read error: %v", err),
-			}
+			})
 		}
 	}()
 
@@ -215,96 +232,96 @@ func (p *CodexProvider) Stream(ctx context.Context, req *provider.Request) (<-ch
 
 // handleSSEEvent processes a single SSE event and emits unified StreamEvent
 // values on the channel.
-func (p *CodexProvider) handleSSEEvent(eventType string, data []byte, state *streamState, ch chan<- provider.StreamEvent) {
+func (p *CodexProvider) handleSSEEvent(ctx context.Context, eventType string, data []byte, state *streamState, ch chan<- provider.StreamEvent) bool {
 	switch eventType {
 	case "response.output_text.delta":
 		var delta sseTextDelta
 		if err := json.Unmarshal(data, &delta); err != nil {
-			ch <- provider.StreamError{
+			return sendStreamEvent(ctx, ch, provider.StreamError{
 				Err:     err,
 				Fatal:   false,
 				Message: fmt.Sprintf("failed to parse stream event: %v", err),
-			}
-			return
+			})
 		}
-		ch <- provider.TokenDelta{Text: delta.Delta}
+		return sendStreamEvent(ctx, ch, provider.TokenDelta{Text: delta.Delta})
 
 	case "response.reasoning.delta":
 		var delta sseReasoningDelta
 		if err := json.Unmarshal(data, &delta); err != nil {
-			ch <- provider.StreamError{
+			return sendStreamEvent(ctx, ch, provider.StreamError{
 				Err:     err,
 				Fatal:   false,
 				Message: fmt.Sprintf("failed to parse stream event: %v", err),
-			}
-			return
+			})
 		}
-		ch <- provider.ThinkingDelta{Thinking: delta.Delta}
+		return sendStreamEvent(ctx, ch, provider.ThinkingDelta{Thinking: delta.Delta})
 
 	case "response.output_item.added":
 		var added sseOutputItemAdded
 		if err := json.Unmarshal(data, &added); err != nil {
-			ch <- provider.StreamError{
+			return sendStreamEvent(ctx, ch, provider.StreamError{
 				Err:     err,
 				Fatal:   false,
 				Message: fmt.Sprintf("failed to parse stream event: %v", err),
-			}
-			return
+			})
 		}
 		if added.Item.Type == "function_call" {
 			state.currentToolCallID = added.Item.CallID
 			state.currentToolCallName = added.Item.Name
 			state.toolCallArgs.Reset()
-			ch <- provider.ToolCallStart{
+			return sendStreamEvent(ctx, ch, provider.ToolCallStart{
 				ID:   added.Item.CallID,
 				Name: added.Item.Name,
-			}
+			})
 		}
-		// message and reasoning types: no event emitted, deltas will follow
+		return true
 
 	case "response.function_call_arguments.delta":
 		var delta sseFuncArgDelta
 		if err := json.Unmarshal(data, &delta); err != nil {
-			ch <- provider.StreamError{
+			return sendStreamEvent(ctx, ch, provider.StreamError{
 				Err:     err,
 				Fatal:   false,
 				Message: fmt.Sprintf("failed to parse stream event: %v", err),
-			}
-			return
+			})
 		}
-		ch <- provider.ToolCallDelta{
+		if !sendStreamEvent(ctx, ch, provider.ToolCallDelta{
 			ID:    state.currentToolCallID,
 			Delta: delta.Delta,
+		}) {
+			return false
 		}
 		state.toolCallArgs.WriteString(delta.Delta)
+		return true
 
 	case "response.output_item.done":
 		var done sseOutputItemDone
 		if err := json.Unmarshal(data, &done); err != nil {
-			ch <- provider.StreamError{
+			return sendStreamEvent(ctx, ch, provider.StreamError{
 				Err:     err,
 				Fatal:   false,
 				Message: fmt.Sprintf("failed to parse stream event: %v", err),
-			}
-			return
+			})
 		}
 		if done.Item.Type == "function_call" {
-			ch <- provider.ToolCallEnd{
+			if !sendStreamEvent(ctx, ch, provider.ToolCallEnd{
 				ID:    done.Item.CallID,
 				Input: json.RawMessage(state.toolCallArgs.String()),
+			}) {
+				return false
 			}
 			state.toolCallArgs.Reset()
 		}
+		return true
 
 	case "response.completed":
 		var completed sseCompleted
 		if err := json.Unmarshal(data, &completed); err != nil {
-			ch <- provider.StreamError{
+			return sendStreamEvent(ctx, ch, provider.StreamError{
 				Err:     err,
 				Fatal:   false,
 				Message: fmt.Sprintf("failed to parse stream event: %v", err),
-			}
-			return
+			})
 		}
 
 		hasToolCall := false
@@ -327,17 +344,17 @@ func (p *CodexProvider) handleSSEEvent(eventType string, data []byte, state *str
 			CacheCreationTokens: 0,
 		}
 
-		ch <- provider.StreamDone{
+		return sendStreamEvent(ctx, ch, provider.StreamDone{
 			StopReason: stopReason,
 			Usage:      usage,
-		}
+		})
 
 	case "response.content_part.added",
 		"response.content_part.done",
 		"response.created":
-		// Structural bookkeeping events; silently consumed
+		return true
 
 	default:
-		// Unknown event types are silently ignored
+		return true
 	}
 }

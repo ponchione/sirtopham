@@ -241,49 +241,33 @@ func TestComplete_OverrideModelNotFound(t *testing.T) {
 	}
 }
 
-func TestComplete_FallbackOnRetriableError(t *testing.T) {
-	cfg := validConfig()
-	cfg.Fallback = &RouteTarget{Provider: "local", Model: "qwen2.5-coder-7b"}
-	r, _ := NewRouter(cfg, nil, nil)
+func TestComplete_RetriableErrorReturnsDirectly(t *testing.T) {
+	r, _ := NewRouter(validConfig(), nil, nil)
 
+	retriableErr := &provider.ProviderError{
+		Provider:   "anthropic",
+		StatusCode: 502,
+		Message:    "bad gateway",
+		Retriable:  true,
+	}
 	anthropicMock := &mockProvider{
-		name: "anthropic",
-		completeErr: &provider.ProviderError{
-			Provider:   "anthropic",
-			StatusCode: 502,
-			Message:    "bad gateway",
-			Retriable:  true,
-		},
+		name:        "anthropic",
+		completeErr: retriableErr,
 	}
-	localResp := &provider.Response{Model: "qwen2.5-coder-7b"}
-	localMock := &mockProvider{
-		name:         "local",
-		completeResp: localResp,
-	}
-
 	_ = r.RegisterProvider(anthropicMock)
-	_ = r.RegisterProvider(localMock)
 
 	req := &provider.Request{}
-	got, err := r.Complete(context.Background(), req)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got != localResp {
-		t.Fatal("expected response from fallback provider")
+	_, err := r.Complete(context.Background(), req)
+	if err != retriableErr {
+		t.Fatalf("expected retriable error returned directly, got: %v", err)
 	}
 	if anthropicMock.getCompleteCalls() != 1 {
 		t.Fatalf("expected 1 anthropic call, got %d", anthropicMock.getCompleteCalls())
 	}
-	if localMock.getCompleteCalls() != 1 {
-		t.Fatalf("expected 1 local call, got %d", localMock.getCompleteCalls())
-	}
 }
 
-func TestComplete_AuthErrorNoFallback(t *testing.T) {
-	cfg := validConfig()
-	cfg.Fallback = &RouteTarget{Provider: "local", Model: "qwen2.5-coder-7b"}
-	r, _ := NewRouter(cfg, nil, nil)
+func TestComplete_AuthErrorWrapped(t *testing.T) {
+	r, _ := NewRouter(validConfig(), nil, nil)
 
 	anthropicMock := &mockProvider{
 		name: "anthropic",
@@ -294,13 +278,7 @@ func TestComplete_AuthErrorNoFallback(t *testing.T) {
 			Retriable:  false,
 		},
 	}
-	localMock := &mockProvider{
-		name:         "local",
-		completeResp: &provider.Response{Model: "qwen2.5-coder-7b"},
-	}
-
 	_ = r.RegisterProvider(anthropicMock)
-	_ = r.RegisterProvider(localMock)
 
 	req := &provider.Request{}
 	_, err := r.Complete(context.Background(), req)
@@ -313,18 +291,10 @@ func TestComplete_AuthErrorNoFallback(t *testing.T) {
 	if !contains(err.Error(), "Check your API key") {
 		t.Fatalf("expected remediation message, got: %s", err.Error())
 	}
-	if anthropicMock.getCompleteCalls() != 1 {
-		t.Fatalf("expected 1 anthropic call, got %d", anthropicMock.getCompleteCalls())
-	}
-	if localMock.getCompleteCalls() != 0 {
-		t.Fatalf("expected 0 local calls (no fallback on auth), got %d", localMock.getCompleteCalls())
-	}
 }
 
-func TestComplete_AuthError403NoFallback(t *testing.T) {
-	cfg := validConfig()
-	cfg.Fallback = &RouteTarget{Provider: "local", Model: "qwen2.5-coder-7b"}
-	r, _ := NewRouter(cfg, nil, nil)
+func TestComplete_AuthError403Wrapped(t *testing.T) {
+	r, _ := NewRouter(validConfig(), nil, nil)
 
 	anthropicMock := &mockProvider{
 		name: "anthropic",
@@ -335,13 +305,7 @@ func TestComplete_AuthError403NoFallback(t *testing.T) {
 			Retriable:  false,
 		},
 	}
-	localMock := &mockProvider{
-		name:         "local",
-		completeResp: &provider.Response{Model: "qwen2.5-coder-7b"},
-	}
-
 	_ = r.RegisterProvider(anthropicMock)
-	_ = r.RegisterProvider(localMock)
 
 	req := &provider.Request{}
 	_, err := r.Complete(context.Background(), req)
@@ -351,15 +315,10 @@ func TestComplete_AuthError403NoFallback(t *testing.T) {
 	if !contains(err.Error(), "authentication failed") {
 		t.Fatalf("expected auth error message, got: %s", err.Error())
 	}
-	if localMock.getCompleteCalls() != 0 {
-		t.Fatalf("expected 0 local calls, got %d", localMock.getCompleteCalls())
-	}
 }
 
-func TestComplete_NonRetriableErrorNoFallback(t *testing.T) {
-	cfg := validConfig()
-	cfg.Fallback = &RouteTarget{Provider: "local", Model: "qwen2.5-coder-7b"}
-	r, _ := NewRouter(cfg, nil, nil)
+func TestComplete_NonRetriableErrorReturnsDirectly(t *testing.T) {
+	r, _ := NewRouter(validConfig(), nil, nil)
 
 	origErr := &provider.ProviderError{
 		Provider:   "anthropic",
@@ -371,67 +330,17 @@ func TestComplete_NonRetriableErrorNoFallback(t *testing.T) {
 		name:        "anthropic",
 		completeErr: origErr,
 	}
-	localMock := &mockProvider{
-		name:         "local",
-		completeResp: &provider.Response{Model: "qwen2.5-coder-7b"},
-	}
-
 	_ = r.RegisterProvider(anthropicMock)
-	_ = r.RegisterProvider(localMock)
 
 	req := &provider.Request{}
 	_, err := r.Complete(context.Background(), req)
 	if err != origErr {
 		t.Fatalf("expected original error to be returned, got: %v", err)
 	}
-	if localMock.getCompleteCalls() != 0 {
-		t.Fatalf("expected 0 local calls, got %d", localMock.getCompleteCalls())
-	}
 }
 
-func TestComplete_FallbackAlsoFails(t *testing.T) {
+func TestComplete_RateLimitErrorReturnsDirectly(t *testing.T) {
 	cfg := validConfig()
-	cfg.Fallback = &RouteTarget{Provider: "local", Model: "qwen2.5-coder-7b"}
-	r, _ := NewRouter(cfg, nil, nil)
-
-	anthropicMock := &mockProvider{
-		name: "anthropic",
-		completeErr: &provider.ProviderError{
-			Provider:   "anthropic",
-			StatusCode: 503,
-			Message:    "service unavailable",
-			Retriable:  true,
-		},
-	}
-	fallbackErr := &provider.ProviderError{
-		Provider:   "local",
-		StatusCode: 500,
-		Message:    "internal error",
-		Retriable:  true,
-	}
-	localMock := &mockProvider{
-		name:        "local",
-		completeErr: fallbackErr,
-	}
-
-	_ = r.RegisterProvider(anthropicMock)
-	_ = r.RegisterProvider(localMock)
-
-	req := &provider.Request{}
-	_, err := r.Complete(context.Background(), req)
-	if err != fallbackErr {
-		t.Fatalf("expected fallback error, got: %v", err)
-	}
-	if anthropicMock.getCompleteCalls() != 1 {
-		t.Fatalf("expected 1 anthropic call, got %d", anthropicMock.getCompleteCalls())
-	}
-	if localMock.getCompleteCalls() != 1 {
-		t.Fatalf("expected 1 local call, got %d", localMock.getCompleteCalls())
-	}
-}
-
-func TestComplete_NoFallbackConfigured(t *testing.T) {
-	cfg := validConfig() // no fallback
 	r, _ := NewRouter(cfg, nil, nil)
 
 	retriableErr := &provider.ProviderError{
@@ -497,39 +406,86 @@ func TestStream_DefaultRouting(t *testing.T) {
 	}
 }
 
-func TestStream_FallbackOnRetriableError(t *testing.T) {
-	cfg := validConfig()
-	cfg.Fallback = &RouteTarget{Provider: "local", Model: "qwen2.5-coder-7b"}
-	r, _ := NewRouter(cfg, nil, nil)
+func TestStream_RetriableErrorReturnsDirectly(t *testing.T) {
+	r, _ := NewRouter(validConfig(), nil, nil)
+
+	retriableErr := &provider.ProviderError{
+		Provider:   "anthropic",
+		StatusCode: 502,
+		Message:    "bad gateway",
+		Retriable:  true,
+	}
+	anthropicMock := &mockProvider{
+		name:      "anthropic",
+		streamErr: retriableErr,
+	}
+	_ = r.RegisterProvider(anthropicMock)
+
+	req := &provider.Request{}
+	_, err := r.Stream(context.Background(), req)
+	if err != retriableErr {
+		t.Fatalf("expected retriable error returned directly, got: %v", err)
+	}
+}
+
+func TestStream_AuthErrorWrapped(t *testing.T) {
+	r, _ := NewRouter(validConfig(), nil, nil)
 
 	anthropicMock := &mockProvider{
 		name: "anthropic",
 		streamErr: &provider.ProviderError{
 			Provider:   "anthropic",
-			StatusCode: 502,
-			Message:    "bad gateway",
-			Retriable:  true,
+			StatusCode: 401,
+			Message:    "invalid api key",
+			Retriable:  false,
 		},
 	}
+	_ = r.RegisterProvider(anthropicMock)
 
-	ch := make(chan provider.StreamEvent, 1)
-	ch <- provider.TokenDelta{Text: "fallback"}
-	close(ch)
+	req := &provider.Request{}
+	_, err := r.Stream(context.Background(), req)
+	if err == nil {
+		t.Fatal("expected auth error")
+	}
+	if !contains(err.Error(), "authentication failed") {
+		t.Fatalf("expected auth error message, got: %s", err.Error())
+	}
+	if !contains(err.Error(), "Check your API key") {
+		t.Fatalf("expected remediation message, got: %s", err.Error())
+	}
+}
+
+func TestStream_PerRequestOverride(t *testing.T) {
+	r, _ := NewRouter(validConfig(), nil, nil)
+
+	anthropicCh := make(chan provider.StreamEvent, 1)
+	anthropicCh <- provider.TokenDelta{Text: "anthropic-response"}
+	close(anthropicCh)
+	anthropicMock := &mockProvider{
+		name:     "anthropic",
+		streamCh: anthropicCh,
+		models:   []provider.Model{{ID: "claude-sonnet-4-6"}},
+	}
+
+	localCh := make(chan provider.StreamEvent, 1)
+	localCh <- provider.TokenDelta{Text: "local-response"}
+	close(localCh)
 	localMock := &mockProvider{
 		name:     "local",
-		streamCh: ch,
+		streamCh: localCh,
+		models:   []provider.Model{{ID: "qwen2.5-coder-7b"}},
 	}
 
 	_ = r.RegisterProvider(anthropicMock)
 	_ = r.RegisterProvider(localMock)
 
-	req := &provider.Request{}
+	req := &provider.Request{Model: "qwen2.5-coder-7b"}
 	got, err := r.Stream(context.Background(), req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if got == nil {
-		t.Fatal("expected non-nil stream channel from fallback")
+		t.Fatal("expected non-nil stream channel")
 	}
 
 	event := <-got
@@ -537,8 +493,15 @@ func TestStream_FallbackOnRetriableError(t *testing.T) {
 	if !ok {
 		t.Fatal("expected TokenDelta event")
 	}
-	if td.Text != "fallback" {
-		t.Fatalf("expected 'fallback', got %s", td.Text)
+	if td.Text != "local-response" {
+		t.Fatalf("expected 'local-response', got %s", td.Text)
+	}
+
+	if localMock.getStreamCalls() != 1 {
+		t.Fatalf("expected 1 local stream call, got %d", localMock.getStreamCalls())
+	}
+	if anthropicMock.getStreamCalls() != 0 {
+		t.Fatalf("expected 0 anthropic stream calls, got %d", anthropicMock.getStreamCalls())
 	}
 }
 
@@ -625,39 +588,6 @@ func TestHealthTracking_FailureUpdatesHealth(t *testing.T) {
 	}
 	if h.LastErrorAt.Before(before) {
 		t.Fatal("expected LastErrorAt to be recent")
-	}
-}
-
-func TestHealthTracking_FallbackUpdatesHealth(t *testing.T) {
-	cfg := validConfig()
-	cfg.Fallback = &RouteTarget{Provider: "local", Model: "qwen2.5-coder-7b"}
-	r, _ := NewRouter(cfg, nil, nil)
-
-	anthropicMock := &mockProvider{
-		name: "anthropic",
-		completeErr: &provider.ProviderError{
-			Provider:   "anthropic",
-			StatusCode: 502,
-			Message:    "bad gateway",
-			Retriable:  true,
-		},
-	}
-	localMock := &mockProvider{
-		name:         "local",
-		completeResp: &provider.Response{Model: "qwen2.5-coder-7b"},
-	}
-
-	_ = r.RegisterProvider(anthropicMock)
-	_ = r.RegisterProvider(localMock)
-
-	_, _ = r.Complete(context.Background(), &provider.Request{})
-
-	health := r.ProviderHealthMap()
-	if health["anthropic"].Healthy {
-		t.Fatal("expected anthropic to be unhealthy")
-	}
-	if !health["local"].Healthy {
-		t.Fatal("expected local to be healthy")
 	}
 }
 
@@ -842,9 +772,8 @@ func TestValidate_UnreachableProviderUnregistered(t *testing.T) {
 	}
 }
 
-func TestValidate_DefaultProviderUnavailablePrefersConfiguredFallback(t *testing.T) {
+func TestValidate_DefaultProviderUnavailableHardStop(t *testing.T) {
 	cfg := validConfig()
-	cfg.Fallback = &RouteTarget{Provider: "local", Model: "qwen2.5-coder-7b"}
 	r, _ := NewRouter(cfg, nil, nil)
 
 	anthropicMock := &mockProvider{
@@ -855,193 +784,17 @@ func TestValidate_DefaultProviderUnavailablePrefersConfiguredFallback(t *testing
 		name:   "local",
 		models: []provider.Model{{ID: "qwen2.5-coder-7b"}},
 	}
-	alphaMock := &mockProvider{
-		name:   "alpha",
-		models: []provider.Model{{ID: "alpha-model"}},
-	}
-
-	_ = r.RegisterProvider(anthropicMock)
-	_ = r.RegisterProvider(alphaMock)
-	_ = r.RegisterProvider(localMock)
-
-	if err := r.Validate(context.Background()); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	r.mu.RLock()
-	defaultProvider := r.config.Default.Provider
-	r.mu.RUnlock()
-
-	if defaultProvider != "local" {
-		t.Fatalf("expected configured fallback provider 'local', got %q", defaultProvider)
-	}
-}
-
-func TestValidate_DefaultProviderUnavailableUsesSortedProviderName(t *testing.T) {
-	r, _ := NewRouter(validConfig(), nil, nil)
-
-	anthropicMock := &mockProvider{
-		name:      "anthropic",
-		modelsErr: fmt.Errorf("unauthorized"),
-	}
-	zetaMock := &mockProvider{
-		name:   "zeta",
-		models: []provider.Model{{ID: "zeta-model"}},
-	}
-	alphaMock := &mockProvider{
-		name:   "alpha",
-		models: []provider.Model{{ID: "alpha-model"}},
-	}
-
-	_ = r.RegisterProvider(anthropicMock)
-	_ = r.RegisterProvider(zetaMock)
-	_ = r.RegisterProvider(alphaMock)
-
-	if err := r.Validate(context.Background()); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	r.mu.RLock()
-	defaultProvider := r.config.Default.Provider
-	r.mu.RUnlock()
-
-	if defaultProvider != "alpha" {
-		t.Fatalf("expected lexically first provider 'alpha', got %q", defaultProvider)
-	}
-}
-
-// --- Stream auth/override tests ---
-
-func TestStream_AuthErrorNoFallback(t *testing.T) {
-	cfg := validConfig()
-	cfg.Fallback = &RouteTarget{Provider: "local", Model: "qwen2.5-coder-7b"}
-	r, _ := NewRouter(cfg, nil, nil)
-
-	anthropicMock := &mockProvider{
-		name: "anthropic",
-		streamErr: &provider.ProviderError{
-			Provider:   "anthropic",
-			StatusCode: 401,
-			Message:    "invalid api key",
-			Retriable:  false,
-		},
-	}
-
-	ch := make(chan provider.StreamEvent, 1)
-	ch <- provider.TokenDelta{Text: "fallback"}
-	close(ch)
-	localMock := &mockProvider{
-		name:     "local",
-		streamCh: ch,
-	}
 
 	_ = r.RegisterProvider(anthropicMock)
 	_ = r.RegisterProvider(localMock)
 
-	req := &provider.Request{}
-	_, err := r.Stream(context.Background(), req)
+	// With no fallback, default provider failure is a hard stop.
+	err := r.Validate(context.Background())
 	if err == nil {
-		t.Fatal("expected auth error")
+		t.Fatal("expected hard error when default provider fails validation")
 	}
-	if !contains(err.Error(), "authentication failed") {
-		t.Fatalf("expected auth error message, got: %s", err.Error())
-	}
-	if !contains(err.Error(), "Check your API key") {
-		t.Fatalf("expected remediation message, got: %s", err.Error())
-	}
-	if anthropicMock.getStreamCalls() != 1 {
-		t.Fatalf("expected 1 anthropic stream call, got %d", anthropicMock.getStreamCalls())
-	}
-	if localMock.getStreamCalls() != 0 {
-		t.Fatalf("expected 0 local stream calls (no fallback on auth), got %d", localMock.getStreamCalls())
-	}
-}
-
-func TestStream_PerRequestOverride(t *testing.T) {
-	r, _ := NewRouter(validConfig(), nil, nil)
-
-	anthropicCh := make(chan provider.StreamEvent, 1)
-	anthropicCh <- provider.TokenDelta{Text: "anthropic-response"}
-	close(anthropicCh)
-	anthropicMock := &mockProvider{
-		name:     "anthropic",
-		streamCh: anthropicCh,
-		models:   []provider.Model{{ID: "claude-sonnet-4-6"}},
-	}
-
-	localCh := make(chan provider.StreamEvent, 1)
-	localCh <- provider.TokenDelta{Text: "local-response"}
-	close(localCh)
-	localMock := &mockProvider{
-		name:     "local",
-		streamCh: localCh,
-		models:   []provider.Model{{ID: "qwen2.5-coder-7b"}},
-	}
-
-	_ = r.RegisterProvider(anthropicMock)
-	_ = r.RegisterProvider(localMock)
-
-	req := &provider.Request{Model: "qwen2.5-coder-7b"}
-	got, err := r.Stream(context.Background(), req)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got == nil {
-		t.Fatal("expected non-nil stream channel")
-	}
-
-	event := <-got
-	td, ok := event.(provider.TokenDelta)
-	if !ok {
-		t.Fatal("expected TokenDelta event")
-	}
-	if td.Text != "local-response" {
-		t.Fatalf("expected 'local-response', got %s", td.Text)
-	}
-
-	if localMock.getStreamCalls() != 1 {
-		t.Fatalf("expected 1 local stream call, got %d", localMock.getStreamCalls())
-	}
-	if anthropicMock.getStreamCalls() != 0 {
-		t.Fatalf("expected 0 anthropic stream calls, got %d", anthropicMock.getStreamCalls())
-	}
-}
-
-func TestValidate_DefaultProviderUnavailableUpdatesModel(t *testing.T) {
-	cfg := validConfig() // default: anthropic / claude-sonnet-4-6
-	cfg.Fallback = &RouteTarget{Provider: "local", Model: "qwen2.5-coder-7b"}
-	r, _ := NewRouter(cfg, nil, nil)
-
-	// anthropic fails validation
-	anthropicMock := &mockProvider{
-		name:      "anthropic",
-		modelsErr: fmt.Errorf("unauthorized"),
-	}
-	localMock := &mockProvider{
-		name:   "local",
-		models: []provider.Model{{ID: "qwen2.5-coder-7b"}},
-	}
-
-	_ = r.RegisterProvider(anthropicMock)
-	_ = r.RegisterProvider(localMock)
-
-	if err := r.Validate(context.Background()); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	r.mu.RLock()
-	defaultProvider := r.config.Default.Provider
-	defaultModel := r.config.Default.Model
-	r.mu.RUnlock()
-
-	if defaultProvider != "local" {
-		t.Fatalf("expected default provider to switch to 'local', got %q", defaultProvider)
-	}
-	// The key assertion: the model must also be updated when the provider changes.
-	// If the provider switched to "local" but the model is still "claude-sonnet-4-6",
-	// that's a bug — the model should be "qwen2.5-coder-7b" (the fallback model).
-	if defaultModel != "qwen2.5-coder-7b" {
-		t.Fatalf("expected default model to be updated to 'qwen2.5-coder-7b' when provider switched to fallback, got %q", defaultModel)
+	if !contains(err.Error(), "default provider") {
+		t.Fatalf("expected error about default provider, got: %s", err.Error())
 	}
 }
 
@@ -1087,7 +840,7 @@ func TestValidate_PingFailureUnregistersProvider(t *testing.T) {
 	}
 	r, _ := NewRouter(cfg, nil, nil)
 
-	// Anthropic with failing Ping.
+	// Anthropic with failing Ping — hard stop since it's the default.
 	failingPing := &mockPingProvider{
 		mockProvider: mockProvider{
 			name:   "anthropic",
@@ -1095,28 +848,12 @@ func TestValidate_PingFailureUnregistersProvider(t *testing.T) {
 		},
 		pingErr: fmt.Errorf("auth check failed"),
 	}
-	// Healthy fallback.
-	localMock := &mockProvider{
-		name:   "local",
-		models: []provider.Model{{ID: "qwen2.5-coder-7b"}},
-	}
 
 	_ = r.RegisterProvider(failingPing)
-	_ = r.RegisterProvider(localMock)
 
 	err := r.Validate(context.Background())
-	if err != nil {
-		t.Fatalf("unexpected error: %v (should fall back to local)", err)
-	}
-
-	// Anthropic should be unregistered.
-	health := r.ProviderHealthMap()
-	if _, ok := health["anthropic"]; ok {
-		t.Error("expected anthropic to be unregistered after Ping() failure")
-	}
-	// Local should still be registered.
-	if _, ok := health["local"]; !ok {
-		t.Error("expected local to remain registered")
+	if err == nil {
+		t.Fatal("expected hard error when default provider fails Ping()")
 	}
 }
 
@@ -1131,7 +868,7 @@ func TestValidate_FallsBackToModelsWhenNoPinger(t *testing.T) {
 	}
 	_ = r.RegisterProvider(mp)
 
-	// Should still pass by using Models() fallback.
+	// Should still pass by using Models() check.
 	err := r.Validate(context.Background())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

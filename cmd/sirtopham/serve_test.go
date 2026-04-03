@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"database/sql"
+	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -96,6 +98,19 @@ func TestEnsureProjectRecordUpdatesExistingProjectRow(t *testing.T) {
 	}
 	if updatedAt == createdAt {
 		t.Fatalf("expected updated_at to change, still %q", updatedAt)
+	}
+}
+
+func TestBuildBrainBackendUsesMCPClient(t *testing.T) {
+	cfg := appconfig.BrainConfig{Enabled: true, VaultPath: t.TempDir()}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	backend, cleanup, err := buildBrainBackend(context.Background(), cfg, logger)
+	if err != nil {
+		t.Fatalf("buildBrainBackend error: %v", err)
+	}
+	defer cleanup()
+	if backend == nil {
+		t.Fatal("expected non-nil backend")
 	}
 }
 

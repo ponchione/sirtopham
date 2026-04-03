@@ -14,12 +14,12 @@ import (
 // BrainWrite implements the brain_write tool — create or overwrite a brain
 // document in the Obsidian vault.
 type BrainWrite struct {
-	client *brain.ObsidianClient
+	client brain.Backend
 	config config.BrainConfig
 }
 
-// NewBrainWrite creates a brain_write tool backed by the given Obsidian client.
-func NewBrainWrite(client *brain.ObsidianClient, cfg config.BrainConfig) *BrainWrite {
+// NewBrainWrite creates a brain_write tool backed by the given brain backend.
+func NewBrainWrite(client brain.Backend, cfg config.BrainConfig) *BrainWrite {
 	return &BrainWrite{client: client, config: cfg}
 }
 
@@ -57,7 +57,7 @@ func (b *BrainWrite) Execute(ctx context.Context, projectRoot string, input json
 	if !b.config.Enabled {
 		return &ToolResult{
 			Success: false,
-			Content: "Project brain is not configured. See sirtopham.yaml brain section.",
+			Content: "Project brain is not configured. See the project's YAML config brain section.",
 		}, nil
 	}
 
@@ -100,6 +100,6 @@ func (b *BrainWrite) Execute(ctx context.Context, projectRoot string, input json
 
 	return &ToolResult{
 		Success: true,
-		Content: fmt.Sprintf("Brain document written: %s (%d bytes)", params.Path, len(params.Content)),
+		Content: fmt.Sprintf("Wrote brain document: %s", params.Path),
 	}, nil
 }

@@ -1,5 +1,7 @@
 # Layer 4 — Epic 06: Obsidian Client & Brain Tools
 
+Note: this epic doc describes the superseded REST-era brain plan. The implemented runtime has moved to an MCP-backed vault backend; use it only as historical context.
+
 **Layer:** 4 (Tool System)
 **Package:** `internal/tool/`, `internal/brain/`
 **Status:** ⬚ Not Started

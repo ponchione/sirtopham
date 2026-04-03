@@ -1,5 +1,7 @@
 # Task 01: ObsidianClient HTTP Client
 
+Note: this task is now historical. The supported runtime path is MCP-backed and no longer depends on `ObsidianClient`.
+
 **Epic:** 06 — Obsidian Client & Brain Tools
 **Status:** ⬚ Not started
 **Dependencies:** Layer 0 Epic 03 (config — brain section)

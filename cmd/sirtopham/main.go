@@ -5,7 +5,6 @@ import (
 	"os"
 
 	appconfig "github.com/ponchione/sirtopham/internal/config"
-	appdb "github.com/ponchione/sirtopham/internal/db"
 	"github.com/spf13/cobra"
 )
 
@@ -24,40 +23,10 @@ func main() {
 		},
 	}
 
-	rootCmd.PersistentFlags().StringVar(&configPath, "config", "sirtopham.yaml", "Path to config file")
+	rootCmd.PersistentFlags().StringVar(&configPath, "config", appconfig.DefaultConfigFilename(""), "Path to config file")
 
-	initCmd := &cobra.Command{
-		Use:   "init",
-		Short: "Initialize the sirtopham database schema",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := appconfig.Load(configPath)
-			if err != nil {
-				return err
-			}
-
-			database, err := appdb.OpenDB(cmd.Context(), cfg.DatabasePath())
-			if err != nil {
-				return err
-			}
-			defer database.Close()
-
-			if err := appdb.Init(cmd.Context(), database); err != nil {
-				return err
-			}
-
-			fmt.Fprintf(os.Stdout, "initialized database at %s\n", cfg.DatabasePath())
-			return nil
-		},
-	}
-
-	indexCmd := &cobra.Command{
-		Use:   "index",
-		Short: "Index the codebase for RAG search",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			fmt.Println("not yet implemented")
-			return nil
-		},
-	}
+	initCmd := newInitCmd(&configPath)
+	indexCmd := newIndexCmd(&configPath)
 
 	configCmd := &cobra.Command{
 		Use:   "config",
@@ -69,8 +38,9 @@ func main() {
 	}
 
 	serveCmd := newServeCmd(&configPath)
+	brainServeCmd := newBrainServeCmd()
 
-	rootCmd.AddCommand(serveCmd, initCmd, indexCmd, configCmd)
+	rootCmd.AddCommand(serveCmd, brainServeCmd, initCmd, indexCmd, configCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)

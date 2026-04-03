@@ -7,14 +7,19 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/ponchione/sirtopham/internal/config"
+	"github.com/ponchione/sirtopham/internal/pathglob"
 )
 
 // ProjectHandler serves project info, file tree, and file content endpoints.
 type ProjectHandler struct {
 	cfg    *config.Config
 	logger *slog.Logger
+
+	langOnce sync.Once
+	langVal  string // cached primary language
 }
 
 // NewProjectHandler creates a handler and registers routes on the server.
@@ -31,18 +36,22 @@ func NewProjectHandler(s *Server, cfg *config.Config, logger *slog.Logger) *Proj
 // ── GET /api/project ─────────────────────────────────────────────────
 
 type projectInfoResponse struct {
-	RootPath  string `json:"root_path"`
-	Language  string `json:"language,omitempty"`
-	Name      string `json:"name"`
+	RootPath string `json:"root_path"`
+	Language string `json:"language,omitempty"`
+	Name     string `json:"name"`
 }
 
 func (h *ProjectHandler) handleProject(w http.ResponseWriter, _ *http.Request) {
 	name := filepath.Base(h.cfg.ProjectRoot)
-	lang := detectPrimaryLanguage(h.cfg.ProjectRoot, h.cfg.Index.Include)
+
+	h.langOnce.Do(func() {
+		h.langVal = detectPrimaryLanguage(h.cfg.ProjectRoot, h.cfg.Index.Include)
+		h.logger.Info("cached primary language", "language", h.langVal)
+	})
 
 	writeJSON(w, http.StatusOK, projectInfoResponse{
 		RootPath: h.cfg.ProjectRoot,
-		Language: lang,
+		Language: h.langVal,
 		Name:     name,
 	})
 }
@@ -183,19 +192,8 @@ func shouldExclude(relPath, name string, excludes []string) bool {
 	}
 
 	for _, pattern := range excludes {
-		// Simple glob matching: check against the name and the relative path.
-		if matched, _ := filepath.Match(pattern, name); matched {
+		if pathglob.Match(pattern, relPath) || pathglob.Match(pattern, name) {
 			return true
-		}
-		if matched, _ := filepath.Match(pattern, relPath); matched {
-			return true
-		}
-		// Handle ** patterns: strip **/ prefix and match.
-		trimmed := strings.TrimPrefix(pattern, "**/")
-		if trimmed != pattern {
-			if matched, _ := filepath.Match(trimmed, name); matched {
-				return true
-			}
 		}
 	}
 	return false
@@ -279,5 +277,3 @@ func langFromExtension(ext string) string {
 	}
 	return "text"
 }
-
-

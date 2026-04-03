@@ -200,6 +200,8 @@ Tool errors are tool results, not exceptions. When a tool encounters an error, i
 
 Errors are enriched with context that helps the LLM recover on its next attempt:
 
+Note: the brain-tool rows below were originally written for the pre-MCP Obsidian Local REST path. The current runtime brain backend is MCP-backed; remaining REST-specific wording is historical spec debt.
+
 |Error|Enrichment|
 |---|---|
 |File not found|List available files in the parent directory|

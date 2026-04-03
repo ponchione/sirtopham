@@ -4,39 +4,24 @@
     "type": "split",
     "children": [
       {
-        "id": "d4df043dd0e0401b",
+        "id": "d69ccf27440a3034",
         "type": "tabs",
         "children": [
           {
-            "id": "5921b00f85a46ee8",
+            "id": "bf882d8b14c93249",
             "type": "leaf",
             "state": {
               "type": "markdown",
               "state": {
-                "file": "test-note.md",
+                "file": "notes/hello.md",
                 "mode": "source",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "test-note"
-            }
-          },
-          {
-            "id": "6614dab350a332ed",
-            "type": "leaf",
-            "state": {
-              "type": "markdown",
-              "state": {
-                "file": "Frontend Design System - augmented-ui Integration.md",
-                "mode": "source",
-                "source": false
-              },
-              "icon": "lucide-file",
-              "title": "Frontend Design System - augmented-ui Integration"
+              "title": "hello"
             }
           }
-        ],
-        "currentTab": 1
+        ]
       }
     ],
     "direction": "vertical"
@@ -198,17 +183,18 @@
       "bases:Create new base": false
     }
   },
-  "active": "6614dab350a332ed",
+  "active": "bf882d8b14c93249",
   "lastOpenFiles": [
+    "notes/curl-smoke.md",
+    "notes/hello.md",
+    "notes",
+    "test-note.md",
+    "Frontend Design System - augmented-ui Integration.md",
     "brain-viewer.md",
     "Unconfirmed 241112.crdownload",
     "brain-mcp-migration.md",
     "Unconfirmed 119482.crdownload",
-    "test-note.md",
-    "Frontend Design System - augmented-ui Integration.md",
     "test-note-2.md",
-    "notes/curl-smoke.md",
-    "notes/client-smoke.md",
-    "notes"
+    "notes/client-smoke.md"
   ]
 }
