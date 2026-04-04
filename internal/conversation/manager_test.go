@@ -621,6 +621,74 @@ func TestSearchSnippetSummaryForInterruptedToolResult(t *testing.T) {
 	}
 }
 
+func TestSearchSnippetExtractsAssistantTextFromJSONBlocks(t *testing.T) {
+	input := `[{"type":"text","text":"I'll check <b>search_text</b>."},{"type":"tool_use","id":"tc1","name":"file_read","input":{"path":"internal/tool/search_text.go"}}]`
+	got := sanitizeSearchSnippet(input)
+	if got != "I'll check <b>search_text</b>." {
+		t.Fatalf("sanitizeSearchSnippet() = %q, want assistant text only", got)
+	}
+}
+
+func TestSearchSnippetSummarizesToolOnlyAssistantJSON(t *testing.T) {
+	input := `[{"type":"tool_use","id":"tc1","name":"search_text","input":{"pattern":"cleanup"}}]`
+	got := sanitizeSearchSnippet(input)
+	if got != "[assistant tool call: search_text]" {
+		t.Fatalf("sanitizeSearchSnippet() = %q, want compact tool-call summary", got)
+	}
+}
+
+func TestSearchSnippetSanitizesTruncatedToolJSON(t *testing.T) {
+	input := `[{"type":"tool_use","id":"call_1","name":"shell","input":{"command":"git log -n 5 -- internal/tool/search_text.go...`
+	got := sanitizeSearchSnippet(input)
+	if got != "[assistant tool call: shell]" {
+		t.Fatalf("sanitizeSearchSnippet() = %q, want compact tool-call summary for truncated JSON", got)
+	}
+}
+
+func TestSearchSnippetSanitizesTruncatedTextJSON(t *testing.T) {
+	input := `[{"type":"text","text":"internal/tool/<b>search_text</b>.go implements the search tool...`
+	got := sanitizeSearchSnippet(input)
+	if got != `internal/tool/<b>search_text</b>.go implements the search tool...` {
+		t.Fatalf("sanitizeSearchSnippet() = %q, want extracted text from truncated JSON", got)
+	}
+}
+
+func TestManagerSearchSanitizesNormalAssistantToolJSONSnippets(t *testing.T) {
+	ctx := context.Background()
+	database := newTestDB(t)
+	projectID := seedProject(t, database)
+	mgr := newTestManager(t, database)
+	mgr.HistoryManager.now = func() time.Time { return time.Unix(1700001000, 0).UTC() }
+
+	conv, err := mgr.Create(ctx, projectID, WithTitle("Tool JSON search"))
+	if err != nil {
+		t.Fatalf("Create error: %v", err)
+	}
+	if err := mgr.PersistUserMessage(ctx, conv.ID, 1, "please inspect this tool run"); err != nil {
+		t.Fatalf("PersistUserMessage error: %v", err)
+	}
+	if err := mgr.PersistIteration(ctx, conv.ID, 1, 1, []IterationMessage{{
+		Role:    "assistant",
+		Content: `[{"type":"text","text":"I'll inspect search_text."},{"type":"tool_use","id":"tc1","name":"file_read","input":{"path":"internal/tool/search_text.go"}}]`,
+	}}); err != nil {
+		t.Fatalf("PersistIteration error: %v", err)
+	}
+
+	results, err := mgr.Search(ctx, "search_text")
+	if err != nil {
+		t.Fatalf("Search error: %v", err)
+	}
+	if len(results) == 0 {
+		t.Fatal("Search returned no results, want assistant snippet-backed match")
+	}
+	if strings.Contains(results[0].Snippet, `"type":"tool_use"`) || strings.Contains(results[0].Snippet, `"input":`) {
+		t.Fatalf("Search snippet = %q, want tool JSON stripped", results[0].Snippet)
+	}
+	if results[0].Snippet != "I'll inspect <b>search_text</b>." {
+		t.Fatalf("Search snippet = %q, want assistant text only with FTS highlighting preserved", results[0].Snippet)
+	}
+}
+
 func TestManagerSearchSanitizesTombstoneSnippets(t *testing.T) {
 	ctx := context.Background()
 	database := newTestDB(t)

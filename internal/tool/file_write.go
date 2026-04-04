@@ -114,7 +114,14 @@ func (FileWrite) Execute(ctx context.Context, projectRoot string, input json.Raw
 	// Preserve permissions if overwriting.
 	if !isNew {
 		if info, err := os.Stat(absPath); err == nil {
-			os.Chmod(tmpPath, info.Mode())
+			if err := os.Chmod(tmpPath, info.Mode()); err != nil {
+				os.Remove(tmpPath)
+				return &ToolResult{
+					Success: false,
+					Content: fmt.Sprintf("Failed to preserve file permissions: %v", err),
+					Error:   err.Error(),
+				}, nil
+			}
 		}
 	}
 

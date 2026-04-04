@@ -3,6 +3,7 @@ package provider
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 )
 
 // Role identifies the sender of a message in the conversation.
@@ -62,22 +63,24 @@ func NewToolUseBlock(id, name string, input json.RawMessage) ContentBlock {
 
 // NewUserMessage creates a user message with the given text content.
 func NewUserMessage(text string) Message {
-	content, _ := json.Marshal(text)
 	return Message{
 		Role:    RoleUser,
-		Content: content,
+		Content: marshalJSONString(text),
 	}
 }
 
 // NewToolResultMessage creates a tool result message.
 func NewToolResultMessage(toolUseID, toolName, content string) Message {
-	raw, _ := json.Marshal(content)
 	return Message{
 		Role:      RoleTool,
-		Content:   raw,
+		Content:   marshalJSONString(content),
 		ToolUseID: toolUseID,
 		ToolName:  toolName,
 	}
+}
+
+func marshalJSONString(text string) json.RawMessage {
+	return json.RawMessage(strconv.Quote(text))
 }
 
 // ContentBlocksFromRaw unmarshals a json.RawMessage (a JSON array) into a

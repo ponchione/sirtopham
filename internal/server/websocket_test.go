@@ -455,6 +455,55 @@ func TestWebSocketCancel(t *testing.T) {
 	conn.Close(websocket.StatusNormalClosure, "test done")
 }
 
+func TestWebSocketDisconnectCancelsTurnContext(t *testing.T) {
+	turnStarted := make(chan struct{})
+	ctxCancelled := make(chan struct{})
+	agentMock := &mockAgentService{
+		runTurnFn: func(ctx context.Context, req agent.RunTurnRequest) (*agent.TurnResult, error) {
+			close(turnStarted)
+			<-ctx.Done()
+			close(ctxCancelled)
+			return nil, ctx.Err()
+		},
+	}
+	base, _ := setupWSTest(t, agentMock)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	wsURL := "ws" + base[4:] + "/api/ws"
+	conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	if err != nil {
+		t.Fatalf("websocket dial failed: %v", err)
+	}
+
+	msg := map[string]string{"type": "message", "conversation_id": "conv-1", "content": "hi"}
+	data, _ := json.Marshal(msg)
+	if err := conn.Write(ctx, websocket.MessageText, data); err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+
+	select {
+	case <-turnStarted:
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for turn start")
+	}
+
+	if err := conn.Close(websocket.StatusNormalClosure, "disconnect"); err != nil {
+		t.Fatalf("close failed: %v", err)
+	}
+
+	select {
+	case <-ctxCancelled:
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for RunTurn context cancellation after websocket disconnect")
+	}
+
+	if agentMock.getCancelCount() != 0 {
+		t.Fatal("expected websocket disconnect to cancel via context, not explicit Cancel()")
+	}
+}
+
 func TestWebSocketOneTurnAtATime(t *testing.T) {
 	blockCh := make(chan struct{})
 	agentMock := &mockAgentService{
@@ -545,13 +594,15 @@ func TestWebSocketEventForwarding(t *testing.T) {
 	var resp map[string]any
 	json.Unmarshal(respData, &resp)
 
-	// The token event type constant is "***" (from events.go).
 	if resp["type"] != "token" {
-		// Could also be "***" depending on the EventType() implementation.
-		// Accept either.
-		if resp["type"] != "***" {
-			t.Fatalf("expected token event, got type=%v", resp["type"])
-		}
+		t.Fatalf("expected token event, got type=%v", resp["type"])
+	}
+	dataMap, ok := resp["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("resp[data] type = %T, want object", resp["data"])
+	}
+	if dataMap["token"] != "Hello" {
+		t.Fatalf("forwarded token = %v, want Hello", dataMap["token"])
 	}
 
 	conn.Close(websocket.StatusNormalClosure, "test done")

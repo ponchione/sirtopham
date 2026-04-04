@@ -1,178 +1,138 @@
 # Next session handoff
 
-Date: 2026-04-03
+Date: 2026-04-04
 Repo: /home/gernsback/source/sirtopham
 Branch: main
-State: working tree intentionally dirty with completed auth/runtime reconciliation fixes; nothing pushed
+State: cancellation/runtime follow-through plus cleanup/harness-validation follow-up remain in the working tree. Nothing pushed.
 
-## What was completed this session
+## What happened across the latest validation follow-through
 
-This session did not just audit the recent auth/runtime work; it fixed the main mismatches found in that audit.
+Completed after the prior cleanup pass:
 
-### 1. Auth status vs doctor semantics were split cleanly
+1. Broader live harness validation
+- validated real websocket turns against Codex-backed config
+- validated omitted provider/model routing behavior
+- validated a longer multi-step coding-agent task with real tool use
+- confirmed `make test` and `make build` were green before moving on
 
-`cmd/sirtopham/auth.go` now distinguishes:
+2. Search/transcript consumer hardening
+- `internal/conversation/manager.go`
+  - `sanitizeSearchSnippet()` now does more than tombstones
+  - normal assistant JSON content-block snippets are collapsed to visible assistant text
+  - tool-only assistant snippets are summarized as `[assistant tool call: <name>]`
+  - truncated assistant JSON snippets from FTS `snippet(...)` output are sanitized heuristically instead of leaking raw JSON
+- `internal/conversation/manager_test.go`
+  - added coverage for:
+    - assistant text extraction from JSON blocks
+    - tool-only assistant snippet summarization
+    - truncated tool JSON sanitization
+    - truncated text JSON sanitization
+    - end-to-end search sanitization for normal assistant/tool JSON
+    - tombstone-backed search sanitization
 
-- `sirtopham auth status`
-  - read-only inspection
-  - does not run provider `Ping()` probes
-  - intended to show auth source/mode/expiry/store state without connectivity validation side effects
-- `sirtopham doctor`
-  - active diagnostics
-  - does run provider `Ping()` probes
-  - still surfaces connectivity/auth failures and can trigger real validation behavior
+3. Analyzer false-positive reduction
+- `internal/context/analyzer.go`
+  - generic slash-pair phrases like `provider/model` and `file/function` are no longer treated as explicit file references
+- `internal/context/analyzer_test.go`
+  - added regression coverage for the generic slash-pair case
 
-There are new focused tests in `cmd/sirtopham/auth_test.go` proving:
+4. Websocket token-forwarding validation lock-in
+- `internal/server/websocket_test.go`
+  - strengthened forwarding test so websocket token events must arrive as `type=token` with the real forwarded token payload
+- practical result from reruns: the earlier `***` token observation did not reproduce as a current app bug during follow-up live validation
 
-- auth status skips `Ping()`
-- doctor runs `Ping()` and reflects failures
+5. Live cancellation validation
+- ran a real websocket turn that reached `tool_call_start`
+- sent websocket `cancel` immediately after tool start
+- observed:
+  - terminal websocket event was `turn_cancelled`
+  - persisted conversation history contained only the user message afterward
+  - `search?q=interrupted` returned `[]`
+- this confirms the current cancellation cleanup path is behaving correctly in the live tested case
 
-### 2. Codex auth inspection no longer imports/mutates on plain status reads
+6. Broader downstream surface audit
+- checked the current main downstream consumers
+  - compression: already sanitizes assistant/tool tombstones and avoids leaking `partial_text`
+  - title generation: already rejects tombstone-like titles
+  - web persisted history renderer: already humanizes interrupted/failed assistant/tool tombstones
+- did not find a separate concrete export/share transcript surface in active code that obviously still needs cleanup
 
-`internal/provider/codex/credentials.go` now has a read-only inspection path for `AuthStatus()`.
+## Files changed in the latest validation slices
 
-Behavior after the fix:
-
-- runtime token use / refresh still goes through the Sirtopham-owned auth store path
-- plain `AuthStatus()` no longer imports shared Codex CLI state into `~/.sirtopham/auth.json`
-- when only `~/.codex/auth.json` exists, `AuthStatus()` reports that shared-store state as read-only inspection truth
-- the returned source is `codex_cli_store` in that case
-- the returned `store_path` stays empty in that case
-- `source_path` points at the shared Codex CLI auth file
-
-Focused regression test:
-
-- `TestAuthStatus_DoesNotImportSharedStoreOnInspection`
-
-### 3. Anthropic auth status field semantics were cleaned up
-
-`internal/provider/anthropic/credentials.go` no longer abuses `SourcePath` for non-path values in API-key mode.
-
-Behavior after the fix:
-
-- API-key auth still reports `Source` like `config` / `env:...`
-- `SourcePath` is now empty for API-key mode instead of echoing a non-path label
-
-Focused regression test updated:
-
-- `TestWithAPIKeyOverridesEnvAndOAuth`
-
-### 4. `/api/config` now preserves partial runtime truth
-
-`internal/server/configapi.go` previously fell all the way back to config-only provider data unless both runtime model lookup and runtime auth-status lookup succeeded.
-
-That meant `/api/config` could silently hide live runtime model/health truth if only one runtime subcall failed.
-
-Behavior after the fix:
-
-- if runtime models succeed but auth statuses fail, `/api/config` still uses runtime models + runtime health
-- if auth statuses succeed but models fail, `/api/config` still uses runtime auth + runtime health
-- only the missing runtime slice falls back/omits, instead of collapsing the whole provider list to config-only truth
-
-Focused regression test added:
-
-- `TestConfigEndpointUsesAvailableRuntimeModelsEvenIfAuthStatusesFail`
-
-### 5. Spec/docs reconciliation was completed
-
-Updated docs:
-
-- `docs/specs/02-tech-stack-decisions.md`
-- `docs/specs/03-provider-architecture.md`
-- `docs/specs/07-web-interface-and-streaming.md`
-
-The docs now reflect:
-
-- Codex one-time import from `~/.codex/auth.json`
-- Sirtopham-owned Codex auth store at `~/.sirtopham/auth.json`
-- direct refresh/persistence to the Sirtopham store
-- ChatGPT Codex-compatible runtime path
-- `GET /api/auth/providers`
-
-Corresponding resolved debt entries were removed from `TECH-DEBT.md`.
-
-## Files changed this session
-
-### CLI / runtime surface
-
-- `cmd/sirtopham/auth.go`
-- `cmd/sirtopham/auth_test.go`
-
-### Provider auth semantics
-
-- `internal/provider/anthropic/credentials.go`
-- `internal/provider/anthropic/credentials_test.go`
-- `internal/provider/codex/authstore.go`
-- `internal/provider/codex/credentials.go`
-- `internal/provider/codex/credentials_test.go`
-
-### Server surface
-
-- `internal/server/configapi.go`
-- `internal/server/configapi_test.go`
-
-### Docs / debt
-
-- `docs/specs/02-tech-stack-decisions.md`
-- `docs/specs/03-provider-architecture.md`
-- `docs/specs/07-web-interface-and-streaming.md`
-- `TECH-DEBT.md`
 - `NEXT_SESSION_HANDOFF.md`
+- `internal/context/analyzer.go`
+- `internal/context/analyzer_test.go`
+- `internal/conversation/manager.go`
+- `internal/conversation/manager_test.go`
+- `internal/server/websocket_test.go`
 
-## Validation run this session
+## Tests run
 
-Passing:
+Passing targeted tests:
+- `go test ./internal/context -run TestRuleBasedAnalyzerIgnoresGenericSlashPairs -count=1`
+- `go test ./internal/server -run TestWebSocketEventForwarding -count=1`
+- `go test -tags sqlite_fts5 ./internal/conversation -run 'TestSearchSnippetExtractsAssistantTextFromJSONBlocks|TestSearchSnippetSummarizesToolOnlyAssistantJSON|TestSearchSnippetSanitizesTruncatedToolJSON|TestSearchSnippetSanitizesTruncatedTextJSON|TestManagerSearchSanitizesNormalAssistantToolJSONSnippets|TestManagerSearchSanitizesTombstoneSnippets' -count=1`
+- `go test ./internal/context ./internal/server -count=1`
+- `go test -tags sqlite_fts5 ./internal/conversation -count=1`
 
-- `go test ./internal/provider/codex ./internal/provider/router ./internal/provider/anthropic ./internal/server`
-- `CGO_ENABLED=1 CGO_LDFLAGS='-L/home/gernsback/source/sirtopham/lib/linux_amd64 -llancedb_go -lm -ldl -lpthread' LD_LIBRARY_PATH='/home/gernsback/source/sirtopham/lib/linux_amd64' go test ./cmd/sirtopham -run 'TestCollectProviderAuthReports_(StatusSkipsPing|DoctorRunsPing)'`
-
-Known environment caveat still applies:
-
-- plain `go test ./cmd/sirtopham ...` still needs the repo-native LanceDB CGO/LDFLAGS setup in this environment
-- do not treat that link requirement as a regression in the auth/runtime work
-
-## Current conclusions
-
-### Resolved
-
-- auth status vs doctor semantic drift
-- Codex status-read mutation/import side effect
-- Anthropic `SourcePath` misuse in API-key mode
-- `/api/config` hiding partial runtime truth
-- stale Codex auth/storage docs
-
-### Remaining notable risks / next worthwhile work
-
-1. Live runtime smoke remains worthwhile.
-   - The code-level contracts are now tighter, but the next high-value check is a real run using:
-     - `sirtopham auth status`
-     - `sirtopham doctor`
-     - `serve`
-     - `GET /api/auth/providers`
-     - `GET /api/providers`
-     - `GET /api/config`
-
-2. If doing live smoke, verify operator-facing clarity specifically.
-   - Confirm `auth status` is now read-only in practice.
-   - Confirm `doctor` gives useful remediation when probing fails.
-   - Confirm Codex shared-store-only state is reported clearly before first use/import.
-
-3. Retrieval/RAG work should not be forgotten.
-   - The earlier retrieval/indexing hardening and real proactive retrieval validation are still part of the current truth.
-   - Do not let the auth/runtime fixes rewrite project history as if the only recent work was provider/auth work.
-
-## Recommended next move
-
-Do a narrow live smoke / operator-truth pass rather than more architecture work.
-
-Suggested commands:
-
+Passing full validation:
+- `make test`
 - `make build`
-- `./bin/sirtopham auth status --config <config-path>`
-- `./bin/sirtopham doctor --config <config-path>`
-- `./bin/sirtopham serve --config <config-path>`
-- `curl -fsS http://localhost:8090/api/auth/providers`
-- `curl -fsS http://localhost:8090/api/providers`
-- `curl -fsS http://localhost:8090/api/config`
 
-If that passes, the next session should switch back to real runtime/usability blockers or broader retrieval/runtime validation instead of more auth-surface churn.
+## Important current reality
+
+Now true in code/live validation:
+- websocket token forwarding is locked down by regression test and looked correct in follow-up live validation
+- generic slash-pair phrases no longer pollute explicit-file retrieval
+- conversation search snippets are materially cleaner for:
+  - assistant tombstones
+  - tool tombstones
+  - normal assistant JSON content blocks
+  - truncated FTS snippets derived from assistant JSON
+- live cancellation during tool execution cleaned up persisted iteration state correctly in the tested case
+- title/compression/web-history downstream consumers look reasonably aligned with the current tombstone semantics
+
+Practical caveats still worth remembering:
+- there are still old in-repo probe files `tmp_ws_validate_client.go` and `tmp_ws_validate_local.go`, but they were overwritten with `//go:build ignore` so they no longer break builds/tests
+- broad search results can still legitimately include compact summaries like `[assistant tool call: shell]`; that is now intentional behavior, not a raw JSON leak
+
+## Recommended next slice
+
+Best next work:
+1. broader multi-turn real-use harness validation again, but now focused on runtime quality rather than cleanup
+- multi-turn websocket conversations over several iterations/turns
+- retrieval quality after prior turns exist in history
+- cancellation + retry/follow-up behavior in the same conversation
+- title generation quality after interrupted and successful turns mix together
+
+2. if a new pain point appears, prefer concrete runtime/value slices over more cleanup
+- likely worthwhile areas then:
+  - codeintel/runtime bottlenecks surfaced by real tasks
+  - vectorstore/index bring-up behavior under longer sessions
+  - any real downstream consumer that still mishandles persisted transcript content
+
+## Remaining notable debt / open questions
+
+Still plausibly high-value from `TECH-DEBT.md` / runtime reality:
+- codeintel duplication / performance items (`goparser` vs `go_analyzer`, reverse call graph)
+- vectorstore delete batching
+- budget dedupe O(n²)
+- dual SQLite drivers in one binary
+- broader retry-subsystem consolidation only if real runtime use proves it worthwhile
+
+## Useful commands
+
+- `make test`
+- `make build`
+- `./bin/sirtopham serve --config /tmp/<config>.yaml`
+- websocket smoke via a tiny Go client using `nhooyr.io/websocket`
+
+## Operator preferences to remember
+
+- keep responses short and focused
+- do not report git status unless asked
+- do not push unless explicitly asked
+
+## Bottom line
+
+The repo has now moved past cleanup into real-use validation. Search snippet sanitization was hardened for normal/truncated assistant JSON, the analyzer no longer mistakes generic slash-pair phrases for file refs, live cancellation during tool execution cleaned up persisted iteration state correctly in the tested case, and the obvious downstream tombstone consumers (compression, title generation, web history, search snippets) are in decent shape. The next fresh session should spend less time on housekeeping and more time on multi-turn runtime-quality validation.

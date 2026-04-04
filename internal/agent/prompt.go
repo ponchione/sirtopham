@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -246,14 +245,12 @@ func dbMessageToProviderMessage(msg db.Message) provider.Message {
 	case "user":
 		// User content is plain text — wrap in a JSON string.
 		if msg.Content.Valid {
-			raw, _ := json.Marshal(msg.Content.String)
-			pm.Content = raw
+			pm.Content = provider.NewUserMessage(msg.Content.String).Content
 		}
 	case "tool":
 		// Tool content is plain text — wrap in a JSON string.
 		if msg.Content.Valid {
-			raw, _ := json.Marshal(msg.Content.String)
-			pm.Content = raw
+			pm.Content = provider.NewToolResultMessage("", "", msg.Content.String).Content
 		}
 		if msg.ToolUseID.Valid {
 			pm.ToolUseID = msg.ToolUseID.String
@@ -302,13 +299,4 @@ func (b *PromptBuilder) compressHistory(messages []db.Message, config PromptConf
 // ephemeralCacheControl returns the Anthropic cache control marker.
 func ephemeralCacheControl() *provider.CacheControl {
 	return &provider.CacheControl{Type: "ephemeral"}
-}
-
-// nullStr is a convenience for creating sql.NullString values in tests and
-// internal usage.
-func nullStr(s string) sql.NullString {
-	if s == "" {
-		return sql.NullString{}
-	}
-	return sql.NullString{String: s, Valid: true}
 }

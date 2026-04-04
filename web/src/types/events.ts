@@ -92,7 +92,7 @@ export interface TurnCompleteEvent {
   time: string;
 }
 
-/** Turn was cancelled by user. */
+/** Turn was cancelled or interrupted before completion. */
 export interface TurnCancelledEvent {
   type: "turn_cancelled";
   turn_number: number;

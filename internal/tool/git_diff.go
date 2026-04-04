@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os/exec"
 	"strings"
 )
 
@@ -19,9 +18,11 @@ type gitDiffInput struct {
 	Path   string `json:"path,omitempty"`
 }
 
-func (GitDiff) Name() string        { return "git_diff" }
-func (GitDiff) Description() string { return "Show unified diff for working tree, staged, or ref-to-ref changes" }
-func (GitDiff) ToolPurity() Purity  { return Pure }
+func (GitDiff) Name() string { return "git_diff" }
+func (GitDiff) Description() string {
+	return "Show unified diff for working tree, staged, or ref-to-ref changes"
+}
+func (GitDiff) ToolPurity() Purity { return Pure }
 
 func (GitDiff) Schema() json.RawMessage {
 	return json.RawMessage(`{
@@ -63,7 +64,7 @@ func (GitDiff) Execute(ctx context.Context, projectRoot string, input json.RawMe
 		}
 	}
 
-	gitPath, err := exec.LookPath("git")
+	gitPath, err := lookupCommandPath("git")
 	if err != nil {
 		return &ToolResult{
 			Success: false,

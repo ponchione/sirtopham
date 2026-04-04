@@ -2,6 +2,7 @@ package agent
 
 import (
 	stdctx "context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -38,6 +39,10 @@ func (l *AgentLoop) streamWithRetry(
 		result, err := l.doStreamAttempt(ctx, req, iteration)
 		if err == nil {
 			return result, nil
+		}
+
+		if errors.Is(err, stdctx.Canceled) || errors.Is(err, stdctx.DeadlineExceeded) {
+			return result, err
 		}
 
 		// Classify the error.
@@ -116,7 +121,7 @@ func (l *AgentLoop) doStreamAttempt(
 		return l.now().UTC().Format(time.RFC3339)
 	})
 	if err != nil {
-		return nil, err
+		return result, err
 	}
 	return result, nil
 }

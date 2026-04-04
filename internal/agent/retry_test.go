@@ -23,6 +23,18 @@ type retryResponse struct {
 	err    error
 }
 
+type streamingRetryProviderRouterStub struct{}
+
+func (s *streamingRetryProviderRouterStub) Stream(ctx stdctx.Context, req *provider.Request) (<-chan provider.StreamEvent, error) {
+	ch := make(chan provider.StreamEvent, 1)
+	ch <- provider.TokenDelta{Text: "partial"}
+	go func() {
+		defer close(ch)
+		<-ctx.Done()
+	}()
+	return ch, nil
+}
+
 func (s *retryProviderRouterStub) Stream(_ stdctx.Context, req *provider.Request) (<-chan provider.StreamEvent, error) {
 	idx := s.callIndex
 	if idx >= len(s.responses) {
@@ -297,6 +309,57 @@ func TestStreamWithRetry_CancellationDuringSleep(t *testing.T) {
 	}
 }
 
+func TestStreamWithRetry_CancellationReturnsPartialResult(t *testing.T) {
+	ctx, cancel := stdctx.WithCancel(stdctx.Background())
+	sink := NewChannelSink(16)
+	loop := newRetryTestLoop(&streamingRetryProviderRouterStub{}, sink)
+
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		cancel()
+	}()
+
+	result, err := loop.streamWithRetry(ctx, &provider.Request{}, 1, "conv-retry-partial")
+	if err == nil {
+		t.Fatal("streamWithRetry error = nil, want cancellation error")
+	}
+	if !errors.Is(err, stdctx.Canceled) {
+		t.Fatalf("error = %v, want context.Canceled", err)
+	}
+	if result == nil {
+		t.Fatal("result = nil, want partial result")
+	}
+	if result.TextContent != "partial" {
+		t.Fatalf("TextContent = %q, want partial", result.TextContent)
+	}
+
+	assertNoRetryErrorEvents(t, sink.Events(), "cancellation")
+}
+
+func TestStreamWithRetry_DeadlineExceededReturnsPartialResult(t *testing.T) {
+	ctx, cancel := stdctx.WithTimeout(stdctx.Background(), 10*time.Millisecond)
+	defer cancel()
+
+	sink := NewChannelSink(16)
+	loop := newRetryTestLoop(&streamingRetryProviderRouterStub{}, sink)
+
+	result, err := loop.streamWithRetry(ctx, &provider.Request{}, 1, "conv-retry-deadline")
+	if err == nil {
+		t.Fatal("streamWithRetry error = nil, want deadline exceeded error")
+	}
+	if !errors.Is(err, stdctx.DeadlineExceeded) {
+		t.Fatalf("error = %v, want context.DeadlineExceeded", err)
+	}
+	if result == nil {
+		t.Fatal("result = nil, want partial result")
+	}
+	if result.TextContent != "partial" {
+		t.Fatalf("TextContent = %q, want partial", result.TextContent)
+	}
+
+	assertNoRetryErrorEvents(t, sink.Events(), "deadline exceeded")
+}
+
 func TestStreamWithRetry_RetriableRecoveryOnThirdAttempt(t *testing.T) {
 	serverErr := &provider.ProviderError{
 		Provider:   "openai",
@@ -447,6 +510,20 @@ func TestStreamWithRetry_RetryAfterSmallerThanBackoff(t *testing.T) {
 }
 
 // --- helpers ---
+
+func assertNoRetryErrorEvents(t *testing.T, ch <-chan Event, context string) {
+	t.Helper()
+	for {
+		select {
+		case event := <-ch:
+			if errEvt, ok := event.(ErrorEvent); ok {
+				t.Fatalf("unexpected ErrorEvent on %s: %+v", context, errEvt)
+			}
+		default:
+			return
+		}
+	}
+}
 
 // drainUntilType reads events from the channel until it finds one with the
 // given event type, or fails the test.

@@ -35,13 +35,13 @@ type connOverride struct {
 
 // WebSocketHandler handles WebSocket connections for streaming agent events.
 type WebSocketHandler struct {
-	agent            AgentService
-	convSvc          ConversationService
-	projectID        string
-	providers        map[string]config.ProviderConfig
-	defaultProvider  string
-	defaultModel     string
-	logger           *slog.Logger
+	agent           AgentService
+	convSvc         ConversationService
+	projectID       string
+	providers       map[string]config.ProviderConfig
+	defaultProvider string
+	defaultModel    string
+	logger          *slog.Logger
 }
 
 // NewWebSocketHandler creates a handler and registers the WS route.
@@ -55,7 +55,7 @@ func NewWebSocketHandler(s *Server, agentSvc AgentService, convSvc ConversationS
 		defaultModel:    cfg.Routing.Default.Model,
 		logger:          logger,
 	}
-s.HandleFunc("/api/ws", h.handleWS)
+	s.HandleFunc("/api/ws", h.handleWS)
 	return h
 }
 
@@ -124,6 +124,10 @@ func (h *WebSocketHandler) handleWS(w http.ResponseWriter, r *http.Request) {
 
 	// Write loop (server → client) — blocks until ctx done or sink closed.
 	h.writeLoop(ctx, conn, sink)
+	// If the write side exits first (for example because the client disconnected
+	// and writes start failing), cancel the shared turn context so any in-flight
+	// RunTurn call does not wait indefinitely for the read loop to notice.
+	cancel()
 
 	// Wait for read loop to finish.
 	<-readDone
@@ -229,8 +233,8 @@ func (h *WebSocketHandler) readLoop(ctx context.Context, cancel context.CancelFu
 	}
 
 	// Wait for any in-progress turn to finish before returning.
-	// The turn will continue even after disconnect (per spec: "turn continues,
-	// sink unsubscribed"). We unsubscribe the sink here so events stop flowing.
+	// Disconnects cancel the shared turn context; unsubscribing the sink here
+	// stops any further event forwarding during teardown.
 	h.agent.Unsubscribe(sink)
 	sink.Close()
 	turnWg.Wait()
@@ -351,9 +355,12 @@ func (h *WebSocketHandler) writeJSONMessage(ctx context.Context, conn *websocket
 	}
 	raw, err := json.Marshal(msg)
 	if err != nil {
+		h.logger.Error("marshal websocket message", "error", err, "type", msgType)
 		return
 	}
 	writeCtx, writeCancel := context.WithTimeout(ctx, 5*time.Second)
 	defer writeCancel()
-	conn.Write(writeCtx, websocket.MessageText, raw)
+	if err := conn.Write(writeCtx, websocket.MessageText, raw); err != nil {
+		h.logger.Debug("websocket writeJSONMessage failed", "error", err, "type", msgType)
+	}
 }

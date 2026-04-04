@@ -150,7 +150,14 @@ func consumeStream(
 
 			case provider.StreamError:
 				if e.Fatal {
-					return nil, fmt.Errorf("stream error: %s", e.Message)
+					if inThinking {
+						inThinking = false
+						emit(ThinkingEndEvent{})
+					}
+					result.TextContent = textBuilder.String()
+					result.ThinkingContent = thinkingBuilder.String()
+					result.ContentBlocks = buildContentBlocks(result.ThinkingContent, result.TextContent, result.ContentBlocks)
+					return result, fmt.Errorf("stream error: %s", e.Message)
 				}
 				// Non-fatal: log/emit and continue.
 				emit(ErrorEvent{

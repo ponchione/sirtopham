@@ -52,6 +52,7 @@ type loopConversationManagerStub struct {
 	persistErr            error
 	persistIterErr        error
 	cancelIterErr         error
+	reconstructFn         func(ctx stdctx.Context, conversationID string) ([]db.Message, error)
 	reconstructCalls      []string
 	seenFilesConversation []string
 	persistCalls          []persistedUserMessageCall
@@ -92,9 +93,12 @@ func (s *loopConversationManagerStub) CancelIteration(_ stdctx.Context, conversa
 	return s.cancelIterErr
 }
 
-func (s *loopConversationManagerStub) ReconstructHistory(_ stdctx.Context, conversationID string) ([]db.Message, error) {
+func (s *loopConversationManagerStub) ReconstructHistory(ctx stdctx.Context, conversationID string) ([]db.Message, error) {
 	s.reconstructCalls = append(s.reconstructCalls, conversationID)
 	s.callOrder = append(s.callOrder, "reconstruct")
+	if s.reconstructFn != nil {
+		return s.reconstructFn(ctx, conversationID)
+	}
 	if s.err != nil {
 		return nil, s.err
 	}
@@ -1151,6 +1155,12 @@ func TestRunTurnCancelDuringStream(t *testing.T) {
 	if !errors.Is(err, ErrTurnCancelled) {
 		t.Fatalf("error = %v, want ErrTurnCancelled", err)
 	}
+	if len(conversations.cancelIterCalls) != 0 {
+		t.Fatalf("CancelIteration calls = %d, want 0 when explicit cancellation happened before any assistant/tool state existed", len(conversations.cancelIterCalls))
+	}
+	if len(conversations.persistIterCalls) != 0 {
+		t.Fatalf("PersistIteration calls = %d, want 0 when explicit cancellation happened before any assistant/tool state existed", len(conversations.persistIterCalls))
+	}
 
 	// Should have emitted TurnCancelledEvent + StatusEvent(StateIdle).
 	var foundCancelled, foundIdle bool
@@ -1243,6 +1253,48 @@ func TestHandleTurnStreamFailurePersistsFailedAssistant(t *testing.T) {
 	}
 }
 
+func TestRunTurnFatalStreamErrorPersistsFailedAssistant(t *testing.T) {
+	conversations := &loopConversationManagerStub{
+		history: []db.Message{},
+		seen:    loopSeenFilesStub{},
+	}
+	loop := NewAgentLoop(AgentLoopDeps{
+		ContextAssembler: &loopContextAssemblerStub{
+			pkg: &contextpkg.FullContextPackage{Content: "context", Frozen: true},
+		},
+		ConversationManager: conversations,
+		ProviderRouter: &providerRouterStub{
+			streamEvents: [][]provider.StreamEvent{{
+				provider.TokenDelta{Text: "partial"},
+				provider.StreamError{Fatal: true, Message: "connection reset"},
+			}},
+		},
+		ToolExecutor:  &toolExecutorStub{},
+		PromptBuilder: NewPromptBuilder(nil),
+	})
+	loop.now = func() time.Time { return time.Unix(1700000600, 0).UTC() }
+
+	_, err := loop.RunTurn(stdctx.Background(), RunTurnRequest{
+		ConversationID:    "conv-fatal-stream",
+		TurnNumber:        1,
+		Message:           "hello",
+		ModelContextLimit: 200000,
+	})
+	if err == nil {
+		t.Fatal("RunTurn error = nil, want stream failure error")
+	}
+	if !strings.Contains(err.Error(), "stream error: connection reset") {
+		t.Fatalf("error = %v, want wrapped stream failure", err)
+	}
+	if len(conversations.persistIterCalls) != 1 {
+		t.Fatalf("PersistIteration calls = %d, want 1 failed assistant iteration", len(conversations.persistIterCalls))
+	}
+	pi := conversations.persistIterCalls[0]
+	if len(pi.messages) != 1 || !strings.Contains(pi.messages[0].Content, "[failed_assistant]") || !strings.Contains(pi.messages[0].Content, "partial") {
+		t.Fatalf("persisted failed assistant messages = %#v, want failed assistant tombstone with partial text", pi.messages)
+	}
+}
+
 func TestRunTurnCancelDuringToolExecution(t *testing.T) {
 	sink := NewChannelSink(64)
 	assembler := &loopContextAssemblerStub{
@@ -1323,6 +1375,89 @@ func TestRunTurnCancelDuringToolExecution(t *testing.T) {
 	}
 }
 
+func TestRunTurnCancellationDuringIterationSetupSkipsIterationCleanup(t *testing.T) {
+	sink := NewChannelSink(32)
+	assembler := &loopContextAssemblerStub{
+		pkg: &contextpkg.FullContextPackage{Content: "context", Frozen: true},
+	}
+	secondReconstructStarted := make(chan struct{})
+	conversations := &loopConversationManagerStub{
+		history: []db.Message{},
+		seen:    loopSeenFilesStub{},
+	}
+	callCount := 0
+	conversations.reconstructFn = func(ctx stdctx.Context, conversationID string) ([]db.Message, error) {
+		callCount++
+		if callCount == 1 {
+			return append([]db.Message(nil), conversations.history...), nil
+		}
+		close(secondReconstructStarted)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+
+	loop := NewAgentLoop(AgentLoopDeps{
+		ContextAssembler:    assembler,
+		ConversationManager: conversations,
+		ProviderRouter: &providerRouterStub{
+			streamEvents: [][]provider.StreamEvent{textOnlyStream("done", 10, 5)},
+		},
+		ToolExecutor:  &toolExecutorStub{},
+		PromptBuilder: NewPromptBuilder(nil),
+		EventSink:     sink,
+	})
+	loop.now = func() time.Time { return time.Unix(1700000600, 0).UTC() }
+
+	ctx, cancel := stdctx.WithCancel(stdctx.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := loop.RunTurn(ctx, RunTurnRequest{
+			ConversationID:    "conv-setup-cancel",
+			TurnNumber:        1,
+			Message:           "hello",
+			ModelContextLimit: 200000,
+		})
+		errCh <- err
+	}()
+
+	<-secondReconstructStarted
+	cancel()
+
+	err := <-errCh
+	if err == nil {
+		t.Fatal("RunTurn error = nil, want cancellation error")
+	}
+	if !errors.Is(err, ErrTurnCancelled) {
+		t.Fatalf("error = %v, want ErrTurnCancelled", err)
+	}
+	if len(conversations.cancelIterCalls) != 0 {
+		t.Fatalf("CancelIteration calls = %d, want 0 when iteration cancellation happened before any assistant/tool state existed", len(conversations.cancelIterCalls))
+	}
+	if len(conversations.persistIterCalls) != 0 {
+		t.Fatalf("PersistIteration calls = %d, want 0 when iteration cancellation happened before any assistant/tool state existed", len(conversations.persistIterCalls))
+	}
+	if len(conversations.persistCalls) != 1 {
+		t.Fatalf("PersistUserMessage calls = %d, want 1", len(conversations.persistCalls))
+	}
+
+	var foundCancelled bool
+	for i := 0; i < 20; i++ {
+		select {
+		case e := <-sink.Events():
+			if tc, ok := e.(TurnCancelledEvent); ok {
+				foundCancelled = true
+				if tc.Reason != "user_cancelled" {
+					t.Fatalf("Reason = %q, want user_cancelled", tc.Reason)
+				}
+			}
+		default:
+		}
+	}
+	if !foundCancelled {
+		t.Fatal("TurnCancelledEvent not emitted")
+	}
+}
+
 func TestRunTurnCtxCancellation(t *testing.T) {
 	// Cancel via the context passed to RunTurn (simulating HTTP disconnect).
 	sink := NewChannelSink(32)
@@ -1368,6 +1503,12 @@ func TestRunTurnCtxCancellation(t *testing.T) {
 	}
 	if !errors.Is(err, ErrTurnCancelled) {
 		t.Fatalf("error = %v, want ErrTurnCancelled", err)
+	}
+	if len(conversations.cancelIterCalls) != 0 {
+		t.Fatalf("CancelIteration calls = %d, want 0 when external cancellation happened before any assistant/tool state existed", len(conversations.cancelIterCalls))
+	}
+	if len(conversations.persistIterCalls) != 0 {
+		t.Fatalf("PersistIteration calls = %d, want 0 when external cancellation happened before any assistant/tool state existed", len(conversations.persistIterCalls))
 	}
 
 	var foundCancelled bool
@@ -1494,12 +1635,10 @@ func TestRunTurnCancelPreservesCompletedIterations(t *testing.T) {
 		t.Fatalf("persisted iteration = %d, want 1", conversations.persistIterCalls[0].iteration)
 	}
 
-	// CancelIteration should have been called for iteration 2.
-	if len(conversations.cancelIterCalls) != 1 {
-		t.Fatalf("CancelIteration calls = %d, want 1", len(conversations.cancelIterCalls))
-	}
-	if conversations.cancelIterCalls[0].iteration != 2 {
-		t.Fatalf("cancelled iteration = %d, want 2", conversations.cancelIterCalls[0].iteration)
+	// Iteration 2 had not materialized any assistant/tool state yet, so cleanup
+	// should leave the completed iteration intact without creating extra cleanup rows.
+	if len(conversations.cancelIterCalls) != 0 {
+		t.Fatalf("CancelIteration calls = %d, want 0", len(conversations.cancelIterCalls))
 	}
 
 	// TurnCancelledEvent should show 1 completed iteration.
@@ -1568,6 +1707,12 @@ func TestRunTurnCancelWithDeadlineExceeded(t *testing.T) {
 	}
 	if !errors.Is(err, ErrTurnCancelled) {
 		t.Fatalf("error = %v, want ErrTurnCancelled", err)
+	}
+	if len(conversations.cancelIterCalls) != 0 {
+		t.Fatalf("CancelIteration calls = %d, want 0 when deadline expiry happened before any assistant/tool state existed", len(conversations.cancelIterCalls))
+	}
+	if len(conversations.persistIterCalls) != 0 {
+		t.Fatalf("PersistIteration calls = %d, want 0 when deadline expiry happened before any assistant/tool state existed", len(conversations.persistIterCalls))
 	}
 
 	// Reason should be context_deadline_exceeded.

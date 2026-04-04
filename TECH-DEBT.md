@@ -2,7 +2,7 @@
 
 Open issues that should be fixed in a later focused session or need closer investigation.
 
-**Last sweep:** 2026-04-01
+**Last sweep:** 2026-04-03
 
 
 ## Layer 3 — Context Assembly
@@ -74,8 +74,7 @@ an analytics write fails after message persistence succeeds.
 
 This is currently tolerated because:
 - the user-visible source of truth is the `messages` table
-- cancellation cleanup still deletes `messages`, `tool_executions`, and `sub_calls`
-  together for an in-flight iteration
+- cancellation cleanup now prefers durable tombstones for materialized assistant/tool state, skips untouched iterations, and only falls back to raw iteration cancellation when there is no better transcript-preserving record to persist
 - missing analytics rows are recoverable and far lower severity than losing the
   canonical conversation history
 
@@ -174,42 +173,6 @@ needed — reasonable UX choice. Documented for spec reconciliation.**
 
 ### P1 — Fix This Sprint
 
-#### 7. Goroutine leak: Codex streaming writes without context check
-**Severity:** High | **File:** `internal/provider/codex/stream.go:179-184`
-
-Sends to `ch` without checking context cancellation. The anthropic and openai providers
-use a `send()` helper with context select, but codex writes directly to the channel in
-multiple places (lines 179, 205, 223, 230). Inconsistent and leak-prone.
-
----
-
-#### 9. search_text --max-count is per-file, not total
-**Severity:** High | **File:** `internal/tool/search_text.go:104`
-
-`maxResults=50` allows 50 matches PER FILE. A 1000-file project could return 50,000
-matches. The schema says "maximum matching lines to return" but `rg --max-count=50`
-doesn't enforce a global total.
-
-**Fix:** Pipe through `head -n` or post-process the output to enforce a global limit.
-
----
-
-#### 11. Full filesystem walk on every API request
-**Severity:** High | **File:** `internal/server/project.go:204-249`
-
-`detectPrimaryLanguage()` does recursive `WalkDir` of project root on every
-`GET /api/project`. Must be cached with a TTL or computed once at startup.
-
----
-
-#### 12. Models() called per-request in router
-**Severity:** High | **File:** `internal/provider/router/router.go:222-243`
-
-`resolveOverride()` calls `p.Models(ctx)` on every registered provider to find one
-that supports a model. May involve network calls. Cache the model→provider mapping.
-
----
-
 #### 13. goparser vs go_analyzer — massive duplication (~1200 LOC)
 **Severity:** High | **Files:** `internal/codeintel/goparser/goparser.go` + `internal/codeintel/graph/go_analyzer.go`
 
@@ -236,42 +199,10 @@ codebases.
 
 ---
 
-#### 16. exec.LookPath called on every tool invocation
-**Files:** `internal/tool/search_text.go:83`, `git_status.go:58`, `git_diff.go:66`
-
-`exec.LookPath("rg")` and `exec.LookPath("git")` called every time. Result never
-changes during process lifetime. Cache at construction time.
-
----
-
-#### 17. strings.Join(registry.Names()) on every Execute()
-**File:** `internal/tool/executor.go:77`
-
-Sorts and joins all tool names on every `Execute()` even when all tools are found.
-Compute lazily only on unknown-tool error.
-
----
-
 #### 19. O(n²) in markIncluded/markExcluded
 **File:** `internal/context/budget.go:294-311`
 
 Linear scan slices for dedup. Use a map-backed set for large chunk sets.
-
----
-
-#### 20. Full file read for partial line ranges
-**File:** `internal/tool/file_read.go:77`
-
-`os.ReadFile` loads the entire file even when only lines 5-10 are requested. Use
-`bufio.Scanner` for partial reads on large files.
-
----
-
-#### 21. Dead smoke test files in tmp/
-**Files:** `tmp/obsidian_client_smoke.go`, `tmp/obsidian_smoke.go`
-
-Standalone `package main` files. Would break `go build ./...` if included. Delete
-or move to `testdata/`.
 
 ---
 
@@ -287,13 +218,6 @@ Print "not yet implemented" and return nil. Dead weight in binary. Remove or wir
 
 `Session`, `Turn`, `Iteration`, `ToolCallRecord` — exported types not constructed or
 referenced in production code. `TurnInProgress` constant also unused.
-
----
-
-#### 26. nullStr only used in tests
-**File:** `internal/agent/prompt.go:307-314`
-
-Move to a `_test.go` file.
 
 ---
 
@@ -328,75 +252,7 @@ Each has slightly different backoff/retry behavior. Extract a shared
 
 ---
 
-#### 32. PromptConfig struct literal copied 3 times
-**File:** `internal/agent/loop.go:394, 423, 1065`
-
-Same 18-field struct literal. Extract `buildPromptConfig()` helper.
-
----
-
-#### 33. inferMomentumModule duplicates longestCommonDirectoryPrefix
-**Files:** `internal/context/analyzer.go:427-466` + `internal/context/momentum.go`
-
-Nearly identical path-prefix logic. Consolidate.
-
----
-
-#### 34. Duplicate langFromExt functions
-**Files:** `internal/server/project.go:252-281` + `internal/codeintel/indexer/helpers.go:13-28`
-
-Same extension-to-language mapping with different coverage. Consolidate.
-
----
-
-#### 35. Duplicated "doc not found" error handling in brain tools
-**Files:** `internal/tool/brain_read.go:85-104` + `internal/tool/brain_update.go:115-133`
-
-~20 identical lines each. Extract `brainDocNotFoundResult()` helper.
-
----
-
-#### 38. Codex complete.go — misleading stream boolean
-**File:** `internal/provider/codex/complete.go:92`
-
-`buildResponsesRequest`'s third arg is `usesChatGPTCodexEndpoint()` but it's consumed
-as the `stream` parameter. Works by accident. Rename the parameter or restructure.
-
----
-
 ### P2 — Missing Error Handling
-
-#### 39. json.Marshal errors discarded
-**Files:** `internal/provider/anthropic/request.go:75,184`, `internal/agent/prompt.go:249,255`
-
----
-
-#### 40. os.Chmod error silently ignored
-**File:** `internal/tool/file_write.go:117`
-
----
-
-#### 41. git status + git log errors swallowed
-**File:** `internal/tool/git_status.go:86,89`
-
----
-
-#### 42. conn.Write error discarded
-**File:** `internal/server/websocket.go:358`
-
----
-
-#### 43. Fatal stream error discards accumulated content
-**File:** `internal/agent/stream.go:151-153`
-
-Should return partial result along with the error.
-
----
-
-#### 44. doStreamAttempt discards partial result on cancellation
-**File:** `internal/agent/retry.go:115-121`
-
----
 
 #### 46. Two SQLite drivers in binary
 **Files:** `internal/codeintel/graph/store.go` (modernc.org/sqlite) + main DB (mattn/go-sqlite3)

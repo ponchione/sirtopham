@@ -33,7 +33,7 @@ type responsesInput struct {
 
 // responsesTool represents a tool definition in the tools array.
 type responsesTool struct {
-	Type        string          `json:"type"`                  // always "function"
+	Type        string          `json:"type"` // always "function"
 	Name        string          `json:"name"`
 	Description string          `json:"description,omitempty"`
 	Parameters  json.RawMessage `json:"parameters,omitempty"` // JSON Schema object
@@ -47,11 +47,11 @@ type responsesReasoning struct {
 
 // buildResponsesRequest translates a unified Request into the Responses API
 // request body. The model parameter comes from the provider config or request.
-func buildResponsesRequest(model string, req *provider.Request, stream bool) responsesRequest {
+func buildResponsesRequest(model string, req *provider.Request, streamResponse bool) responsesRequest {
 	rr := responsesRequest{
 		Model:        model,
 		Instructions: "You are a helpful assistant.",
-		Stream:       stream,
+		Stream:       streamResponse,
 		Store:        false,
 	}
 
