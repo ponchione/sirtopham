@@ -768,6 +768,39 @@ func TestManagerSearchSanitizesTombstoneSnippets(t *testing.T) {
 	}
 }
 
+func TestManagerSearchFindsInterruptedToolTombstones(t *testing.T) {
+	ctx := context.Background()
+	database := newTestDB(t)
+	projectID := seedProject(t, database)
+	mgr := newTestManager(t, database)
+	mgr.HistoryManager.now = func() time.Time { return time.Unix(1700001000, 0).UTC() }
+
+	conv, err := mgr.Create(ctx, projectID, WithTitle("Interrupted tool search"))
+	if err != nil {
+		t.Fatalf("Create error: %v", err)
+	}
+	if err := mgr.PersistUserMessage(ctx, conv.ID, 1, "please inspect the cancelled tool run"); err != nil {
+		t.Fatalf("PersistUserMessage error: %v", err)
+	}
+	if err := mgr.PersistIteration(ctx, conv.ID, 1, 1, []IterationMessage{
+		{Role: "assistant", Content: `[{"type":"tool_use","id":"tool-1","name":"shell","input":{"command":"sleep 10"}}]`},
+		{Role: "tool", Content: "[interrupted_tool_result]\nreason=interrupt\ntool=shell\ntool_use_id=tool-1\nstatus=interrupted_during_execution\nmessage=Tool execution did not complete before the turn ended.", ToolUseID: "tool-1", ToolName: "shell"},
+	}); err != nil {
+		t.Fatalf("PersistIteration error: %v", err)
+	}
+
+	results, err := mgr.Search(ctx, "interrupted")
+	if err != nil {
+		t.Fatalf("Search error: %v", err)
+	}
+	if len(results) == 0 {
+		t.Fatal("Search returned no results, want interrupted tool tombstone-backed match")
+	}
+	if results[0].Snippet != "[interrupted tool result]" {
+		t.Fatalf("Search snippet = %q, want compact interrupted tool summary", results[0].Snippet)
+	}
+}
+
 // --- SeenFiles Integration ---
 
 func TestManagerSeenFilesIntegration(t *testing.T) {

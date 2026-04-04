@@ -101,6 +101,9 @@ func runServe(cmd *cobra.Command, configPath string, portOverride int, hostOverr
 		return fmt.Errorf("open database: %w", err)
 	}
 	defer database.Close()
+	if err := appdb.EnsureMessageSearchIndexesIncludeTools(cmd.Context(), database); err != nil {
+		return fmt.Errorf("upgrade message search indexes: %w", err)
+	}
 	queries := appdb.New(database)
 
 	// Project ID is the project root path.

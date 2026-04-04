@@ -3,68 +3,91 @@
 Date: 2026-04-04
 Repo: /home/gernsback/source/sirtopham
 Branch: main
-State: cancellation persistence semantics audit completed in tests/code comments; latest slice not pushed.
+State: interrupted-tool tombstone search mismatch fixed and live-validated. Nothing pushed.
 
 ## Current state
 
-Latest session completed one concrete follow-through slice from the prior handoff:
+Latest session completed the search follow-up from the prior handoff:
 
-1. Cancellation persistence semantics audit
-- `internal/agent/loop_test.go`
-- `internal/agent/loop.go`
-- `internal/agent/turn_cleanup.go`
-- added a narrow reproducible cancellation matrix around the agent loop
-- confirmed the currently implemented behavior is intentional, not a random regression:
-  - cancel before any assistant/tool state exists: persist only the user message, no iteration cleanup persistence
-  - cancel after assistant tool_use is materialized but before tool dispatch: persist assistant tool_use plus `[interrupted_tool_result]` with `status=cancelled_before_execution`
-  - cancel during tool execution: persist assistant tool_use plus `[interrupted_tool_result]` with `status=interrupted_during_execution`
-- updated loop/cleanup comments so the contract no longer claims all cancellation paths go through raw `CancelIteration`
+1. Root cause investigation
+- reproduced the bug with a focused regression test and with the live websocket cancellation probe
+- the real issue was two-part:
+  - SQLite FTS triggers only indexed `user` and `assistant` rows, not `tool` rows
+  - even after indexing tool rows, FTS highlight markup (`<b>...</b>`) could split `[interrupted_tool_result]` so snippet sanitization missed the tombstone marker
+
+2. Fix implemented
+- `internal/db/schema.sql`
+  - fresh schemas now index `tool` messages in `messages_fts` triggers
+- `internal/db/init.go`
+  - added `EnsureMessageSearchIndexesIncludeTools(...)`
+  - startup-compatible upgrade path for older DBs: recreate FTS triggers with tool-role coverage and rebuild the FTS index in place
+- `cmd/sirtopham/serve.go`
+- `cmd/sirtopham/init.go`
+  - call the DB upgrade helper so existing local databases get repaired automatically
+- `internal/conversation/manager.go`
+  - search snippet sanitization now strips `<b></b>` highlight markup before tombstone marker detection
+
+3. Regression coverage added
+- `internal/conversation/manager_test.go`
+  - end-to-end search test for interrupted tool tombstones
+- `internal/db/schema_integration_test.go`
+  - upgrade test proving an older DB with assistant-only FTS triggers is repaired and becomes searchable for interrupted tool tombstones
+
+4. Live validation result
+- reran the websocket cancellation probe against the real app
+- now `/api/conversations/search?q=interrupted` returns sanitized `[interrupted tool result]` snippets for fresh cancelled tool turns
+- so the search mismatch is resolved in both tests and real runtime behavior
 
 ## Files changed this session
 
 - `NEXT_SESSION_HANDOFF.md`
-- `internal/agent/loop.go`
-- `internal/agent/loop_test.go`
-- `internal/agent/turn_cleanup.go`
+- `cmd/sirtopham/init.go`
+- `cmd/sirtopham/serve.go`
+- `internal/conversation/manager.go`
+- `internal/conversation/manager_test.go`
+- `internal/db/init.go`
+- `internal/db/schema.sql`
+- `internal/db/schema_integration_test.go`
 
-## Tests run
+## Tests / validation run
 
-Passing targeted tests:
-- `go test ./internal/agent -run 'TestRunTurnCancelBeforeToolDispatchPersistsCancelledToolTombstone|TestRunTurnCancelDuringToolExecution|TestRunTurnCancelDuringStream|TestRunTurnCancellationDuringIterationSetupSkipsIterationCleanup' -count=1`
+Focused failing-then-passing tests:
+- `go test -tags sqlite_fts5 ./internal/conversation -run TestManagerSearchFindsInterruptedToolTombstones -count=1`
+- `go test -tags sqlite_fts5 ./internal/db -run TestEnsureMessageSearchIndexesIncludeToolsUpgradesOlderFTSTriggers -count=1`
 
-Passing broader validation:
-- `go test ./internal/agent -count=1`
+Broader validation:
+- `go test -tags sqlite_fts5 ./internal/conversation ./internal/db ./cmd/sirtopham -count=1`
+  - note: plain direct invocation of `./cmd/sirtopham` can still hit LanceDB link issues without the Makefile env; this is expected in this repo
 - `make build`
+- `make test`
+
+Live validation:
+- `./bin/sirtopham serve --config /home/gernsback/source/sirtopham/sirtopham.yaml`
+- `go run -tags sqlite_fts5 /tmp/ws_runtime_cancel_validate.go`
 
 ## Important current reality
 
-The earlier live-validation discrepancy is now explained by timing-path semantics already present in code:
+The cancelled-tool search issue is fixed.
 
-- cancellation before any materialized assistant/tool state does not persist an interrupted iteration
-- once the assistant tool_use payload exists, cancellation preserves that assistant message and synthesizes interrupted tool tombstones instead of deleting the iteration outright
-- the key distinction is not only "cancelled turn" vs "not cancelled turn"; it is whether useful assistant/tool state had already materialized for the active iteration
-
-This means the latest live rerun that preserved assistant tool_use + interrupted tool tombstone is compatible with the current implementation.
+- fresh schemas index tool tombstones
+- older local DBs are auto-upgraded on init/serve
+- highlighted FTS snippets no longer bypass tombstone sanitization
+- live search now surfaces interrupted tool tombstones as compact `[interrupted tool result]` summaries
 
 ## Recommended next slice
 
-Best next work:
-1. do one real websocket/runtime validation pass specifically for the two tool-cancellation timing paths
-- cancel immediately after `tool_call_start`
-- cancel during longer-running tool execution
-- confirm live persisted history matches the now-locked test contract
+Cancellation/search follow-through is now in good shape. Best next work is to leave this area unless another concrete runtime consumer is still wrong, and move back to practical runtime/usability work.
 
-2. if live behavior matches, move on from cancellation semantics
-- update any remaining runtime notes if needed
-- return to concrete usability/runtime issues instead of more speculative cleanup
+Good next options:
+1. do a broader real-use multi-turn runtime pass again now that cancellation + search are stable
+2. switch to the next concrete blocker the user cares about rather than extending transcript/search cleanup speculatively
 
 ## Useful commands
 
-- `go test ./internal/agent -count=1`
+- `make test`
 - `make build`
 - `./bin/sirtopham serve --config /home/gernsback/source/sirtopham/sirtopham.yaml`
-- websocket smoke via a tiny Go client using `nhooyr.io/websocket`
-- `go run -tags sqlite_fts5 /tmp/ws_runtime_validate.go`
+- `go run -tags sqlite_fts5 /tmp/ws_runtime_cancel_validate.go`
 
 ## Operator preferences to remember
 
@@ -74,4 +97,4 @@ Best next work:
 
 ## Bottom line
 
-The cancellation-persistence discrepancy from the last rerun was worth auditing, but it currently looks like intentional path-sensitive behavior rather than a fresh bug. The contract is now locked down in tests/comments: early cancellation drops the in-flight iteration, while cancellation after assistant tool_use materializes preserves assistant/tool tombstone state. The next fresh session should do a focused live websocket rerun for those timing paths and then move on if reality matches the tests.
+The investigation found a real bug, not just a timing misunderstanding: interrupted tool tombstones were not searchable because tool rows were excluded from FTS, and highlight markup could also hide the tombstone marker from sanitization. Both are fixed now, the DB upgrade path handles existing local state automatically, and live websocket cancellation runs now show searchable sanitized interrupted-tool results.

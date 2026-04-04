@@ -323,13 +323,14 @@ func sanitizeSearchSnippet(snippet string) string {
 	if trimmed == "" {
 		return ""
 	}
-	if strings.Contains(trimmed, "[failed_assistant]") {
+	unhighlighted := strings.ReplaceAll(strings.ReplaceAll(trimmed, "<b>", ""), "</b>", "")
+	if strings.Contains(unhighlighted, "[failed_assistant]") {
 		return "[assistant stream failure tombstone]"
 	}
-	if strings.Contains(trimmed, "[interrupted_assistant]") {
+	if strings.Contains(unhighlighted, "[interrupted_assistant]") {
 		return "[assistant interrupted tombstone]"
 	}
-	if strings.Contains(trimmed, "[interrupted_tool_result]") {
+	if strings.Contains(unhighlighted, "[interrupted_tool_result]") {
 		return "[interrupted tool result]"
 	}
 

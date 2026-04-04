@@ -192,6 +192,9 @@ func initDatabase(ctx context.Context, projectRoot, projectName, stateDir string
 	if err != nil {
 		return fmt.Errorf("init database schema: %w", err)
 	}
+	if err := appdb.EnsureMessageSearchIndexesIncludeTools(ctx, database); err != nil {
+		return fmt.Errorf("upgrade message search indexes: %w", err)
+	}
 
 	dbRelPath := filepath.Join("."+projectName, "sirtopham.db")
 	if created {
