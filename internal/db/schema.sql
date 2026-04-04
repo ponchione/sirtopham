@@ -139,20 +139,20 @@ CREATE VIRTUAL TABLE messages_fts USING fts5(
 );
 
 CREATE TRIGGER messages_fts_insert AFTER INSERT ON messages
-WHEN NEW.role IN ('user', 'assistant')
+WHEN NEW.role IN ('user', 'assistant', 'tool')
 BEGIN
     INSERT INTO messages_fts(rowid, content) VALUES (NEW.id, NEW.content);
 END;
 
 CREATE TRIGGER messages_fts_delete AFTER DELETE ON messages
-WHEN OLD.role IN ('user', 'assistant')
+WHEN OLD.role IN ('user', 'assistant', 'tool')
 BEGIN
     INSERT INTO messages_fts(messages_fts, rowid, content)
     VALUES ('delete', OLD.id, OLD.content);
 END;
 
 CREATE TRIGGER messages_fts_update AFTER UPDATE OF content ON messages
-WHEN NEW.role IN ('user', 'assistant')
+WHEN NEW.role IN ('user', 'assistant', 'tool')
 BEGIN
     INSERT INTO messages_fts(messages_fts, rowid, content)
     VALUES ('delete', OLD.id, OLD.content);

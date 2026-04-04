@@ -162,6 +162,63 @@ func TestFTSAndCascadeBehavior(t *testing.T) {
 	assertTableCountWhere(t, db, "messages", "conversation_id = ?", secondConversationID, 0)
 }
 
+func TestEnsureMessageSearchIndexesIncludeToolsUpgradesOlderFTSTriggers(t *testing.T) {
+	ctx := context.Background()
+	db := newTestDB(t)
+	queries := New(db)
+	projectID := sid.New()
+	conversationID := sid.New()
+	createdAt := time.Now().UTC().Format(time.RFC3339)
+
+	mustExec(t, db, `DROP TRIGGER IF EXISTS messages_fts_insert`)
+	mustExec(t, db, `DROP TRIGGER IF EXISTS messages_fts_delete`)
+	mustExec(t, db, `DROP TRIGGER IF EXISTS messages_fts_update`)
+	mustExec(t, db, `CREATE TRIGGER messages_fts_insert AFTER INSERT ON messages
+WHEN NEW.role IN ('user', 'assistant')
+BEGIN
+    INSERT INTO messages_fts(rowid, content) VALUES (NEW.id, NEW.content);
+END;`)
+	mustExec(t, db, `CREATE TRIGGER messages_fts_delete AFTER DELETE ON messages
+WHEN OLD.role IN ('user', 'assistant')
+BEGIN
+    INSERT INTO messages_fts(messages_fts, rowid, content)
+    VALUES ('delete', OLD.id, OLD.content);
+END;`)
+	mustExec(t, db, `CREATE TRIGGER messages_fts_update AFTER UPDATE OF content ON messages
+WHEN NEW.role IN ('user', 'assistant')
+BEGIN
+    INSERT INTO messages_fts(messages_fts, rowid, content)
+    VALUES ('delete', OLD.id, OLD.content);
+    INSERT INTO messages_fts(rowid, content) VALUES (NEW.id, NEW.content);
+END;`)
+	mustExec(t, db, `INSERT INTO messages_fts(messages_fts) VALUES ('rebuild')`)
+
+	mustExec(t, db, `INSERT INTO projects(id, name, root_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`, projectID, "proj", "/tmp/proj", createdAt, createdAt)
+	mustExec(t, db, `INSERT INTO conversations(id, project_id, title, model, provider, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`, conversationID, projectID, "Interrupted", "claude", "anthropic", createdAt, createdAt)
+	mustExec(t, db, `INSERT INTO messages(conversation_id, role, content, turn_number, iteration, sequence, created_at) VALUES (?, 'assistant', ?, 1, 1, 1.0, ?)`, conversationID, `[{"type":"tool_use","id":"tool-1","name":"shell","input":{"command":"sleep 10"}}]`, createdAt)
+	mustExec(t, db, `INSERT INTO messages(conversation_id, role, content, tool_use_id, tool_name, turn_number, iteration, sequence, created_at) VALUES (?, 'tool', ?, ?, ?, 1, 1, 2.0, ?)`, conversationID, "[interrupted_tool_result]\nreason=interrupt\ntool=shell\ntool_use_id=tool-1\nstatus=interrupted_during_execution\nmessage=Tool execution did not complete before the turn ended.", "tool-1", "shell", createdAt)
+
+	results, err := queries.SearchConversations(ctx, "interrupted")
+	if err != nil {
+		t.Fatalf("SearchConversations before upgrade returned error: %v", err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("SearchConversations before upgrade = %d rows, want 0 with old triggers", len(results))
+	}
+
+	if err := EnsureMessageSearchIndexesIncludeTools(ctx, db); err != nil {
+		t.Fatalf("EnsureMessageSearchIndexesIncludeTools returned error: %v", err)
+	}
+
+	results, err = queries.SearchConversations(ctx, "interrupted")
+	if err != nil {
+		t.Fatalf("SearchConversations after upgrade returned error: %v", err)
+	}
+	if len(results) == 0 {
+		t.Fatal("expected interrupted tool tombstone search result after upgrade, got none")
+	}
+}
+
 func TestSequenceSortingAndUUIDv7ForeignKeys(t *testing.T) {
 	ctx := context.Background()
 	db := newTestDB(t)
