@@ -1,6 +1,7 @@
 package tool
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
@@ -156,6 +157,38 @@ func TestSearchTextEmptyPattern(t *testing.T) {
 	}
 	if result.Success {
 		t.Fatal("expected failure for empty pattern")
+	}
+}
+
+func TestFormatRipgrepStreamStopsAtGlobalMaxResults(t *testing.T) {
+	input := strings.Join([]string{
+		`{"type":"match","data":{"path":{"text":"a.txt"},"lines":{"text":"target one\n"},"line_number":1,"submatches":[]}}`,
+		`{"type":"context","data":{"path":{"text":"a.txt"},"lines":{"text":"context a\n"},"line_number":2}}`,
+		`{"type":"match","data":{"path":{"text":"b.txt"},"lines":{"text":"target two\n"},"line_number":1,"submatches":[]}}`,
+		`{"type":"match","data":{"path":{"text":"c.txt"},"lines":{"text":"target three\n"},"line_number":1,"submatches":[]}}`,
+	}, "\n") + "\n"
+
+	stopped := false
+	formatted, matches, stoppedEarly, err := formatRipgrepStream(bytes.NewBufferString(input), "target", 2, func() {
+		stopped = true
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !stopped || !stoppedEarly {
+		t.Fatalf("expected early stop after reaching global match cap; stopped=%v stoppedEarly=%v", stopped, stoppedEarly)
+	}
+	if matches != 2 {
+		t.Fatalf("matches = %d, want 2", matches)
+	}
+	if strings.Contains(formatted, "target three") || strings.Contains(formatted, "c.txt") {
+		t.Fatalf("expected formatter to stop before third match, got:\n%s", formatted)
+	}
+	if !strings.Contains(formatted, "(2 matches)") {
+		t.Fatalf("expected 2-match footer, got:\n%s", formatted)
+	}
+	if count := strings.Count(formatted, "target "); count != 2 {
+		t.Fatalf("expected exactly 2 rendered matches, got %d\n%s", count, formatted)
 	}
 }
 

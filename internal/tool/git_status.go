@@ -55,7 +55,7 @@ func (GitStatus) Execute(ctx context.Context, projectRoot string, input json.Raw
 	}
 
 	// Check if git is available.
-	gitPath, err := exec.LookPath("git")
+	gitPath, err := lookupCommandPath("git")
 	if err != nil {
 		return &ToolResult{
 			Success: false,
@@ -83,10 +83,24 @@ func (GitStatus) Execute(ctx context.Context, projectRoot string, input json.Raw
 	}
 
 	// Get status.
-	status, _ := runGitCommand(ctx, gitPath, projectRoot, "status", "--porcelain")
+	status, err := runGitCommand(ctx, gitPath, projectRoot, "status", "--porcelain")
+	if err != nil {
+		return &ToolResult{
+			Success: false,
+			Content: fmt.Sprintf("Failed to get git status: %v", err),
+			Error:   err.Error(),
+		}, nil
+	}
 
 	// Get recent commits.
-	commits, _ := runGitCommand(ctx, gitPath, projectRoot, "log", "--oneline", fmt.Sprintf("-%d", recentCommits))
+	commits, err := runGitCommand(ctx, gitPath, projectRoot, "log", "--oneline", fmt.Sprintf("-%d", recentCommits))
+	if err != nil {
+		return &ToolResult{
+			Success: false,
+			Content: fmt.Sprintf("Failed to get recent commits: %v", err),
+			Error:   err.Error(),
+		}, nil
+	}
 
 	// Format output.
 	var sb strings.Builder

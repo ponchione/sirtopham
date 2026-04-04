@@ -74,11 +74,16 @@ func (e *Executor) Execute(ctx context.Context, calls []ToolCall) []ToolResult {
 	}
 	var pureCalls, mutatingCalls []indexedCall
 
-	availableNames := strings.Join(e.registry.Names(), ", ")
+	availableNames := ""
+	availableNamesLoaded := false
 
 	for i, call := range calls {
 		t, ok := e.registry.Get(call.Name)
 		if !ok {
+			if !availableNamesLoaded {
+				availableNames = strings.Join(e.registry.Names(), ", ")
+				availableNamesLoaded = true
+			}
 			results[i] = ToolResult{
 				CallID:  call.ID,
 				Content: fmt.Sprintf("Unknown tool: %q. Available tools: %s", call.Name, availableNames),

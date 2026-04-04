@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"path/filepath"
 	"strings"
 
 	"github.com/ponchione/sirtopham/internal/brain"
@@ -30,9 +29,11 @@ type brainUpdateInput struct {
 	Section   string `json:"section,omitempty"`
 }
 
-func (b *BrainUpdate) Name() string        { return "brain_update" }
-func (b *BrainUpdate) Description() string { return "Update an existing brain document: append, prepend, or replace a section" }
-func (b *BrainUpdate) ToolPurity() Purity  { return Mutating }
+func (b *BrainUpdate) Name() string { return "brain_update" }
+func (b *BrainUpdate) Description() string {
+	return "Update an existing brain document: append, prepend, or replace a section"
+}
+func (b *BrainUpdate) ToolPurity() Purity { return Mutating }
 
 func (b *BrainUpdate) Schema() json.RawMessage {
 	return json.RawMessage(`{
@@ -121,17 +122,8 @@ func (b *BrainUpdate) Execute(ctx context.Context, projectRoot string, input jso
 
 	if err := b.client.PatchDocument(ctx, params.Path, params.Operation, patchContent); err != nil {
 		errMsg := err.Error()
-		if strings.Contains(errMsg, "Document not found") {
-			dir := filepath.Dir(params.Path)
-			files, listErr := b.client.ListDocuments(ctx, dir)
-			if listErr == nil && len(files) > 0 {
-				return &ToolResult{
-					Success: false,
-					Content: fmt.Sprintf("Document not found: %s\n\nAvailable documents in %s/:\n  %s",
-						params.Path, dir, strings.Join(files, "\n  ")),
-					Error: errMsg,
-				}, nil
-			}
+		if result := brainDocumentNotFoundResult(ctx, b.client, params.Path, errMsg); result != nil {
+			return result, nil
 		}
 		if strings.Contains(errMsg, "Section '") && strings.Contains(errMsg, "Available headings:") {
 			prefix := "Section '"

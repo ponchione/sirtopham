@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/ponchione/sirtopham/internal/db"
 	sid "github.com/ponchione/sirtopham/internal/id"
+	"github.com/ponchione/sirtopham/internal/provider"
 )
 
 // Conversation is the application-level representation of a conversation row.
@@ -285,6 +287,10 @@ type SearchResult struct {
 	Snippet   string  `json:"snippet"`
 }
 
+var (
+	assistantToolNamePattern = regexp.MustCompile(`"name":"([^"]+)"`)
+)
+
 // Search performs full-text search across conversation messages using FTS5.
 func (m *Manager) Search(ctx context.Context, query string) ([]SearchResult, error) {
 	if ctx == nil {
@@ -326,29 +332,79 @@ func sanitizeSearchSnippet(snippet string) string {
 	if strings.Contains(trimmed, "[interrupted_tool_result]") {
 		return "[interrupted tool result]"
 	}
+
+	if text, ok := sanitizeAssistantSnippetHeuristically(trimmed); ok {
+		return text
+	}
 	if !strings.HasPrefix(trimmed, "[") {
 		return snippet
 	}
 
-	var blocks []struct {
-		Type string `json:"type"`
-		Text string `json:"text,omitempty"`
-	}
-	if err := json.Unmarshal([]byte(trimmed), &blocks); err != nil {
+	blocks, err := provider.ContentBlocksFromRaw(json.RawMessage(trimmed))
+	if err != nil {
 		return snippet
 	}
+	texts := make([]string, 0, len(blocks))
+	toolNames := make([]string, 0, len(blocks))
 	for _, block := range blocks {
-		if block.Type != "text" {
-			continue
-		}
-		if strings.Contains(block.Text, "[failed_assistant]") {
-			return "[assistant stream failure tombstone]"
-		}
-		if strings.Contains(block.Text, "[interrupted_assistant]") {
-			return "[assistant interrupted tombstone]"
+		switch block.Type {
+		case "text":
+			if strings.Contains(block.Text, "[failed_assistant]") {
+				return "[assistant stream failure tombstone]"
+			}
+			if strings.Contains(block.Text, "[interrupted_assistant]") {
+				return "[assistant interrupted tombstone]"
+			}
+			if text := strings.TrimSpace(block.Text); text != "" {
+				texts = append(texts, text)
+			}
+		case "tool_use":
+			if block.Name != "" {
+				toolNames = append(toolNames, block.Name)
+			}
 		}
 	}
+	if len(texts) > 0 {
+		return strings.Join(texts, " ")
+	}
+	if len(toolNames) > 0 {
+		return "[assistant tool call: " + toolNames[0] + "]"
+	}
 	return snippet
+}
+
+func sanitizeAssistantSnippetHeuristically(trimmed string) (string, bool) {
+	if text, ok := extractAssistantTextSnippet(trimmed); ok {
+		return text, true
+	}
+	if strings.Contains(trimmed, `"type":"tool_use"`) {
+		if matches := assistantToolNamePattern.FindStringSubmatch(trimmed); len(matches) == 2 {
+			return "[assistant tool call: " + matches[1] + "]", true
+		}
+	}
+	return "", false
+}
+
+func extractAssistantTextSnippet(trimmed string) (string, bool) {
+	marker := `"text":"`
+	idx := strings.Index(trimmed, marker)
+	if idx < 0 {
+		return "", false
+	}
+	text := trimmed[idx+len(marker):]
+	for _, terminator := range []string{`","type":"`, `"},{`, `"}]`, `"}` } {
+		if end := strings.Index(text, terminator); end >= 0 {
+			text = text[:end]
+			break
+		}
+	}
+	text = strings.ReplaceAll(text, `\"`, `"`)
+	text = strings.ReplaceAll(text, `\n`, " ")
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return "", false
+	}
+	return text, true
 }
 
 // dbConversationToConversation converts a sqlc-generated db.Conversation to

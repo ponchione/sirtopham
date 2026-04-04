@@ -91,6 +91,34 @@ var symbolStopwords = map[string]struct{}{
 	"you":       {},
 }
 
+var genericPathSegments = map[string]struct{}{
+	"class":     {},
+	"file":      {},
+	"files":     {},
+	"function":  {},
+	"functions": {},
+	"handler":   {},
+	"line":      {},
+	"lines":     {},
+	"method":    {},
+	"methods":   {},
+	"model":     {},
+	"models":    {},
+	"module":    {},
+	"modules":   {},
+	"name":      {},
+	"names":     {},
+	"path":      {},
+	"paths":     {},
+	"provider":  {},
+	"route":     {},
+	"routes":    {},
+	"symbol":    {},
+	"symbols":   {},
+	"type":      {},
+	"types":     {},
+}
+
 var modificationVerbs = []string{
 	"fix",
 	"refactor",
@@ -232,6 +260,9 @@ func normalizePathToken(token string) (string, bool) {
 	if !pathTokenPattern.MatchString(candidate) {
 		return "", false
 	}
+	if isGenericSlashPair(candidate) {
+		return "", false
+	}
 	if strings.Contains(candidate, "/") {
 		return candidate, true
 	}
@@ -239,6 +270,23 @@ func normalizePathToken(token string) (string, bool) {
 		return candidate, true
 	}
 	return "", false
+}
+
+func isGenericSlashPair(candidate string) bool {
+	if strings.Contains(candidate, ".") {
+		return false
+	}
+	parts := strings.Split(candidate, "/")
+	if len(parts) != 2 {
+		return false
+	}
+	for _, part := range parts {
+		part = strings.ToLower(strings.TrimSpace(part))
+		if _, ok := genericPathSegments[part]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func extractSymbolReferences(message string) []extraction {
@@ -454,30 +502,7 @@ func inferMomentumModule(files []string) string {
 		return dirs[0]
 	}
 
-	common := strings.Split(dirs[0], "/")
-	for _, dir := range dirs[1:] {
-		parts := strings.Split(dir, "/")
-		common = sharedPrefix(common, parts)
-		if len(common) == 0 {
-			return ""
-		}
-	}
-	return strings.Join(common, "/")
-}
-
-func sharedPrefix(left []string, right []string) []string {
-	limit := len(left)
-	if len(right) < limit {
-		limit = len(right)
-	}
-	var prefix []string
-	for i := 0; i < limit; i++ {
-		if left[i] != right[i] {
-			break
-		}
-		prefix = append(prefix, left[i])
-	}
-	return prefix
+	return commonPathPrefix(dirs)
 }
 
 func findPhrase(message string, phrases []string) (string, string) {

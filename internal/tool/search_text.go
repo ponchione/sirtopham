@@ -1,10 +1,13 @@
 package tool
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 	"strings"
 )
@@ -24,9 +27,11 @@ type searchTextInput struct {
 // Default exclude patterns for project search.
 var defaultExcludes = []string{".git", "vendor", "node_modules", ".venv", "__pycache__", ".idea", ".vscode"}
 
-func (SearchText) Name() string        { return "search_text" }
-func (SearchText) Description() string { return "Search for text patterns across project files using ripgrep" }
-func (SearchText) ToolPurity() Purity  { return Pure }
+func (SearchText) Name() string { return "search_text" }
+func (SearchText) Description() string {
+	return "Search for text patterns across project files using ripgrep"
+}
+func (SearchText) ToolPurity() Purity { return Pure }
 
 func (SearchText) Schema() json.RawMessage {
 	return json.RawMessage(`{
@@ -79,8 +84,7 @@ func (SearchText) Execute(ctx context.Context, projectRoot string, input json.Ra
 		}, nil
 	}
 
-	// Check if rg is available.
-	rgPath, err := exec.LookPath("rg")
+	rgPath, err := lookupCommandPath("rg")
 	if err != nil {
 		return &ToolResult{
 			Success: false,
@@ -98,29 +102,18 @@ func (SearchText) Execute(ctx context.Context, projectRoot string, input json.Ra
 		maxResults = *params.MaxResults
 	}
 
-	// Build rg command.
-	args := []string{
-		"--json",
-		fmt.Sprintf("--max-count=%d", maxResults),
-	}
+	args := []string{"--json"}
 	if contextLines > 0 {
 		args = append(args, fmt.Sprintf("-C%d", contextLines))
 	}
-
-	// Apply default excludes.
 	for _, excl := range defaultExcludes {
 		args = append(args, "--glob", fmt.Sprintf("!%s/", excl))
 	}
-
-	// Apply file glob filter.
 	if params.FileGlob != "" {
 		args = append(args, "--glob", params.FileGlob)
 	}
-
 	args = append(args, "--", params.Pattern)
 
-	// Determine search directory — default to project root ("."), or
-	// scope to a validated subdirectory if params.Path is set.
 	searchDir := "."
 	if params.Path != "" {
 		if _, err := resolvePath(projectRoot, params.Path); err != nil {
@@ -134,31 +127,25 @@ func (SearchText) Execute(ctx context.Context, projectRoot string, input json.Ra
 	}
 	args = append(args, searchDir)
 
-	cmd := exec.CommandContext(ctx, rgPath, args...)
+	searchCtx, stopSearch := context.WithCancel(ctx)
+	defer stopSearch()
+
+	cmd := exec.CommandContext(searchCtx, rgPath, args...)
 	cmd.Dir = projectRoot
 
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return &ToolResult{
+			Success: false,
+			Content: fmt.Sprintf("Failed to set up ripgrep output: %v", err),
+			Error:   err.Error(),
+		}, nil
+	}
+
+	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 
-	err = cmd.Run()
-
-	// rg exits with code 1 for "no matches" — that's not an error.
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			if exitErr.ExitCode() == 1 {
-				return &ToolResult{
-					Success: true,
-					Content: fmt.Sprintf("No matches found for pattern: '%s'", params.Pattern),
-				}, nil
-			}
-			// Exit code 2+ means actual error.
-			return &ToolResult{
-				Success: false,
-				Content: fmt.Sprintf("ripgrep error: %s", stderr.String()),
-				Error:   err.Error(),
-			}, nil
-		}
+	if err := cmd.Start(); err != nil {
 		return &ToolResult{
 			Success: false,
 			Content: fmt.Sprintf("Failed to run ripgrep: %v", err),
@@ -166,12 +153,47 @@ func (SearchText) Execute(ctx context.Context, projectRoot string, input json.Ra
 		}, nil
 	}
 
-	// Parse JSON output and format.
-	formatted := formatRipgrepJSON(stdout.Bytes(), params.Pattern, maxResults)
-	return &ToolResult{
-		Success: true,
-		Content: formatted,
-	}, nil
+	formatted, matches, stoppedEarly, parseErr := formatRipgrepStream(stdout, params.Pattern, maxResults, stopSearch)
+	waitErr := cmd.Wait()
+
+	if parseErr != nil {
+		return &ToolResult{
+			Success: false,
+			Content: fmt.Sprintf("Failed to parse ripgrep output: %v", parseErr),
+			Error:   parseErr.Error(),
+		}, nil
+	}
+
+	if waitErr != nil {
+		if ctx.Err() != nil {
+			return &ToolResult{
+				Success: false,
+				Content: fmt.Sprintf("ripgrep search cancelled: %v", ctx.Err()),
+				Error:   ctx.Err().Error(),
+			}, nil
+		}
+		if stoppedEarly {
+			return &ToolResult{Success: true, Content: formatted}, nil
+		}
+		var exitErr *exec.ExitError
+		if errors.As(waitErr, &exitErr) && exitErr.ExitCode() == 1 && matches == 0 {
+			return &ToolResult{Success: true, Content: fmt.Sprintf("No matches found for pattern: '%s'", params.Pattern)}, nil
+		}
+		if stderr.Len() > 0 {
+			return &ToolResult{
+				Success: false,
+				Content: fmt.Sprintf("ripgrep error: %s", strings.TrimSpace(stderr.String())),
+				Error:   waitErr.Error(),
+			}, nil
+		}
+		return &ToolResult{
+			Success: false,
+			Content: fmt.Sprintf("Failed to run ripgrep: %v", waitErr),
+			Error:   waitErr.Error(),
+		}, nil
+	}
+
+	return &ToolResult{Success: true, Content: formatted}, nil
 }
 
 // ripgrep JSON types for parsing --json output.
@@ -207,16 +229,16 @@ type rgSubmatch struct {
 	End   int    `json:"end"`
 }
 
-// formatRipgrepJSON parses rg --json output into human-readable format.
-func formatRipgrepJSON(data []byte, pattern string, maxResults int) string {
-	lines := bytes.Split(data, []byte("\n"))
+func formatRipgrepStream(r io.Reader, pattern string, maxResults int, stop func()) (formatted string, matchCount int, stoppedEarly bool, err error) {
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
 	var sb strings.Builder
 	currentFile := ""
-	matchCount := 0
 	printedCurrentFileHeader := false
 
-	for _, line := range lines {
+	for scanner.Scan() {
+		line := scanner.Bytes()
 		if len(line) == 0 {
 			continue
 		}
@@ -229,13 +251,15 @@ func formatRipgrepJSON(data []byte, pattern string, maxResults int) string {
 		switch msg.Type {
 		case "match":
 			if maxResults > 0 && matchCount >= maxResults {
-				continue
+				if stop != nil {
+					stop()
+				}
+				return finalizeRipgrepFormat(&sb, pattern, matchCount), matchCount, true, nil
 			}
 			var m rgMatch
 			if json.Unmarshal(msg.Data, &m) != nil {
 				continue
 			}
-			// Print file header if new file.
 			if m.Path.Text != currentFile {
 				if currentFile != "" {
 					sb.WriteString("\n")
@@ -250,6 +274,12 @@ func formatRipgrepJSON(data []byte, pattern string, maxResults int) string {
 			matchCount++
 			text := strings.TrimRight(m.Lines.Text, "\n\r")
 			sb.WriteString(fmt.Sprintf("> %4d  %s\n", m.LineNumber, text))
+			if maxResults > 0 && matchCount >= maxResults {
+				if stop != nil {
+					stop()
+				}
+				return finalizeRipgrepFormat(&sb, pattern, matchCount), matchCount, true, nil
+			}
 
 		case "context":
 			if maxResults > 0 && matchCount >= maxResults {
@@ -272,16 +302,19 @@ func formatRipgrepJSON(data []byte, pattern string, maxResults int) string {
 			}
 			text := strings.TrimRight(c.Lines.Text, "\n\r")
 			sb.WriteString(fmt.Sprintf("  %4d  %s\n", c.LineNumber, text))
-
-		case "summary":
-			// Skip summary line.
 		}
 	}
 
+	if err := scanner.Err(); err != nil {
+		return "", matchCount, stoppedEarly, err
+	}
+	return finalizeRipgrepFormat(&sb, pattern, matchCount), matchCount, false, nil
+}
+
+func finalizeRipgrepFormat(sb *strings.Builder, pattern string, matchCount int) string {
 	if matchCount == 0 {
 		return fmt.Sprintf("No matches found for pattern: '%s'", pattern)
 	}
-
 	sb.WriteString(fmt.Sprintf("\n(%d matches)", matchCount))
 	return sb.String()
 }

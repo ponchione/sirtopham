@@ -31,9 +31,11 @@ type brainReadInput struct {
 	IncludeBacklinks bool   `json:"include_backlinks,omitempty"`
 }
 
-func (b *BrainRead) Name() string        { return "brain_read" }
-func (b *BrainRead) Description() string { return "Read a brain document by path from the Obsidian vault" }
-func (b *BrainRead) ToolPurity() Purity  { return Pure }
+func (b *BrainRead) Name() string { return "brain_read" }
+func (b *BrainRead) Description() string {
+	return "Read a brain document by path from the Obsidian vault"
+}
+func (b *BrainRead) ToolPurity() Purity { return Pure }
 
 func (b *BrainRead) Schema() json.RawMessage {
 	return json.RawMessage(`{
@@ -84,18 +86,8 @@ func (b *BrainRead) Execute(ctx context.Context, projectRoot string, input json.
 	content, err := b.client.ReadDocument(ctx, params.Path)
 	if err != nil {
 		errMsg := err.Error()
-		if strings.Contains(errMsg, "Document not found") {
-			// Enrich with directory listing.
-			dir := filepath.Dir(params.Path)
-			files, listErr := b.client.ListDocuments(ctx, dir)
-			if listErr == nil && len(files) > 0 {
-				return &ToolResult{
-					Success: false,
-					Content: fmt.Sprintf("Document not found: %s\n\nAvailable documents in %s/:\n  %s",
-						params.Path, dir, strings.Join(files, "\n  ")),
-					Error: errMsg,
-				}, nil
-			}
+		if result := brainDocumentNotFoundResult(ctx, b.client, params.Path, errMsg); result != nil {
+			return result, nil
 		}
 		return &ToolResult{
 			Success: false,

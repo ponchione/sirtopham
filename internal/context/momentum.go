@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"path"
 	"regexp"
-	"strings"
 
 	"github.com/ponchione/sirtopham/internal/config"
 	"github.com/ponchione/sirtopham/internal/db"
@@ -131,54 +130,13 @@ func longestCommonDirectoryPrefix(files []string) string {
 		return ""
 	}
 
-	directories := make([][]string, 0, len(files))
+	directories := make([]string, 0, len(files))
 	for _, file := range files {
 		dir := path.Dir(file)
 		if dir == "." || dir == "/" {
 			return ""
 		}
-		directories = append(directories, splitPath(dir))
+		directories = append(directories, dir)
 	}
-	if len(directories) == 0 {
-		return ""
-	}
-
-	prefix := directories[0]
-	for _, dir := range directories[1:] {
-		prefix = sharedPrefix(prefix, dir)
-		if len(prefix) == 0 {
-			return ""
-		}
-	}
-	return joinPath(prefix)
-}
-
-func splitPath(value string) []string {
-	if value == "" {
-		return nil
-	}
-	return stringsSplitNonEmpty(value, "/")
-}
-
-func joinPath(parts []string) string {
-	if len(parts) == 0 {
-		return ""
-	}
-	return stringsJoin(parts, "/")
-}
-
-func stringsSplitNonEmpty(value string, sep string) []string {
-	parts := strings.Split(value, sep)
-	result := make([]string, 0, len(parts))
-	for _, part := range parts {
-		if part == "" {
-			continue
-		}
-		result = append(result, part)
-	}
-	return result
-}
-
-func stringsJoin(parts []string, _ string) string {
-	return path.Clean(path.Join(parts...))
+	return commonPathPrefix(directories)
 }

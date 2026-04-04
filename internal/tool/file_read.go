@@ -1,9 +1,11 @@
 package tool
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"strings"
@@ -74,7 +76,7 @@ func (f FileRead) Execute(ctx context.Context, projectRoot string, input json.Ra
 		}, nil
 	}
 
-	data, err := os.ReadFile(absPath)
+	file, err := os.Open(absPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			msg := fileNotFoundError(projectRoot, params.Path)
@@ -86,9 +88,20 @@ func (f FileRead) Execute(ctx context.Context, projectRoot string, input json.Ra
 			Error:   err.Error(),
 		}, nil
 	}
+	defer file.Close()
 
-	// Binary detection.
-	if isBinaryContent(data) {
+	probe := make([]byte, 8192)
+	n, probeErr := file.Read(probe)
+	if probeErr != nil && probeErr != io.EOF {
+		return &ToolResult{
+			Success: false,
+			Content: fmt.Sprintf("Error reading file: %v", probeErr),
+			Error:   probeErr.Error(),
+		}, nil
+	}
+	probe = probe[:n]
+
+	if isBinaryContent(probe) {
 		return &ToolResult{
 			Success: false,
 			Content: "Binary file detected, cannot display content",
@@ -96,39 +109,60 @@ func (f FileRead) Execute(ctx context.Context, projectRoot string, input json.Ra
 		}, nil
 	}
 
-	// Empty file.
-	if len(data) == 0 {
+	if len(probe) == 0 {
 		return &ToolResult{
 			Success: true,
 			Content: fmt.Sprintf("File: %s (0 lines)\n(empty file)", params.Path),
 		}, nil
 	}
 
-	content := string(data)
-	lines := strings.Split(content, "\n")
-	kind := readKindFull
-	// Remove trailing empty line from trailing newline.
-	if len(lines) > 0 && lines[len(lines)-1] == "" {
-		lines = lines[:len(lines)-1]
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return &ToolResult{
+			Success: false,
+			Content: fmt.Sprintf("Error seeking file: %v", err),
+			Error:   err.Error(),
+		}, nil
 	}
-	totalLines := len(lines)
 
-	// Apply line range.
+	kind := readKindFull
 	lineStart := 1
-	lineEnd := totalLines
+	requestedLineEnd := math.MaxInt
 	if params.LineStart != nil {
 		lineStart = *params.LineStart
 		kind = readKindPartial
 	}
 	if params.LineEnd != nil {
-		lineEnd = *params.LineEnd
+		requestedLineEnd = *params.LineEnd
 		kind = readKindPartial
 	}
 
-	// Clamp to valid range.
 	if lineStart < 1 {
 		lineStart = 1
 	}
+	if requestedLineEnd < 1 {
+		requestedLineEnd = 1
+	}
+
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+
+	totalLines := 0
+	selectedLines := make([]string, 0)
+	for scanner.Scan() {
+		totalLines++
+		if totalLines >= lineStart && totalLines <= requestedLineEnd {
+			selectedLines = append(selectedLines, scanner.Text())
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return &ToolResult{
+			Success: false,
+			Content: fmt.Sprintf("Error reading file: %v", err),
+			Error:   err.Error(),
+		}, nil
+	}
+
+	lineEnd := requestedLineEnd
 	if lineEnd > totalLines {
 		lineEnd = totalLines
 	}
@@ -141,8 +175,14 @@ func (f FileRead) Execute(ctx context.Context, projectRoot string, input json.Ra
 		}, nil
 	}
 
-	// Format with line numbers.
-	selectedLines := lines[lineStart-1 : lineEnd]
+	maxSelected := lineEnd - lineStart + 1
+	if maxSelected < 0 {
+		maxSelected = 0
+	}
+	if len(selectedLines) > maxSelected {
+		selectedLines = selectedLines[:maxSelected]
+	}
+
 	width := int(math.Log10(float64(lineEnd))) + 1
 	if width < 1 {
 		width = 1
@@ -166,6 +206,14 @@ func (f FileRead) Execute(ctx context.Context, projectRoot string, input json.Ra
 	if kind == readKindFull {
 		info, err := os.Stat(absPath)
 		if err == nil {
+			data, readErr := os.ReadFile(absPath)
+			if readErr != nil {
+				return &ToolResult{
+					Success: false,
+					Content: fmt.Sprintf("Error reading file for snapshot: %v", readErr),
+					Error:   readErr.Error(),
+				}, nil
+			}
 			store := f.store
 			if store == nil {
 				store = defaultReadStateStore

@@ -362,14 +362,14 @@ func (l *AgentLoop) RunTurn(ctx stdctx.Context, req RunTurnRequest) (*TurnResult
 
 		// Check for cancellation before each iteration.
 		if isCancelled(ctx) {
-			return nil, l.handleCancellation(req.ConversationID, req.TurnNumber, iteration, completedIterations, ctx.Err())
+			return nil, l.handleIterationSetupCancellation(req.ConversationID, req.TurnNumber, iteration, completedIterations, ctx.Err())
 		}
 
 		// 3a: Reconstruct history (includes persisted messages from prior iterations).
 		history, err := l.conversationManager.ReconstructHistory(ctx, req.ConversationID)
 		if err != nil {
 			if isCancelled(ctx) {
-				return nil, l.handleCancellation(req.ConversationID, req.TurnNumber, iteration, completedIterations, ctx.Err())
+				return nil, l.handleIterationSetupCancellation(req.ConversationID, req.TurnNumber, iteration, completedIterations, ctx.Err())
 			}
 			return nil, fmt.Errorf("agent loop: reconstruct history for iteration %d: %w", iteration, err)
 		}
@@ -391,24 +391,7 @@ func (l *AgentLoop) RunTurn(ctx stdctx.Context, req RunTurnRequest) (*TurnResult
 		}
 
 		// 3b: Build prompt.
-		promptReq, err := l.promptBuilder.BuildPrompt(PromptConfig{
-			BasePrompt:                 l.cfg.BasePrompt,
-			ContextPackage:             turnCtx.ContextPackage,
-			History:                    history,
-			CurrentTurnMessages:        currentTurnMessages,
-			ToolDefinitions:            l.toolDefinitions,
-			ProviderName:               effectiveProvider,
-			ModelName:                  effectiveModel,
-			ContextLimit:               req.ModelContextLimit,
-			DisableTools:               disableTools,
-			Purpose:                    "chat",
-			ConversationID:             req.ConversationID,
-			TurnNumber:                 req.TurnNumber,
-			Iteration:                  iteration,
-			CompressHistoricalResults:  l.cfg.CompressHistoricalResults,
-			HistorySummarizeAfterTurns: l.cfg.HistorySummarizeAfterTurns,
-			ExtendedThinking:           l.cfg.ExtendedThinking,
-		})
+		promptReq, err := l.promptBuilder.BuildPrompt(l.buildPromptConfig(turnCtx.ContextPackage, history, currentTurnMessages, effectiveProvider, effectiveModel, req.ModelContextLimit, disableTools, req.ConversationID, req.TurnNumber, iteration))
 		if err != nil {
 			return nil, fmt.Errorf("agent loop: build prompt for iteration %d: %w", iteration, err)
 		}
@@ -420,24 +403,7 @@ func (l *AgentLoop) RunTurn(ctx stdctx.Context, req RunTurnRequest) (*TurnResult
 			if err != nil {
 				return nil, fmt.Errorf("agent loop: reconstruct history after compression in iteration %d: %w", iteration, err)
 			}
-			promptReq, err = l.promptBuilder.BuildPrompt(PromptConfig{
-				BasePrompt:                 l.cfg.BasePrompt,
-				ContextPackage:             turnCtx.ContextPackage,
-				History:                    history,
-				CurrentTurnMessages:        currentTurnMessages,
-				ToolDefinitions:            l.toolDefinitions,
-				ProviderName:               effectiveProvider,
-				ModelName:                  effectiveModel,
-				ContextLimit:               req.ModelContextLimit,
-				DisableTools:               disableTools,
-				Purpose:                    "chat",
-				ConversationID:             req.ConversationID,
-				TurnNumber:                 req.TurnNumber,
-				Iteration:                  iteration,
-				CompressHistoricalResults:  l.cfg.CompressHistoricalResults,
-				HistorySummarizeAfterTurns: l.cfg.HistorySummarizeAfterTurns,
-				ExtendedThinking:           l.cfg.ExtendedThinking,
-			})
+			promptReq, err = l.promptBuilder.BuildPrompt(l.buildPromptConfig(turnCtx.ContextPackage, history, currentTurnMessages, effectiveProvider, effectiveModel, req.ModelContextLimit, disableTools, req.ConversationID, req.TurnNumber, iteration))
 			if err != nil {
 				return nil, fmt.Errorf("agent loop: rebuild prompt after compression in iteration %d: %w", iteration, err)
 			}
@@ -463,7 +429,7 @@ func (l *AgentLoop) RunTurn(ctx stdctx.Context, req RunTurnRequest) (*TurnResult
 						AssistantMessageContent:  assistantContentJSON,
 					}, ctx.Err())
 				}
-				return nil, l.handleCancellation(req.ConversationID, req.TurnNumber, iteration, completedIterations, ctx.Err())
+				return nil, l.handleIterationSetupCancellation(req.ConversationID, req.TurnNumber, iteration, completedIterations, ctx.Err())
 			}
 
 			// Emergency compression: if the error is context overflow and we
@@ -789,6 +755,15 @@ func (l *AgentLoop) handleCancellation(conversationID string, turnNumber, curren
 	}, cause)
 }
 
+func (l *AgentLoop) handleIterationSetupCancellation(conversationID string, turnNumber, currentIteration, completedIterations int, cause error) error {
+	return l.handleTurnCancellation(inflightTurn{
+		ConversationID:      conversationID,
+		TurnNumber:          turnNumber,
+		Iteration:           currentIteration,
+		CompletedIterations: completedIterations,
+	}, cause)
+}
+
 func (l *AgentLoop) handleTurnCancellation(turn inflightTurn, cause error) error {
 	cleanupReason := l.cancellationReason(cause)
 	return l.handleTurnCleanup(turn, cleanupReason, cause)
@@ -1062,24 +1037,7 @@ func (l *AgentLoop) tryEmergencyCompression(
 		emerProvider = req.Provider
 	}
 
-	promptReq, err := l.promptBuilder.BuildPrompt(PromptConfig{
-		BasePrompt:                 l.cfg.BasePrompt,
-		ContextPackage:             turnCtx.ContextPackage,
-		History:                    history,
-		CurrentTurnMessages:        currentTurnMessages,
-		ToolDefinitions:            l.toolDefinitions,
-		ProviderName:               emerProvider,
-		ModelName:                  emerModel,
-		ContextLimit:               req.ModelContextLimit,
-		DisableTools:               disableTools,
-		Purpose:                    "chat",
-		ConversationID:             req.ConversationID,
-		TurnNumber:                 req.TurnNumber,
-		Iteration:                  iteration,
-		CompressHistoricalResults:  l.cfg.CompressHistoricalResults,
-		HistorySummarizeAfterTurns: l.cfg.HistorySummarizeAfterTurns,
-		ExtendedThinking:           l.cfg.ExtendedThinking,
-	})
+	promptReq, err := l.promptBuilder.BuildPrompt(l.buildPromptConfig(turnCtx.ContextPackage, history, currentTurnMessages, emerProvider, emerModel, req.ModelContextLimit, disableTools, req.ConversationID, req.TurnNumber, iteration))
 	if err != nil {
 		return nil, fmt.Errorf("agent loop: rebuild prompt after emergency compression in iteration %d: %w", iteration, err)
 	}
@@ -1091,6 +1049,27 @@ func (l *AgentLoop) tryEmergencyCompression(
 	}
 
 	return result, nil
+}
+
+func (l *AgentLoop) buildPromptConfig(contextPackage *contextpkg.FullContextPackage, history []db.Message, currentTurnMessages []provider.Message, providerName, modelName string, contextLimit int, disableTools bool, conversationID string, turnNumber, iteration int) PromptConfig {
+	return PromptConfig{
+		BasePrompt:                 l.cfg.BasePrompt,
+		ContextPackage:             contextPackage,
+		History:                    history,
+		CurrentTurnMessages:        currentTurnMessages,
+		ToolDefinitions:            l.toolDefinitions,
+		ProviderName:               providerName,
+		ModelName:                  modelName,
+		ContextLimit:               contextLimit,
+		DisableTools:               disableTools,
+		Purpose:                    "chat",
+		ConversationID:             conversationID,
+		TurnNumber:                 turnNumber,
+		Iteration:                  iteration,
+		CompressHistoricalResults:  l.cfg.CompressHistoricalResults,
+		HistorySummarizeAfterTurns: l.cfg.HistorySummarizeAfterTurns,
+		ExtendedThinking:           l.cfg.ExtendedThinking,
+	}
 }
 
 // updatePostTurnQuality calls ContextAssembler.UpdateQuality with the tool

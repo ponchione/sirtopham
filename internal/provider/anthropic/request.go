@@ -47,7 +47,7 @@ type apiTool struct {
 }
 
 type apiThinking struct {
-	Type         string `json:"type"`          // always "enabled"
+	Type         string `json:"type"` // always "enabled"
 	BudgetTokens int    `json:"budget_tokens"`
 }
 
@@ -72,7 +72,10 @@ func NewAnthropicOptions(thinkingEnabled bool, thinkingBudget int) json.RawMessa
 		ThinkingEnabled: thinkingEnabled,
 		ThinkingBudget:  thinkingBudget,
 	}
-	data, _ := json.Marshal(opts)
+	data, err := json.Marshal(opts)
+	if err != nil {
+		panic(fmt.Sprintf("marshal anthropic options: %v", err))
+	}
 	return json.RawMessage(data)
 }
 
@@ -82,11 +85,11 @@ func (p *AnthropicProvider) buildHTTPRequest(ctx context.Context, req *provider.
 	headerName, headerValue, err := p.creds.GetAuthHeader(ctx)
 	if err != nil {
 		return nil, &provider.ProviderError{
-			Provider:  "anthropic",
+			Provider:   "anthropic",
 			StatusCode: 0,
-			Message:   fmt.Sprintf("failed to obtain credentials: %s", err),
-			Retriable: false,
-			Err:       err,
+			Message:    fmt.Sprintf("failed to obtain credentials: %s", err),
+			Retriable:  false,
+			Err:        err,
 		}
 	}
 
@@ -98,22 +101,22 @@ func (p *AnthropicProvider) buildHTTPRequest(ctx context.Context, req *provider.
 	data, err := json.Marshal(body)
 	if err != nil {
 		return nil, &provider.ProviderError{
-			Provider:  "anthropic",
+			Provider:   "anthropic",
 			StatusCode: 0,
-			Message:   fmt.Sprintf("failed to marshal request body: %s", err),
-			Retriable: false,
-			Err:       err,
+			Message:    fmt.Sprintf("failed to marshal request body: %s", err),
+			Retriable:  false,
+			Err:        err,
 		}
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.baseURL+"/v1/messages", bytes.NewReader(data))
 	if err != nil {
 		return nil, &provider.ProviderError{
-			Provider:  "anthropic",
+			Provider:   "anthropic",
 			StatusCode: 0,
-			Message:   fmt.Sprintf("failed to create HTTP request: %s", err),
-			Retriable: false,
-			Err:       err,
+			Message:    fmt.Sprintf("failed to create HTTP request: %s", err),
+			Retriable:  false,
+			Err:        err,
 		}
 	}
 
@@ -181,7 +184,16 @@ func (p *AnthropicProvider) buildRequestBody(req *provider.Request, stream bool)
 					"content":     textContent,
 				},
 			}
-			content, _ := json.Marshal(toolResult)
+			content, err := json.Marshal(toolResult)
+			if err != nil {
+				return nil, &provider.ProviderError{
+					Provider:   "anthropic",
+					StatusCode: 0,
+					Message:    fmt.Sprintf("failed to marshal tool result content: %s", err),
+					Retriable:  false,
+					Err:        err,
+				}
+			}
 			ar.Messages[i] = apiMessage{
 				Role:         "user",
 				Content:      json.RawMessage(content),
@@ -213,11 +225,11 @@ func (p *AnthropicProvider) buildRequestBody(req *provider.Request, stream bool)
 		var opts AnthropicOptions
 		if err := json.Unmarshal(req.ProviderOptions, &opts); err != nil {
 			return nil, &provider.ProviderError{
-				Provider:  "anthropic",
+				Provider:   "anthropic",
 				StatusCode: 0,
-				Message:   fmt.Sprintf("invalid provider options: %s", err),
-				Retriable: false,
-				Err:       err,
+				Message:    fmt.Sprintf("invalid provider options: %s", err),
+				Retriable:  false,
+				Err:        err,
 			}
 		}
 		if opts.ThinkingEnabled {

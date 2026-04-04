@@ -177,6 +177,21 @@ func TestQuestionIntentSetsConventions(t *testing.T) {
 	requireSignal(t, needs.Signals, "question_intent", "explain", "documentation_boost")
 }
 
+func TestRuleBasedAnalyzerIgnoresGenericSlashPairs(t *testing.T) {
+	analyzer := RuleBasedAnalyzer{}
+
+	needs := analyzer.AnalyzeTurn("Investigate how websocket submissions choose provider/model and cite relevant file/function names", nil)
+
+	if len(needs.ExplicitFiles) != 0 {
+		t.Fatalf("ExplicitFiles = %v, want none for generic slash pairs", needs.ExplicitFiles)
+	}
+	for _, signal := range needs.Signals {
+		if signal.Type == "file_ref" {
+			t.Fatalf("unexpected file_ref signal: %+v", signal)
+		}
+	}
+}
+
 func historyMessage(content string) db.Message {
 	return db.Message{
 		Content: sql.NullString{String: content, Valid: true},

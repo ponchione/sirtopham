@@ -21,6 +21,18 @@ func TestBuildCleanupPlanSkipsCompletedIteration(t *testing.T) {
 	}
 }
 
+func TestBuildCleanupPlanSkipsUnmaterializedIterationSetupCancellation(t *testing.T) {
+	plan := buildCleanupPlan(inflightTurn{
+		ConversationID:      "conv-1",
+		TurnNumber:          2,
+		Iteration:           1,
+		CompletedIterations: 0,
+	}, cleanupReasonCancel)
+	if len(plan.Actions) != 0 {
+		t.Fatalf("cleanup actions = %#v, want none for cancellation before any assistant/tool state existed", plan.Actions)
+	}
+}
+
 func TestBuildCleanupPlanPersistsInterruptedAssistantMessage(t *testing.T) {
 	plan := buildCleanupPlan(inflightTurn{
 		ConversationID:           "conv-1",

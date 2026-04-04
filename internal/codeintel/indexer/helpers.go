@@ -6,22 +6,19 @@ import (
 	"time"
 
 	"github.com/ponchione/sirtopham/internal/codeintel"
+	"github.com/ponchione/sirtopham/internal/langutil"
 	"github.com/ponchione/sirtopham/internal/pathglob"
 )
 
 // langFromExt maps a file extension to the language identifier.
 func langFromExt(ext string) string {
-	switch ext {
-	case ".go":
-		return "go"
-	case ".md":
-		return "markdown"
-	case ".ts":
-		return "typescript"
-	case ".tsx":
-		return "tsx"
-	case ".py":
-		return "python"
+	lang, ok := langutil.FromExtension(ext)
+	if !ok {
+		return ""
+	}
+	switch lang {
+	case "go", "markdown", "typescript", "tsx", "python":
+		return lang
 	default:
 		return ""
 	}

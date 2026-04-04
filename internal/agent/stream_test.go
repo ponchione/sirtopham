@@ -198,18 +198,27 @@ func TestConsumeStreamToolCallDeltaFallback(t *testing.T) {
 	}
 }
 
-func TestConsumeStreamFatalError(t *testing.T) {
+func TestConsumeStreamFatalErrorReturnsPartialResult(t *testing.T) {
 	ch := makeStreamCh(
 		provider.TokenDelta{Text: "partial"},
 		provider.StreamError{Fatal: true, Message: "connection reset"},
 	)
 
-	_, err := consumeStream(stdctx.Background(), ch, noopEmit, testNow)
+	result, err := consumeStream(stdctx.Background(), ch, noopEmit, testNow)
 	if err == nil {
 		t.Fatal("consumeStream error = nil, want fatal stream error")
 	}
 	if got := err.Error(); got != "stream error: connection reset" {
 		t.Fatalf("error = %q, want stream error: connection reset", got)
+	}
+	if result == nil {
+		t.Fatal("result = nil, want partial result")
+	}
+	if result.TextContent != "partial" {
+		t.Fatalf("TextContent = %q, want partial", result.TextContent)
+	}
+	if len(result.ContentBlocks) != 1 || result.ContentBlocks[0].Type != "text" {
+		t.Fatalf("ContentBlocks = %+v, want one partial text block", result.ContentBlocks)
 	}
 }
 

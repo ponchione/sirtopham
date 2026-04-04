@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/ponchione/sirtopham/internal/config"
+	"github.com/ponchione/sirtopham/internal/langutil"
 	"github.com/ponchione/sirtopham/internal/pathglob"
 )
 
@@ -221,25 +222,19 @@ func detectPrimaryLanguage(root string, includes []string) string {
 	})
 
 	// Find the most common code extension.
-	langMap := map[string]string{
-		".go":   "go",
-		".py":   "python",
-		".js":   "javascript",
-		".ts":   "typescript",
-		".tsx":  "typescript",
-		".jsx":  "javascript",
-		".rs":   "rust",
-		".java": "java",
-		".rb":   "ruby",
-		".c":    "c",
-		".cpp":  "cpp",
-		".cs":   "csharp",
-	}
-
 	bestLang := ""
 	bestCount := 0
 	for ext, count := range counts {
-		if lang, ok := langMap[ext]; ok && count > bestCount {
+		lang, ok := langutil.FromExtension(ext)
+		if ext == ".tsx" {
+			lang = "typescript"
+			ok = true
+		}
+		if ext == ".jsx" {
+			lang = "javascript"
+			ok = true
+		}
+		if ok && count > bestCount {
 			bestCount = count
 			bestLang = lang
 		}
@@ -248,32 +243,5 @@ func detectPrimaryLanguage(root string, includes []string) string {
 }
 
 func langFromExtension(ext string) string {
-	m := map[string]string{
-		".go":   "go",
-		".py":   "python",
-		".js":   "javascript",
-		".ts":   "typescript",
-		".tsx":  "tsx",
-		".jsx":  "jsx",
-		".rs":   "rust",
-		".java": "java",
-		".rb":   "ruby",
-		".c":    "c",
-		".cpp":  "cpp",
-		".h":    "c",
-		".sql":  "sql",
-		".md":   "markdown",
-		".json": "json",
-		".yaml": "yaml",
-		".yml":  "yaml",
-		".toml": "toml",
-		".html": "html",
-		".css":  "css",
-		".sh":   "shell",
-		".bash": "shell",
-	}
-	if lang, ok := m[strings.ToLower(ext)]; ok {
-		return lang
-	}
-	return "text"
+	return langutil.FromExtensionOr(ext, "text")
 }
