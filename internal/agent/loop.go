@@ -87,6 +87,12 @@ type AgentLoopConfig struct {
 	MaxToolResultsPerMessageChars int                  `json:"max_tool_results_per_message_chars,omitempty"`
 	ToolResultStoreRoot           string               `json:"tool_result_store_root,omitempty"`
 
+	// Prompt-cache controls for providers that support explicit cache markers
+	// (currently Anthropic only).
+	CacheSystemPrompt        bool `json:"cache_system_prompt,omitempty"`
+	CacheAssembledContext    bool `json:"cache_assembled_context,omitempty"`
+	CacheConversationHistory bool `json:"cache_conversation_history,omitempty"`
+
 	// Phase 2 history compression (spec 11).
 	CompressHistoricalResults  bool `json:"compress_historical_results,omitempty"`
 	HistorySummarizeAfterTurns int  `json:"history_summarize_after_turns,omitempty"`
@@ -1072,6 +1078,9 @@ func (l *AgentLoop) buildPromptConfig(contextPackage *contextpkg.FullContextPack
 		CompressHistoricalResults:  l.cfg.CompressHistoricalResults,
 		HistorySummarizeAfterTurns: l.cfg.HistorySummarizeAfterTurns,
 		ExtendedThinking:           l.cfg.ExtendedThinking,
+		CacheSystemPrompt:          l.cfg.CacheSystemPrompt,
+		CacheAssembledContext:      l.cfg.CacheAssembledContext,
+		CacheConversationHistory:   l.cfg.CacheConversationHistory,
 	}
 }
 
@@ -1162,7 +1171,7 @@ func withDefaultConfig(cfg AgentLoopConfig) AgentLoopConfig {
 		cfg.LoopDetectionThreshold = defaultLoopDetectThreshold
 	}
 	if cfg.BasePrompt == "" {
-		cfg.BasePrompt = "You are a helpful AI assistant."
+		cfg.BasePrompt = "You are a helpful AI assistant. Use file tools for project-root files. Use brain_read and brain_search for vault-relative brain notes like notes/...md or .brain/notes/...md; do not treat those as repo-root file_read or search_text paths."
 	}
 	if cfg.MaxToolResultsPerMessageChars <= 0 {
 		cfg.MaxToolResultsPerMessageChars = defaultMaxToolResultsPerMessageChars

@@ -74,13 +74,18 @@ func (p *CodexProvider) Name() string {
 // Compile-time assertion that CodexProvider satisfies provider.Provider.
 var _ provider.Provider = (*CodexProvider)(nil)
 
-// Models returns the static list of models supported by the Codex provider.
+// Models returns the current static list of models supported by the Codex provider.
+// Keep this in sync with `codex /model` for the ChatGPT-backed Codex runtime.
 func (p *CodexProvider) Models(ctx context.Context) ([]provider.Model, error) {
 	return []provider.Model{
+		{ID: "gpt-5.4", Name: "gpt-5.4", ContextWindow: 400000, SupportsTools: true, SupportsThinking: false},
+		{ID: "gpt-5.4-mini", Name: "gpt-5.4-mini", ContextWindow: 400000, SupportsTools: true, SupportsThinking: false},
+		{ID: "gpt-5.3-codex", Name: "gpt-5.3-codex", ContextWindow: 400000, SupportsTools: true, SupportsThinking: false},
+		{ID: "gpt-5.3-codex-spark", Name: "gpt-5.3-codex-spark", ContextWindow: 400000, SupportsTools: true, SupportsThinking: false},
+		{ID: "gpt-5.2-codex", Name: "gpt-5.2-codex", ContextWindow: 400000, SupportsTools: true, SupportsThinking: false},
+		{ID: "gpt-5.2", Name: "gpt-5.2", ContextWindow: 400000, SupportsTools: true, SupportsThinking: false},
+		{ID: "gpt-5.1-codex-max", Name: "gpt-5.1-codex-max", ContextWindow: 400000, SupportsTools: true, SupportsThinking: false},
 		{ID: "gpt-5.1-codex-mini", Name: "gpt-5.1-codex-mini", ContextWindow: 400000, SupportsTools: true, SupportsThinking: false},
-		{ID: "o3", Name: "o3", ContextWindow: 200000, SupportsTools: true, SupportsThinking: false},
-		{ID: "o4-mini", Name: "o4-mini", ContextWindow: 200000, SupportsTools: true, SupportsThinking: false},
-		{ID: "gpt-4.1", Name: "GPT-4.1", ContextWindow: 1000000, SupportsTools: true, SupportsThinking: false},
 	}, nil
 }
 

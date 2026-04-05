@@ -25,7 +25,7 @@ func TestGetConfigIncludesToolOutputLimitAndStoreRoot(t *testing.T) {
 	cfg.Agent.ExtendedThinking = false
 
 	srv := server.New(server.Config{Host: "127.0.0.1", Port: 0}, newTestLogger())
-	server.NewConfigHandler(srv, cfg, nil, newTestLogger())
+	server.NewConfigHandler(srv, cfg, nil, nil, newTestLogger())
 	_, base := startServer(t, srv)
 
 	resp, err := http.Get(base + "/api/config")
@@ -36,10 +36,13 @@ func TestGetConfigIncludesToolOutputLimitAndStoreRoot(t *testing.T) {
 
 	var body struct {
 		Agent struct {
-			MaxIterations       int    `json:"max_iterations"`
-			ExtendedThinking    bool   `json:"extended_thinking"`
-			ToolOutputMaxTokens int    `json:"tool_output_max_tokens"`
-			ToolResultStoreRoot string `json:"tool_result_store_root"`
+			MaxIterations            int    `json:"max_iterations"`
+			ExtendedThinking         bool   `json:"extended_thinking"`
+			ToolOutputMaxTokens      int    `json:"tool_output_max_tokens"`
+			ToolResultStoreRoot      string `json:"tool_result_store_root"`
+			CacheSystemPrompt        bool   `json:"cache_system_prompt"`
+			CacheAssembledContext    bool   `json:"cache_assembled_context"`
+			CacheConversationHistory bool   `json:"cache_conversation_history"`
 		} `json:"agent"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
@@ -57,6 +60,15 @@ func TestGetConfigIncludesToolOutputLimitAndStoreRoot(t *testing.T) {
 	}
 	if body.Agent.ToolResultStoreRoot != cfg.Agent.ToolResultStoreRoot {
 		t.Fatalf("agent.tool_result_store_root = %q, want %q", body.Agent.ToolResultStoreRoot, cfg.Agent.ToolResultStoreRoot)
+	}
+	if body.Agent.CacheSystemPrompt != cfg.Agent.CacheSystemPrompt {
+		t.Fatalf("agent.cache_system_prompt = %t, want %t", body.Agent.CacheSystemPrompt, cfg.Agent.CacheSystemPrompt)
+	}
+	if body.Agent.CacheAssembledContext != cfg.Agent.CacheAssembledContext {
+		t.Fatalf("agent.cache_assembled_context = %t, want %t", body.Agent.CacheAssembledContext, cfg.Agent.CacheAssembledContext)
+	}
+	if body.Agent.CacheConversationHistory != cfg.Agent.CacheConversationHistory {
+		t.Fatalf("agent.cache_conversation_history = %t, want %t", body.Agent.CacheConversationHistory, cfg.Agent.CacheConversationHistory)
 	}
 }
 
@@ -102,7 +114,7 @@ func TestProvidersEndpointGroupsModelsByProvider(t *testing.T) {
 	}}
 
 	srv := server.New(server.Config{Host: "127.0.0.1", Port: 0}, newTestLogger())
-	server.NewConfigHandler(srv, cfg, runtime, newTestLogger())
+	server.NewConfigHandler(srv, cfg, runtime, nil, newTestLogger())
 	_, base := startServer(t, srv)
 
 	resp, err := http.Get(base + "/api/providers")
@@ -160,7 +172,7 @@ func TestProvidersEndpointIncludesAuthAndHealth(t *testing.T) {
 	}}
 
 	srv := server.New(server.Config{Host: "127.0.0.1", Port: 0}, newTestLogger())
-	server.NewConfigHandler(srv, cfg, runtime, newTestLogger())
+	server.NewConfigHandler(srv, cfg, runtime, nil, newTestLogger())
 	_, base := startServer(t, srv)
 
 	resp, err := http.Get(base + "/api/auth/providers")
@@ -206,7 +218,7 @@ func TestAuthProvidersEndpointMarksMissingRuntimeProviderUnavailable(t *testing.
 	}}
 
 	srv := server.New(server.Config{Host: "127.0.0.1", Port: 0}, newTestLogger())
-	server.NewConfigHandler(srv, cfg, runtime, newTestLogger())
+	server.NewConfigHandler(srv, cfg, runtime, nil, newTestLogger())
 	_, base := startServer(t, srv)
 
 	resp, err := http.Get(base + "/api/auth/providers")
@@ -258,7 +270,7 @@ func TestConfigEndpointGroupsModelsByProvider(t *testing.T) {
 	}}
 
 	srv := server.New(server.Config{Host: "127.0.0.1", Port: 0}, newTestLogger())
-	server.NewConfigHandler(srv, cfg, runtime, newTestLogger())
+	server.NewConfigHandler(srv, cfg, runtime, nil, newTestLogger())
 	_, base := startServer(t, srv)
 
 	resp, err := http.Get(base + "/api/config")
@@ -318,7 +330,7 @@ func TestConfigEndpointUsesAvailableRuntimeModelsEvenIfAuthStatusesFail(t *testi
 	}
 
 	srv := server.New(server.Config{Host: "127.0.0.1", Port: 0}, newTestLogger())
-	server.NewConfigHandler(srv, cfg, runtime, newTestLogger())
+	server.NewConfigHandler(srv, cfg, runtime, nil, newTestLogger())
 	_, base := startServer(t, srv)
 
 	resp, err := http.Get(base + "/api/config")

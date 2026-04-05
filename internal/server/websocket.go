@@ -35,25 +35,26 @@ type connOverride struct {
 
 // WebSocketHandler handles WebSocket connections for streaming agent events.
 type WebSocketHandler struct {
-	agent           AgentService
-	convSvc         ConversationService
-	projectID       string
-	providers       map[string]config.ProviderConfig
-	defaultProvider string
-	defaultModel    string
-	logger          *slog.Logger
+	agent     AgentService
+	convSvc   ConversationService
+	projectID string
+	providers map[string]config.ProviderConfig
+	defaults  *RuntimeDefaults
+	logger    *slog.Logger
 }
 
 // NewWebSocketHandler creates a handler and registers the WS route.
-func NewWebSocketHandler(s *Server, agentSvc AgentService, convSvc ConversationService, cfg *config.Config, logger *slog.Logger) *WebSocketHandler {
+func NewWebSocketHandler(s *Server, agentSvc AgentService, convSvc ConversationService, cfg *config.Config, defaults *RuntimeDefaults, logger *slog.Logger) *WebSocketHandler {
+	if defaults == nil {
+		defaults = NewRuntimeDefaults(cfg)
+	}
 	h := &WebSocketHandler{
-		agent:           agentSvc,
-		convSvc:         convSvc,
-		projectID:       cfg.ProjectRoot,
-		providers:       cfg.Providers,
-		defaultProvider: cfg.Routing.Default.Provider,
-		defaultModel:    cfg.Routing.Default.Model,
-		logger:          logger,
+		agent:     agentSvc,
+		convSvc:   convSvc,
+		projectID: cfg.ProjectRoot,
+		providers: cfg.Providers,
+		defaults:  defaults,
+		logger:    logger,
 	}
 	s.HandleFunc("/api/ws", h.handleWS)
 	return h
@@ -76,8 +77,10 @@ type ServerMessage struct {
 }
 
 func (h *WebSocketHandler) defaultProviderName() string {
-	if h.defaultProvider != "" {
-		return h.defaultProvider
+	if h.defaults != nil {
+		if provider, _ := h.defaults.Get(); provider != "" {
+			return provider
+		}
 	}
 	for name := range h.providers {
 		if name == "codex" {
@@ -317,11 +320,15 @@ func (h *WebSocketHandler) handleMessage(ctx context.Context, conn *websocket.Co
 		return
 	}
 
-	if prov == "" {
-		prov = h.defaultProviderName()
+	defaultProvider, defaultModel := h.defaults.Get()
+	if defaultProvider == "" {
+		defaultProvider = h.defaultProviderName()
 	}
-	if model == "" && prov == h.defaultProvider {
-		model = h.defaultModel
+	if prov == "" {
+		prov = defaultProvider
+	}
+	if model == "" && prov == defaultProvider {
+		model = defaultModel
 	}
 	modelContextLimit, limitErr := h.resolveModelContextLimit(prov)
 	if limitErr != nil {

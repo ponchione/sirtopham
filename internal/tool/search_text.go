@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -25,7 +26,14 @@ type searchTextInput struct {
 }
 
 // Default exclude patterns for project search.
-var defaultExcludes = []string{".git", "vendor", "node_modules", ".venv", "__pycache__", ".idea", ".vscode"}
+var defaultExcludes = []string{".git", ".sirtopham", ".brain", ".obsidian", "vendor", "node_modules", ".venv", "__pycache__", ".idea", ".vscode"}
+
+var hiddenStateSearchExcludes = map[string]struct{}{
+	".git":       {},
+	".sirtopham": {},
+	".brain":     {},
+	".obsidian":  {},
+}
 
 func (SearchText) Name() string { return "search_text" }
 func (SearchText) Description() string {
@@ -106,11 +114,11 @@ func (SearchText) Execute(ctx context.Context, projectRoot string, input json.Ra
 	if contextLines > 0 {
 		args = append(args, fmt.Sprintf("-C%d", contextLines))
 	}
-	for _, excl := range defaultExcludes {
-		args = append(args, "--glob", fmt.Sprintf("!%s/", excl))
-	}
 	if params.FileGlob != "" {
 		args = append(args, "--glob", params.FileGlob)
+	}
+	for _, excl := range defaultExcludes {
+		args = append(args, "--glob", fmt.Sprintf("!%s/", excl))
 	}
 	args = append(args, "--", params.Pattern)
 
@@ -122,6 +130,9 @@ func (SearchText) Execute(ctx context.Context, projectRoot string, input json.Ra
 				Content: err.Error(),
 				Error:   err.Error(),
 			}, nil
+		}
+		if isHiddenStateSearchPath(params.Path) {
+			return &ToolResult{Success: true, Content: fmt.Sprintf("No matches found for pattern: '%s'", params.Pattern)}, nil
 		}
 		searchDir = params.Path
 	}
@@ -227,6 +238,16 @@ type rgSubmatch struct {
 	Match rgText `json:"match"`
 	Start int    `json:"start"`
 	End   int    `json:"end"`
+}
+
+func isHiddenStateSearchPath(path string) bool {
+	cleaned := filepath.Clean(path)
+	for _, part := range strings.Split(cleaned, string(filepath.Separator)) {
+		if _, excluded := hiddenStateSearchExcludes[part]; excluded {
+			return true
+		}
+	}
+	return false
 }
 
 func formatRipgrepStream(r io.Reader, pattern string, maxResults int, stop func()) (formatted string, matchCount int, stoppedEarly bool, err error) {

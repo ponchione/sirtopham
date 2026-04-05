@@ -161,6 +161,12 @@ export function SettingsPage() {
                   {config.agent.extended_thinking ? "on" : "off"}
                 </div>
                 <div>Tool output max tokens: {config.agent.tool_output_max_tokens}</div>
+                <div>
+                  Anthropic prompt cache markers: system{" "}
+                  {config.agent.cache_system_prompt ? "on" : "off"}, context{" "}
+                  {config.agent.cache_assembled_context ? "on" : "off"}, history{" "}
+                  {config.agent.cache_conversation_history ? "on" : "off"}
+                </div>
                 {config.agent.tool_result_store_root && (
                   <div className="break-all">
                     Persisted tool result store: {config.agent.tool_result_store_root}

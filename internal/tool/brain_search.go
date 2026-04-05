@@ -37,7 +37,7 @@ func (b *BrainSearch) ToolPurity() Purity  { return Pure }
 func (b *BrainSearch) Schema() json.RawMessage {
 	return json.RawMessage(`{
 		"name": "brain_search",
-		"description": "Search the project brain (Obsidian knowledge vault) for documents by keyword. Returns matching document paths, titles, and relevant snippets. Use this to find architectural decisions, debugging journals, conventions, and other project knowledge.",
+		"description": "Search the project brain (Obsidian knowledge vault) for documents by keyword. Use this when the prompt refers to brain notes like 'notes/...md' or '.brain/notes/...md', or when search_text found nothing but the content may live in the brain. Prefer brain_search/brain_read over search_text/file_read for vault-relative note paths. Returns matching document paths, titles, and relevant snippets. Use this to find architectural decisions, debugging journals, conventions, and other project knowledge.",
 		"input_schema": {
 			"type": "object",
 			"properties": {

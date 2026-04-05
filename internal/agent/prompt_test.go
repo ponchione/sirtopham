@@ -130,6 +130,7 @@ func TestBuildPromptAnthropicCacheMarkersWithContext(t *testing.T) {
 		BasePrompt:     "base prompt",
 		ContextPackage: pkg,
 		ProviderName:   "anthropic",
+		CacheAssembledContext: true,
 	})
 	if err != nil {
 		t.Fatalf("BuildPrompt returned error: %v", err)
@@ -153,6 +154,7 @@ func TestBuildPromptAnthropicCacheMarkersWithoutContext(t *testing.T) {
 	req, err := b.BuildPrompt(PromptConfig{
 		BasePrompt:   "base prompt",
 		ProviderName: "anthropic",
+		CacheSystemPrompt: true,
 	})
 	if err != nil {
 		t.Fatalf("BuildPrompt returned error: %v", err)
@@ -193,12 +195,78 @@ func TestBuildPromptAnthropicCaseInsensitive(t *testing.T) {
 	req, err := b.BuildPrompt(PromptConfig{
 		BasePrompt:   "base prompt",
 		ProviderName: "Anthropic",
+		CacheSystemPrompt: true,
 	})
 	if err != nil {
 		t.Fatalf("BuildPrompt returned error: %v", err)
 	}
 	if req.SystemBlocks[0].CacheControl == nil {
 		t.Fatal("cache marker missing for case-insensitive 'Anthropic'")
+	}
+}
+
+func TestBuildPromptAnthropicHonorsPerBlockCacheToggles(t *testing.T) {
+	b := NewPromptBuilder(nil)
+	history := []db.Message{{Role: "user", Content: nullStr("prior turn")}}
+	currentTurn := []provider.Message{provider.NewUserMessage("current turn")}
+
+	req, err := b.BuildPrompt(PromptConfig{
+		BasePrompt:                "base prompt",
+		ContextPackage:            &contextpkg.FullContextPackage{Content: "context block", TokenCount: 10},
+		History:                   history,
+		CurrentTurnMessages:       currentTurn,
+		ProviderName:              "anthropic",
+		CacheSystemPrompt:         true,
+		CacheAssembledContext:     false,
+		CacheConversationHistory:  true,
+	})
+	if err != nil {
+		t.Fatalf("BuildPrompt returned error: %v", err)
+	}
+
+	if req.SystemBlocks[0].CacheControl == nil {
+		t.Fatal("SystemBlocks[0] (base) missing cache marker when cache_system_prompt=true")
+	}
+	if req.SystemBlocks[1].CacheControl != nil {
+		t.Fatal("SystemBlocks[1] (context) has cache marker when cache_assembled_context=false")
+	}
+	if len(req.Messages) != 2 {
+		t.Fatalf("Messages count = %d, want 2", len(req.Messages))
+	}
+	if req.Messages[0].CacheControl == nil {
+		t.Fatal("Messages[0] (history) missing cache marker when cache_conversation_history=true")
+	}
+	if req.Messages[1].CacheControl != nil {
+		t.Fatal("Messages[1] (current turn) has cache marker, want nil")
+	}
+}
+
+func TestBuildPromptAnthropicDisablesAllCacheMarkersWhenTogglesOff(t *testing.T) {
+	b := NewPromptBuilder(nil)
+	history := []db.Message{{Role: "user", Content: nullStr("prior turn")}}
+
+	req, err := b.BuildPrompt(PromptConfig{
+		BasePrompt:               "base prompt",
+		ContextPackage:           &contextpkg.FullContextPackage{Content: "context block", TokenCount: 10},
+		History:                  history,
+		ProviderName:             "anthropic",
+		CacheSystemPrompt:        false,
+		CacheAssembledContext:    false,
+		CacheConversationHistory: false,
+	})
+	if err != nil {
+		t.Fatalf("BuildPrompt returned error: %v", err)
+	}
+
+	for i, block := range req.SystemBlocks {
+		if block.CacheControl != nil {
+			t.Fatalf("SystemBlocks[%d] has cache marker with all cache toggles disabled", i)
+		}
+	}
+	for i, msg := range req.Messages {
+		if msg.CacheControl != nil {
+			t.Fatalf("Messages[%d] has cache marker with all cache toggles disabled", i)
+		}
 	}
 }
 
@@ -301,6 +369,7 @@ func TestBuildPromptHistoryGrowthStability(t *testing.T) {
 		BasePrompt:   "base prompt",
 		History:      history2,
 		ProviderName: "anthropic",
+		CacheConversationHistory: true,
 	})
 	if err != nil {
 		t.Fatalf("BuildPrompt(2 history) returned error: %v", err)
@@ -315,6 +384,7 @@ func TestBuildPromptHistoryGrowthStability(t *testing.T) {
 		BasePrompt:   "base prompt",
 		History:      history4,
 		ProviderName: "anthropic",
+		CacheConversationHistory: true,
 	})
 	if err != nil {
 		t.Fatalf("BuildPrompt(4 history) returned error: %v", err)
@@ -512,6 +582,8 @@ func TestBuildPromptFullScenarioAnthropicWithAllBlocks(t *testing.T) {
 		ConversationID:      "conv-abc",
 		TurnNumber:          2,
 		Iteration:           1,
+		CacheAssembledContext: true,
+		CacheConversationHistory: true,
 	})
 	if err != nil {
 		t.Fatalf("BuildPrompt returned error: %v", err)

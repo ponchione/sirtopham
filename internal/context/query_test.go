@@ -83,6 +83,31 @@ func TestHeuristicQueryExtractorExcludesExplicitEntities(t *testing.T) {
 	}
 }
 
+func TestHeuristicQueryExtractorExcludesRejectedSlashDelimitedProse(t *testing.T) {
+	extractor := HeuristicQueryExtractor{}
+	needs := &ContextNeeds{
+		ExplicitFiles: []string{"internal/server/websocket.go"},
+		Signals: []Signal{
+			{Type: "file_ref_rejected", Source: "search/title/runtime", Value: "unanchored_multi_segment_path"},
+			{Type: "file_ref", Source: "internal/server/websocket.go", Value: "internal/server/websocket.go"},
+		},
+	}
+
+	queries := extractor.ExtractQueries("Investigate search/title/runtime helpers and compare them with internal/server/websocket.go in 2 bullets. Treat search/title/runtime as prose rather than a repo path.", needs)
+
+	if len(queries) == 0 {
+		t.Fatal("expected at least one query")
+	}
+	for _, query := range queries {
+		if strings.Contains(query, "search") && strings.Contains(query, "title") && strings.Contains(query, "runtime") {
+			t.Fatalf("query %q unexpectedly contains rejected slash-delimited prose candidate", query)
+		}
+		if strings.Contains(query, "internal/server/websocket.go") {
+			t.Fatalf("query %q unexpectedly contains explicit file", query)
+		}
+	}
+}
+
 func TestHeuristicQueryExtractorCapsAtThreeQueries(t *testing.T) {
 	extractor := HeuristicQueryExtractor{}
 	needs := &ContextNeeds{MomentumModule: "internal/auth"}

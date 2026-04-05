@@ -74,9 +74,9 @@ Hermes/Honcho puts per-turn context on the user message instead of the system pr
 
 ### Cache Invalidation
 
-The only event that invalidates the system prompt cache is **conversation compression** (see Compression section). When compression fires, the conversation history changes shape, so cache breakpoint 3 is invalidated. The assembled context (block 2) was built for the current turn and doesn't change. The base prompt (block 1) never changes.
+The only event that invalidates the prompt-cacheable history prefix is **conversation compression** (see Compression section). When compression fires, the conversation history changes shape, so the history breakpoint is invalidated. The assembled context (block 2) was built for the current turn and doesn't change. The base prompt (block 1) never changes.
 
-After compression, `_cached_system_prompt` is set to nil to force a rebuild on the next iteration. This matches Hermes's behavior exactly.
+Current implementation note: `PromptBuilder.BuildPrompt()` rebuilds the provider request each iteration and only emits explicit cache markers for Anthropic, gated by `agent.cache_system_prompt`, `agent.cache_assembled_context`, and `agent.cache_conversation_history`. There is no long-lived `_cached_system_prompt` byte buffer in code today.
 
 ---
 
@@ -464,7 +464,7 @@ After compression, the conversation history has changed shape:
 - Cache block 2 (assembled context): unaffected — frozen for the current turn.
 - Cache block 3 (history prefix): **invalidated** — the compressed history is a different prefix.
 
-Set `_cached_system_prompt = nil` to force a rebuild on the next iteration.
+In the current implementation, rebuild the provider request on the next iteration so the history-prefix cache breakpoint reflects the compressed history shape.
 
 ---
 

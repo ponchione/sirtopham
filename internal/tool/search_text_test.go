@@ -83,6 +83,55 @@ func TestSearchTextFileGlob(t *testing.T) {
 	}
 }
 
+func TestSearchTextExcludesBrainAndWorkspaceHiddenStateByDefault(t *testing.T) {
+	requireRipgrep(t)
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".brain", ".obsidian"), 0o755); err != nil {
+		t.Fatalf("mkdir hidden state: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "visible.md"), []byte("token-visible\n"), 0o644); err != nil {
+		t.Fatalf("write visible file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".brain", "note.md"), []byte("token-hidden\n"), 0o644); err != nil {
+		t.Fatalf("write hidden brain note: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".brain", ".obsidian", "workspace.json"), []byte(`{"token":"token-hidden"}`), 0o644); err != nil {
+		t.Fatalf("write hidden workspace file: %v", err)
+	}
+
+	visible, err := SearchText{}.Execute(context.Background(), dir, json.RawMessage(`{"pattern":"token-visible","context_lines":0}`))
+	if err != nil {
+		t.Fatalf("unexpected visible search error: %v", err)
+	}
+	if !visible.Success {
+		t.Fatalf("expected visible search success, got: %s", visible.Content)
+	}
+	if !strings.Contains(visible.Content, "visible.md") {
+		t.Fatalf("expected visible.md in results, got:\n%s", visible.Content)
+	}
+
+	for _, raw := range []string{
+		`{"pattern":"token-hidden","context_lines":0}`,
+		`{"pattern":"token-hidden","path":".brain","context_lines":0}`,
+		`{"pattern":"token-hidden","file_glob":"*","context_lines":0}`,
+		`{"pattern":"token-hidden","file_glob":"*","path":".","context_lines":0}`,
+	} {
+		hidden, err := SearchText{}.Execute(context.Background(), dir, json.RawMessage(raw))
+		if err != nil {
+			t.Fatalf("unexpected hidden search error for %s: %v", raw, err)
+		}
+		if !hidden.Success {
+			t.Fatalf("expected hidden search success=true with no matches for %s, got: %s", raw, hidden.Content)
+		}
+		if !strings.Contains(hidden.Content, "No matches found") {
+			t.Fatalf("expected hidden-state token to be excluded from results for %s, got:\n%s", raw, hidden.Content)
+		}
+		if strings.Contains(hidden.Content, ".brain") || strings.Contains(hidden.Content, "workspace.json") {
+			t.Fatalf("did not expect hidden-state paths in results for %s, got:\n%s", raw, hidden.Content)
+		}
+	}
+}
+
 func TestSearchTextRegex(t *testing.T) {
 	requireRipgrep(t)
 	dir := t.TempDir()

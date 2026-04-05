@@ -2419,3 +2419,12 @@ func TestRunTurnNoToolDefinitions(t *testing.T) {
 		t.Fatalf("request has %d tools, want 0 (no tool definitions configured)", len(router.requests[0].Tools))
 	}
 }
+
+func TestWithDefaultConfigIncludesBrainNoteRoutingGuidance(t *testing.T) {
+	cfg := withDefaultConfig(AgentLoopConfig{})
+	for _, want := range []string{"notes/...md", ".brain/notes/...md", "brain_read", "brain_search"} {
+		if !strings.Contains(cfg.BasePrompt, want) {
+			t.Fatalf("BasePrompt = %q, want substring %q", cfg.BasePrompt, want)
+		}
+	}
+}

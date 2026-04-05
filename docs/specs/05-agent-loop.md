@@ -326,7 +326,7 @@ Anthropic's prompt caching is keyed on exact prefix matching. If the first N tok
 
 ### Implementation
 
-Use Anthropic's `cache_control` markers on the system prompt blocks. The exact API for this depends on whether we're using the Messages API directly or a wrapper — but the principle is: mark the system + context + history prefix as cacheable, leave current-iteration content unmarked.
+Use Anthropic's `cache_control` markers on the configured prompt blocks. In the current implementation, `agent.cache_system_prompt`, `agent.cache_assembled_context`, and `agent.cache_conversation_history` are real per-block controls passed through `internal/agent/prompt.go`. When enabled, the corresponding base-prompt, assembled-context, and history-prefix regions get explicit `cache_control` breakpoints; current-iteration content remains unmarked.
 
 For the Codex/OpenAI provider: OpenAI has automatic prompt caching on recent models. No explicit marking needed — the prefix matching happens server-side.
 
@@ -400,7 +400,9 @@ agent:
   
   extended_thinking: true           # Enable Claude's extended thinking
   
-  # Prompt caching (Anthropic-specific)
+  # Prompt caching (Anthropic explicit cache_control markers only)
+  # Non-Anthropic providers ignore these toggles because they do not use
+  # explicit cache breakpoints in the request shape.
   cache_system_prompt: true
   cache_assembled_context: true
   cache_conversation_history: true

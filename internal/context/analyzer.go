@@ -300,6 +300,9 @@ func normalizePathToken(token string) (string, string, bool) {
 	if isUnanchoredMultiSegmentPath(candidate) {
 		return "", "unanchored_multi_segment_path", false
 	}
+	if isVaultRootedNotePath(candidate) {
+		return "", "vault_rooted_note_path", false
+	}
 	if strings.Contains(candidate, "/") {
 		return candidate, "", true
 	}
@@ -347,6 +350,14 @@ func isUnanchoredMultiSegmentPath(candidate string) bool {
 		}
 	}
 	return true
+}
+
+func isVaultRootedNotePath(candidate string) bool {
+	trimmed := strings.TrimPrefix(candidate, "./")
+	if !strings.HasSuffix(strings.ToLower(trimmed), ".md") {
+		return false
+	}
+	return strings.HasPrefix(trimmed, "notes/") || strings.HasPrefix(trimmed, ".brain/notes/")
 }
 
 func extractSymbolReferences(message string) []extraction {
