@@ -89,7 +89,7 @@ DELETE FROM sub_calls
 WHERE conversation_id = ? AND turn_number = ? AND iteration = ?;
 
 -- name: SearchConversations :many
-SELECT c.id, c.title, c.updated_at, snippet(messages_fts, 0, '<b>', '</b>', '...', 32) AS snippet
+SELECT c.id, c.title, c.updated_at, m.role, snippet(messages_fts, 0, '<b>', '</b>', '...', 32) AS snippet
 FROM messages_fts
 JOIN messages m ON m.id = messages_fts.rowid
 JOIN conversations c ON c.id = m.conversation_id

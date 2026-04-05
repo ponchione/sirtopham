@@ -801,6 +801,102 @@ func TestManagerSearchFindsInterruptedToolTombstones(t *testing.T) {
 	}
 }
 
+func TestManagerSearchHandlesUnquotedHyphenatedQueries(t *testing.T) {
+	ctx := context.Background()
+	database := newTestDB(t)
+	projectID := seedProject(t, database)
+	mgr := newTestManager(t, database)
+	mgr.HistoryManager.now = func() time.Time { return time.Unix(1700001000, 0).UTC() }
+
+	conv, err := mgr.Create(ctx, projectID, WithTitle("Hyphenated search"))
+	if err != nil {
+		t.Fatalf("Create error: %v", err)
+	}
+	if err := mgr.PersistUserMessage(ctx, conv.ID, 1, "runtime-token-1775380560910306008 should be searchable"); err != nil {
+		t.Fatalf("PersistUserMessage error: %v", err)
+	}
+
+	results, err := mgr.Search(ctx, "runtime-token-1775380560910306008")
+	if err != nil {
+		t.Fatalf("Search error: %v", err)
+	}
+	if len(results) == 0 {
+		t.Fatal("Search returned no results, want hyphenated exact token match")
+	}
+	if results[0].ID != conv.ID {
+		t.Fatalf("Search result ID = %q, want %q", results[0].ID, conv.ID)
+	}
+}
+
+func TestManagerSearchDeduplicatesConversationResults(t *testing.T) {
+	ctx := context.Background()
+	database := newTestDB(t)
+	projectID := seedProject(t, database)
+	mgr := newTestManager(t, database)
+	mgr.HistoryManager.now = func() time.Time { return time.Unix(1700001000, 0).UTC() }
+
+	conv, err := mgr.Create(ctx, projectID, WithTitle("Search dedupe"))
+	if err != nil {
+		t.Fatalf("Create error: %v", err)
+	}
+	token := "runtime-token-search-dedupe"
+	if err := mgr.PersistUserMessage(ctx, conv.ID, 1, token+" in user message"); err != nil {
+		t.Fatalf("PersistUserMessage error: %v", err)
+	}
+	if err := mgr.PersistIteration(ctx, conv.ID, 1, 1, []IterationMessage{
+		{Role: "assistant", Content: `[{"type":"text","text":"saw runtime-token-search-dedupe in assistant text"}]`},
+		{Role: "tool", Content: "tool output mentions runtime-token-search-dedupe", ToolUseID: "tool-1", ToolName: "brain_search"},
+	}); err != nil {
+		t.Fatalf("PersistIteration error: %v", err)
+	}
+
+	results, err := mgr.Search(ctx, token)
+	if err != nil {
+		t.Fatalf("Search error: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("Search returned %d results, want 1 deduplicated conversation result", len(results))
+	}
+	if results[0].ID != conv.ID {
+		t.Fatalf("Search result ID = %q, want %q", results[0].ID, conv.ID)
+	}
+}
+
+func TestManagerSearchPrefersNaturalLanguageSnippetOverToolOutput(t *testing.T) {
+	ctx := context.Background()
+	database := newTestDB(t)
+	projectID := seedProject(t, database)
+	mgr := newTestManager(t, database)
+	mgr.HistoryManager.now = func() time.Time { return time.Unix(1700001000, 0).UTC() }
+
+	conv, err := mgr.Create(ctx, projectID, WithTitle("Search snippet quality"))
+	if err != nil {
+		t.Fatalf("Create error: %v", err)
+	}
+	token := "runtime-token-snippet-quality"
+	if err := mgr.PersistUserMessage(ctx, conv.ID, 1, "Search for "+token); err != nil {
+		t.Fatalf("PersistUserMessage error: %v", err)
+	}
+	if err := mgr.PersistIteration(ctx, conv.ID, 1, 1, []IterationMessage{
+		{Role: "assistant", Content: `[{"type":"tool_use","id":"call1","name":"brain_search","input":{"query":"runtime-token-snippet-quality"}}]`},
+		{Role: "tool", Content: "Found 1 brain document for \"runtime-token-snippet-quality\":\n- notes/runtime/runtime-token-snippet-quality.md — Runtime Token Snippet Quality", ToolUseID: "call1", ToolName: "brain_search"},
+		{Role: "assistant", Content: `[{"type":"text","text":"Note path: runtime-token-snippet-quality.md. Search found the same note: yes."}]`},
+	}); err != nil {
+		t.Fatalf("PersistIteration error: %v", err)
+	}
+
+	results, err := mgr.Search(ctx, token)
+	if err != nil {
+		t.Fatalf("Search error: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("Search returned %d results, want 1 deduplicated conversation result", len(results))
+	}
+	if got := results[0].Snippet; got != "Note path: <b>runtime-token-snippet-quality</b>.md. Search found the same note: yes." {
+		t.Fatalf("Search snippet = %q, want natural-language assistant snippet", got)
+	}
+}
+
 // --- SeenFiles Integration ---
 
 func TestManagerSeenFilesIntegration(t *testing.T) {

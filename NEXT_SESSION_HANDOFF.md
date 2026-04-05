@@ -1,109 +1,259 @@
 # Next session handoff
 
-Date: 2026-04-04
+Date: 2026-04-05
 Repo: /home/gernsback/source/sirtopham
 Branch: main
-State: interrupted-tool tombstone search fix still good; brain runtime bring-up validated live over websocket. Nothing pushed.
+State: brain runtime still healthy; conversation search runtime path materially improved; longer websocket soak session completed; context-assembly hardening for slash-delimited prose false positives is now validated live end-to-end, the context inspector renders rejected path-candidate signals clearly, and sentence-capitalized prose words no longer leak into `symbol_ref`; next best slice is deciding whether semantic-query / retrieval relevance for these prompts needs tightening or whether prompt-boundary docs should be reconciled and this area parked. Nothing pushed.
 
 ## Current state
 
-Latest session focused on the next recommended runtime slice: practical brain validation.
+Latest sessions pivoted from brain bring-up to realistic runtime validation and harness-quality follow-through.
 
-### 1. Brain runtime reality-check completed
+### 1. Brain runtime remains validated live
 
-The important reality today is not the older Obsidian Local REST path.
-Current runtime wiring is:
+Current runtime wiring is still:
 - `cmd/sirtopham/serve.go` builds brain via `internal/brain/mcpclient.Connect(...)`
 - `internal/brain/mcpclient` starts an in-process MCP server backed by `internal/brain/vault`
-- live brain tools currently operate directly on the configured vault directory (`brain.vault_path`), not through an external Obsidian HTTP API
+- live brain tools operate directly on the configured vault directory (`brain.vault_path`), not through Obsidian Local REST
 
-The repo-local setup was already sufficient for validation:
-- `sirtopham.yaml` has `brain.enabled: true`
-- `brain.vault_path: .brain`
-- `.brain/` exists and contains markdown notes
+This remained healthy during later live sessions too:
+- `brain_write`
+- `brain_read`
+- `brain_search`
 
-### 2. Live brain workflow passed end-to-end
+### 2. Conversation search runtime path was improved in three focused slices
 
-Built and ran the real app, then drove a live websocket conversation with a small Go client.
-Validated all three core brain actions in the real runtime path:
-- turn 1: `brain_write` created `notes/brain-runtime-1775307331.md`
-- turn 2: `brain_read` read that note and returned `# Brain Runtime Validation`
-- turn 3: `brain_search` found the same note by its unique token and returned `notes/brain-runtime-1775307331.md`
+A realistic websocket session exposed a real REST/runtime search bug and then two search-quality problems.
 
-So the operator-useful conclusion is:
-- current brain tool registration works
-- current in-process MCP bridge works
-- current vault backend works
-- live websocket/runtime/model loop can successfully invoke `brain_write`, `brain_read`, and `brain_search`
+Completed fixes:
 
-### 3. Operator-facing config example was stale and is now corrected
+1. unquoted hyphenated token queries no longer 500
+- root cause: raw FTS5 `MATCH` on strings like `runtime-token-...` produced parser/column errors
+- fix: `internal/conversation/manager.go` now retries with a literalized FTS query when raw search fails with syntax/column-style errors
+- regression test added in `internal/conversation/manager_test.go`
 
-Updated `sirtopham.yaml.example` so the brain section no longer implies required
-`obsidian_api_url` / `obsidian_api_key` config for the current runtime path.
-It now points at the repo-local `.brain` vault and describes the in-process brain MCP backend.
+2. one conversation no longer appears many times in REST search results
+- root cause: SQL returns message-level matches and `Manager.Search()` was returning all of them
+- fix: `Manager.Search()` now deduplicates by conversation ID
+- regression test added in `internal/conversation/manager_test.go`
 
-## Files changed this session
+3. the surviving snippet is now more operator-useful
+- root cause: after dedupe, the first-ranked row was often tool-output-heavy instead of natural-language assistant/user text
+- fix: search now scores per-message snippets and prefers better assistant/user natural-language snippets over tool-output-heavy rows
+- `SearchConversations` row shape now includes `m.role`
+- files touched:
+  - `internal/conversation/manager.go`
+  - `internal/conversation/manager_test.go`
+  - `internal/db/query/conversation.sql`
+  - `internal/db/conversation.sql.go`
 
+Operator-useful result:
+- REST search for unique runtime tokens now returns one result per conversation
+- the chosen snippet is materially better than before
+
+### 3. Longer real-world websocket soak session completed
+
+Ran a longer websocket-driven soak session with a purpose-built Go client.
+
+Artifacts:
+- client: `/tmp/ws_soak_runtime.go`
+- output bundle: `/tmp/soak-token-1775384690184819403-soak.json`
+- conversation id: `019d5d2c-7e09-7d74-8b2e-475333298000`
+- title: `Comparing WebSocket and REST conversation actions`
+- note: `notes/runtime/soak-token-1775384690184819403.md`
+
+Soak coverage:
+- 7 turns
+- mixed `brain_write`, `brain_read`, `brain_search`, `file_read`, `search_text`
+- multi-turn reasoning about websocket flow, search shaping, and runtime behavior
+
+What looked healthy:
+- websocket turn loop remained stable across 7 turns
+- title generation worked
+- turn numbering/persistence stayed coherent
+- conversation search improvements held up live
+- brain tool flow remained healthy end to end
+- context assembly latency stayed reasonable in this run
+
+### 4. Most important new issue surfaced by the soak session
+
+The most valuable new finding was not another search problem.
+It was a context-assembly / retrieval heuristic issue.
+
+Observed symptom:
+- logs showed false-positive file/path interpretation from ordinary prose, for example:
+  - `context retrieval file read failed path=search/title/runtime`
+
+That came from prompt wording like:
+- `search/title/runtime helpers`
+
+Interpretation:
+- the analyzer / extractor / retrieval path was too eager to promote slash-delimited prose into explicit file candidates
+- this polluted logs, could distort retrieval/context assembly, and was likely to matter in many realistic operator prompts
+
+### 5. First context-assembly hardening slice is now complete
+
+Completed in this session:
+- `internal/context/analyzer.go` now rejects unanchored multi-segment slash-delimited prose like `search/title/runtime`
+- real repo-style explicit paths still pass, for example `internal/server/websocket.go`
+- analyzer observability now records rejected candidates as `file_ref_rejected` signals with a stable reason such as `unanchored_multi_segment_path`
+- momentum extraction was updated to match the new path-normalization signature without changing its behavior for real paths
+
+Focused tests added/updated:
+- `TestRuleBasedAnalyzerRejectsSlashDelimitedProseButKeepsRealPaths`
+
+### 6. Operator-facing signal visibility improved too
+
+Completed in this session:
+- the web context inspector signal badges now distinguish `file_ref_rejected`
+- rejected path candidates render as `rejected: <candidate>` instead of only showing the internal reason token
+- tooltip text now makes the rejection reason explicit while keeping accepted file refs readable as `file: ...`
+
+Validation:
+- `npm run build` in `web/`
+
+### 7. Live runtime proof is now complete, with one extra analyzer cleanup
+
+Completed in this session:
+- ran a fresh live websocket/context-report probe using a realistic `search/title/runtime` prompt shape
+- confirmed the resulting context report includes:
+  - accepted explicit file ref for `internal/server/websocket.go`
+  - rejected file candidate signal for `search/title/runtime`
+- confirmed the earlier runtime-only false-positive symptom is gone in the actual turn path
+- the live run also exposed a smaller analyzer quality issue: sentence-capitalized prose words like `Investigate` / `Treat` were being inferred as `symbol_ref`
+- fixed that by tightening symbol detection so ordinary sentence capitalization no longer counts as a code identifier while real PascalCase/camelCase identifiers still do
+
+Focused tests added/updated:
+- `TestRuleBasedAnalyzerIgnoresSentenceCapitalizationAsSymbolReference`
+
+Interpretation now:
+- the original false-positive path class has a deterministic analyzer-level guard and live runtime proof
+- the main operator-facing inspector is clearer about accepted vs rejected explicit path candidates
+- the remaining question in this area is no longer correctness of the explicit-file path guard; it is whether semantic query / retrieval relevance for these prompts is good enough to stop here
+
+## Files changed in these sessions
+
+Code:
+- `internal/context/analyzer.go`
+- `internal/context/analyzer_test.go`
+- `internal/context/momentum.go`
+- `internal/context/types.go`
+- `internal/conversation/manager.go`
+- `internal/conversation/manager_test.go`
+- `internal/db/query/conversation.sql`
+- `internal/db/conversation.sql.go`
+- `web/src/components/inspector/context-inspector.tsx`
 - `NEXT_SESSION_HANDOFF.md`
-- `sirtopham.yaml.example`
-- `.brain/notes/brain-runtime-1775307331.md`
+
+Runtime validation helpers / artifacts:
+- `/tmp/ws_context_probe.go`
+- `/tmp/ws_context_probe_output.json`
+
+Runtime artifacts / local notes:
+- `.brain/notes/runtime/runtime-token-1775380560910306008.md`
+- `.brain/notes/runtime/runtime-token-1775381019630534665.md`
+- `.brain/notes/runtime/soak-token-1775384690184819403.md`
+
+Transient local helpers (not repo files):
+- `/tmp/ws_realistic_runtime.go`
+- `/tmp/ws_soak_runtime.go`
+- `/tmp/soak-token-1775384690184819403-soak.json`
 
 ## Tests / validation run
 
-Focused brain tests:
-- `go test -tags sqlite_fts5 ./internal/tool -run 'TestBrain' -count=1`
-- `go test -tags sqlite_fts5 ./internal/brain/... -count=1`
+Targeted regression tests:
+- `go test -tags sqlite_fts5 ./internal/context -run TestRuleBasedAnalyzerRejectsSlashDelimitedProseButKeepsRealPaths -count=1`
+- `go test -tags sqlite_fts5 ./internal/context -run TestRuleBasedAnalyzerIgnoresSentenceCapitalizationAsSymbolReference -count=1`
+- `go test -tags sqlite_fts5 ./internal/conversation -run TestManagerSearchHandlesUnquotedHyphenatedQueries -count=1`
+- `go test -tags sqlite_fts5 ./internal/conversation -run TestManagerSearchDeduplicatesConversationResults -count=1`
+- `go test -tags sqlite_fts5 ./internal/conversation -run TestManagerSearchPrefersNaturalLanguageSnippetOverToolOutput -count=1`
 
-Broader validation:
+Broader targeted suites:
+- `go test -tags sqlite_fts5 ./internal/context -count=1`
+- `go test -tags sqlite_fts5 ./internal/conversation -run 'TestManagerSearch|TestSearchSnippet' -count=1`
+- `go test -tags sqlite_fts5 ./internal/server -run TestSearchConversations -count=1`
+
+Build validation:
+- `npm run build` in `web/`
 - `make build`
-- `make test`
 
-Live validation:
+Live runtime validation:
 - `./bin/sirtopham serve --config /home/gernsback/source/sirtopham/sirtopham.yaml`
-- `go run -tags sqlite_fts5 /tmp/ws_brain_validate.go`
+- `go run -tags sqlite_fts5 /tmp/ws_context_probe.go`
+- `go run -tags sqlite_fts5 /tmp/ws_realistic_runtime.go`
+- `go run -tags sqlite_fts5 /tmp/ws_soak_runtime.go`
+- direct REST checks against `/api/conversations/search`
 
 Notes:
-- plain `go run -tags sqlite_fts5 ./cmd/sirtopham serve ...` still hit the expected LanceDB linker/runtime path issue outside the Makefile/build wrapper path
-- built binary path worked fine for live validation
+- `go run` of the temporary websocket clients initially failed because `nhooyr.io/websocket` default read limits were too small for larger event payloads; the soak helper needed `conn.SetReadLimit(2 << 20)` to avoid `failed to read: read limited at 32769 bytes`
+- plain `go run -tags sqlite_fts5 ./cmd/sirtopham serve ...` is still not the preferred bring-up path because the built binary / Makefile wrapper remains the reliable operational path here
 
 ## Important current reality
 
-Two previously uncertain runtime surfaces now look materially healthy:
-- interrupted tool tombstone search/history behavior
-- brain tool bring-up on the current repo-local MCP/vault path
+What now looks materially healthy:
+- interrupted-tool tombstone search/history behavior
+- brain tool bring-up on the repo-local MCP/vault path
+- multi-turn websocket runtime under a moderate realistic session
+- REST conversation search for realistic unique tokens
 
-The most important stale assumption that should now be considered false is:
-- current same-day brain usage does NOT require Obsidian Local REST API bring-up just to use the shipped brain tools in this repo state
+What now looks like the highest-value unresolved runtime issue:
+- not the explicit-path false positive anymore; that path is now fixed and validated live
+- the remaining decision in this area is whether the semantic query / retrieval side still returns too many irrelevant chunks for these prompts and deserves another slice, or whether that is good enough for now and docs/spec cleanup is higher value
 
-That older Obsidian-oriented documentation/spec language may still exist in deeper docs and specs, but it is no longer the best guide for actual runtime behavior.
+## Prompt / context architecture reality to remember
+
+Context assembly is not the static system prompt.
+Current prompt structure is:
+- Block 1: static/thin base prompt (`BasePrompt` in `internal/agent/prompt.go`)
+- Block 2: assembled context from `internal/context/assembler.go`
+- Block 3: conversation history
+
+So the next context-assembly slice should primarily target:
+- analyzer / extractor / retrieval heuristics
+not a rewrite of the static base prompt.
+
+But the next plan should still explicitly document prompt-boundary ownership:
+- what belongs in the stable base prompt
+- what belongs in dynamic assembled context
+- what junk/false positives must never be promoted into Block 2
+
+Also note:
+- config has `agent.cache_system_prompt`, `agent.cache_assembled_context`, and `agent.cache_conversation_history`
+- from current inspection, actual cache-marker behavior is still mostly provider-driven in `internal/agent/prompt.go` rather than obviously honoring those config toggles end to end
+- this is worth clarifying while working in the context/prompt boundary area, but it is not the primary next fix
 
 ## Recommended next session plan
 
-Best next session should pivot away from brain bring-up and toward another practical runtime slice.
+Best next session should decide whether to keep polishing context retrieval quality or park this area.
 
 Recommended plan:
-1. longer real-world multi-turn tool-rich session
-- drive a denser websocket conversation that mixes file/code tools and brain tools
-- watch for transcript coherence, searchability, title generation, and context assembly quality under heavier iteration count
-- prefer one realistic code-investigation task rather than isolated micro-prompts
+1. inspect semantic query / retrieval relevance for the same prompt family
+- use the saved `/tmp/ws_context_probe_output.json` evidence as the starting point
+- decide whether the unrelated RAG hits in that report are actually harmful enough to justify a slice
+- if yes, inspect the query extractor / retrieval ranking path and add a focused failing test first
+
+2. otherwise do prompt-boundary/docs cleanup and stop
+- keep static base prompt vs assembled context responsibilities explicit
+- verify whether the cache-related config flags are real active knobs or mostly stale / partially wired configuration
+- document the now-real analyzer contract: prose-like slash tokens can yield `file_ref_rejected`, while real repo paths still become `file_ref`
 
 Why this is the best next slice:
-- cancellation/search already passed
-- basic multi-turn conversation flow already passed
-- brain write/read/search now passed live too
-- the next highest-value risk is how the system behaves during a more realistic longer operator session, not another isolated subsystem check
+- the explicit-path false-positive bug itself is no longer the blocker
+- the remaining work in this area is now about deciding whether marginal retrieval quality issues deserve code churn
+- if not, this is a good point to document reality and switch to a higher-value runtime blocker elsewhere
 
 Fallback if that is not practical that day:
-2. docs/spec reconciliation for brain runtime reality
-- sweep obvious operator-facing docs that still promise Obsidian Local REST API as the active path
-- update them to reflect the current in-process MCP + vault implementation
+3. simply park this area with docs/handoff updates and move to the next concrete runtime blocker outside context assembly
 
 ## Useful commands
 
-- `make test`
 - `make build`
+- `make test`
 - `./bin/sirtopham serve --config /home/gernsback/source/sirtopham/sirtopham.yaml`
-- `go run -tags sqlite_fts5 /tmp/ws_brain_validate.go`
+- `go test -tags sqlite_fts5 ./internal/conversation -run 'TestManagerSearch|TestSearchSnippet' -count=1`
+- `go run -tags sqlite_fts5 /tmp/ws_realistic_runtime.go`
+- `go run -tags sqlite_fts5 /tmp/ws_soak_runtime.go`
+- `curl -sS 'http://localhost:8090/api/conversations/search?q=<token>'`
 
 ## Operator preferences to remember
 
@@ -113,4 +263,4 @@ Fallback if that is not practical that day:
 
 ## Bottom line
 
-The next recommended runtime slice is now done: current brain tooling works live in the real app. The actual runtime path is an in-process MCP bridge over the configured vault directory, and a real websocket conversation successfully completed `brain_write`, `brain_read`, and `brain_search`. The next session should stop treating brain bring-up as a blocker and move to a longer, more realistic operator workflow or a cleanup pass on stale Obsidian-oriented docs/specs.
+The practical brain/runtime validation slice is no longer the blocker. Search runtime behavior is now materially better after three focused fixes, and a longer real-world websocket soak session completed successfully. The next highest-value issue is context-assembly hardening: specifically, stopping ordinary prose from being misclassified as explicit file/path context candidates while keeping real path recall intact.
