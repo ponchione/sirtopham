@@ -469,7 +469,7 @@ func (q *Queries) ReconstructConversationHistory(ctx context.Context, conversati
 }
 
 const searchConversations = `-- name: SearchConversations :many
-SELECT c.id, c.title, c.updated_at, snippet(messages_fts, 0, '<b>', '</b>', '...', 32) AS snippet
+SELECT c.id, c.title, c.updated_at, m.role, snippet(messages_fts, 0, '<b>', '</b>', '...', 32) AS snippet
 FROM messages_fts
 JOIN messages m ON m.id = messages_fts.rowid
 JOIN conversations c ON c.id = m.conversation_id
@@ -482,6 +482,7 @@ type SearchConversationsRow struct {
 	ID        string         `json:"id"`
 	Title     sql.NullString `json:"title"`
 	UpdatedAt string         `json:"updated_at"`
+	Role      string         `json:"role"`
 	Snippet   string         `json:"snippet"`
 }
 
@@ -498,6 +499,7 @@ func (q *Queries) SearchConversations(ctx context.Context, content string) ([]Se
 			&i.ID,
 			&i.Title,
 			&i.UpdatedAt,
+			&i.Role,
 			&i.Snippet,
 		); err != nil {
 			return nil, err

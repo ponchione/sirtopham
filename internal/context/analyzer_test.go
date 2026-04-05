@@ -192,6 +192,34 @@ func TestRuleBasedAnalyzerIgnoresGenericSlashPairs(t *testing.T) {
 	}
 }
 
+func TestRuleBasedAnalyzerRejectsSlashDelimitedProseButKeepsRealPaths(t *testing.T) {
+	analyzer := RuleBasedAnalyzer{}
+
+	needs := analyzer.AnalyzeTurn("Investigate search/title/runtime helpers and compare with internal/server/websocket.go", nil)
+
+	if slices.Contains(needs.ExplicitFiles, "search/title/runtime") {
+		t.Fatalf("ExplicitFiles = %v, unexpected prose path candidate", needs.ExplicitFiles)
+	}
+	requireStringsContain(t, needs.ExplicitFiles, "internal/server/websocket.go")
+	requireSignal(t, needs.Signals, "file_ref_rejected", "search/title/runtime", "unanchored_multi_segment_path")
+	requireSignal(t, needs.Signals, "file_ref", "internal/server/websocket.go", "internal/server/websocket.go")
+}
+
+func TestRuleBasedAnalyzerIgnoresSentenceCapitalizationAsSymbolReference(t *testing.T) {
+	analyzer := RuleBasedAnalyzer{}
+
+	needs := analyzer.AnalyzeTurn("Investigate search/title/runtime helpers and compare with internal/server/websocket.go. Treat the slash phrase as prose.", nil)
+
+	if slices.Contains(needs.ExplicitSymbols, "Investigate") || slices.Contains(needs.ExplicitSymbols, "Treat") {
+		t.Fatalf("ExplicitSymbols = %v, unexpected sentence-capitalized words", needs.ExplicitSymbols)
+	}
+	for _, signal := range needs.Signals {
+		if signal.Type == "symbol_ref" && (signal.Value == "Investigate" || signal.Value == "Treat") {
+			t.Fatalf("unexpected symbol_ref signal: %+v", signal)
+		}
+	}
+}
+
 func historyMessage(content string) db.Message {
 	return db.Message{
 		Content: sql.NullString{String: content, Valid: true},

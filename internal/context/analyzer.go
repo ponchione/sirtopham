@@ -119,6 +119,27 @@ var genericPathSegments = map[string]struct{}{
 	"types":     {},
 }
 
+var pathAnchorSegments = map[string]struct{}{
+	"api":      {},
+	"app":      {},
+	"bin":      {},
+	"cmd":      {},
+	"config":   {},
+	"configs":  {},
+	"docs":     {},
+	"examples": {},
+	"internal": {},
+	"lib":      {},
+	"pkg":      {},
+	"scripts":  {},
+	"src":      {},
+	"test":     {},
+	"tests":    {},
+	"testdata": {},
+	"tools":    {},
+	"web":      {},
+}
+
 var modificationVerbs = []string{
 	"fix",
 	"refactor",
@@ -198,10 +219,14 @@ type RuleBasedAnalyzer struct{}
 func (RuleBasedAnalyzer) AnalyzeTurn(message string, recentHistory []db.Message) *ContextNeeds {
 	needs := &ContextNeeds{}
 
-	for _, ref := range extractFileReferences(message) {
+	acceptedFileRefs, rejectedFileRefs := extractFileReferences(message)
+	for _, ref := range acceptedFileRefs {
 		if appendUnique(&needs.ExplicitFiles, ref.value) {
 			needs.Signals = append(needs.Signals, Signal{Type: "file_ref", Source: ref.source, Value: ref.value})
 		}
+	}
+	for _, ref := range rejectedFileRefs {
+		needs.Signals = append(needs.Signals, Signal{Type: "file_ref_rejected", Source: ref.source, Value: ref.value})
 	}
 
 	for _, ref := range extractSymbolReferences(message) {
@@ -225,9 +250,11 @@ type extraction struct {
 	value  string
 }
 
-func extractFileReferences(message string) []extraction {
+func extractFileReferences(message string) ([]extraction, []extraction) {
 	var refs []extraction
+	var rejected []extraction
 	seen := make(map[string]struct{})
+	rejectedSeen := make(map[string]struct{})
 
 	for _, token := range strings.Fields(message) {
 		source := strings.Trim(token, "`\"'()[]{}.,!?;:")
@@ -235,8 +262,15 @@ func extractFileReferences(message string) []extraction {
 			continue
 		}
 
-		value, ok := normalizePathToken(source)
+		value, rejectionReason, ok := normalizePathToken(source)
 		if !ok {
+			if rejectionReason != "" {
+				rejectionKey := source + "|" + rejectionReason
+				if _, exists := rejectedSeen[rejectionKey]; !exists {
+					rejectedSeen[rejectionKey] = struct{}{}
+					rejected = append(rejected, extraction{source: source, value: rejectionReason})
+				}
+			}
 			continue
 		}
 		if _, exists := seen[value]; exists {
@@ -246,30 +280,33 @@ func extractFileReferences(message string) []extraction {
 		refs = append(refs, extraction{source: source, value: value})
 	}
 
-	return refs
+	return refs, rejected
 }
 
-func normalizePathToken(token string) (string, bool) {
+func normalizePathToken(token string) (string, string, bool) {
 	candidate := strings.TrimSpace(token)
 	candidate = strings.TrimSuffix(candidate, "/")
 	candidate = strings.TrimPrefix(candidate, "../")
 	candidate = strings.TrimPrefix(candidate, "../")
 	if candidate == "" {
-		return "", false
+		return "", "", false
 	}
 	if !pathTokenPattern.MatchString(candidate) {
-		return "", false
+		return "", "", false
 	}
 	if isGenericSlashPair(candidate) {
-		return "", false
+		return "", "generic_slash_pair", false
+	}
+	if isUnanchoredMultiSegmentPath(candidate) {
+		return "", "unanchored_multi_segment_path", false
 	}
 	if strings.Contains(candidate, "/") {
-		return candidate, true
+		return candidate, "", true
 	}
 	if fileTokenPattern.MatchString(candidate) {
-		return candidate, true
+		return candidate, "", true
 	}
-	return "", false
+	return "", "", false
 }
 
 func isGenericSlashPair(candidate string) bool {
@@ -283,6 +320,29 @@ func isGenericSlashPair(candidate string) bool {
 	for _, part := range parts {
 		part = strings.ToLower(strings.TrimSpace(part))
 		if _, ok := genericPathSegments[part]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func isUnanchoredMultiSegmentPath(candidate string) bool {
+	if strings.Contains(candidate, ".") || strings.HasPrefix(candidate, "./") {
+		return false
+	}
+	parts := strings.Split(candidate, "/")
+	if len(parts) < 3 {
+		return false
+	}
+	for _, part := range parts {
+		lower := strings.ToLower(strings.TrimSpace(part))
+		if lower == "" {
+			return true
+		}
+		if _, ok := pathAnchorSegments[lower]; ok {
+			return false
+		}
+		if strings.ContainsAny(lower, "_-0123456789") {
 			return false
 		}
 	}
@@ -338,9 +398,11 @@ func looksLikeCodeIdentifier(token string) bool {
 	}
 	var hasUpper bool
 	var hasLower bool
+	upperCount := 0
 	for _, r := range token {
 		if unicode.IsUpper(r) {
 			hasUpper = true
+			upperCount++
 		}
 		if unicode.IsLower(r) {
 			hasLower = true
@@ -352,7 +414,10 @@ func looksLikeCodeIdentifier(token string) bool {
 	if unicode.IsLower(rune(token[0])) && hasUpper {
 		return true
 	}
-	return hasUpper && hasLower
+	if !hasLower {
+		return false
+	}
+	return upperCount >= 2
 }
 
 func applyModificationIntent(message string, needs *ContextNeeds) {
@@ -478,7 +543,8 @@ func extractMomentumFiles(recentHistory []db.Message) []string {
 		if !message.Content.Valid {
 			continue
 		}
-		for _, ref := range extractFileReferences(message.Content.String) {
+		acceptedRefs, _ := extractFileReferences(message.Content.String)
+		for _, ref := range acceptedRefs {
 			appendUnique(&files, ref.value)
 		}
 	}

@@ -298,24 +298,102 @@ func (m *Manager) Search(ctx context.Context, query string) ([]SearchResult, err
 	}
 
 	rows, err := m.queries.SearchConversations(ctx, query)
+	if err != nil && shouldRetryLiteralSearch(err, query) {
+		rows, err = m.queries.SearchConversations(ctx, buildLiteralFTSQuery(query))
+	}
 	if err != nil {
 		return nil, fmt.Errorf("conversation manager: search: %w", err)
 	}
 
-	results := make([]SearchResult, 0, len(rows))
+	type scoredSearchResult struct {
+		result SearchResult
+		score  int
+	}
+
+	orderedIDs := make([]string, 0, len(rows))
+	bestByConversationID := make(map[string]scoredSearchResult, len(rows))
 	for _, row := range rows {
 		sr := SearchResult{
 			ID:        row.ID,
 			UpdatedAt: row.UpdatedAt,
-			Snippet:   row.Snippet,
+			Snippet:   sanitizeSearchSnippet(row.Snippet),
 		}
 		if row.Title.Valid {
 			sr.Title = &row.Title.String
 		}
-		sr.Snippet = sanitizeSearchSnippet(sr.Snippet)
-		results = append(results, sr)
+		scored := scoredSearchResult{result: sr, score: searchSnippetQuality(row.Role, sr.Snippet)}
+		current, exists := bestByConversationID[row.ID]
+		if !exists {
+			orderedIDs = append(orderedIDs, row.ID)
+			bestByConversationID[row.ID] = scored
+			continue
+		}
+		if scored.score > current.score {
+			bestByConversationID[row.ID] = scored
+		}
+	}
+
+	results := make([]SearchResult, 0, len(bestByConversationID))
+	for _, id := range orderedIDs {
+		results = append(results, bestByConversationID[id].result)
 	}
 	return results, nil
+}
+
+func searchSnippetQuality(role string, snippet string) int {
+	trimmed := strings.TrimSpace(snippet)
+	if trimmed == "" {
+		return -100
+	}
+
+	score := 0
+	switch role {
+	case "assistant":
+		score += 30
+	case "user":
+		score += 20
+	case "tool":
+		score += 10
+	}
+
+	if strings.HasPrefix(trimmed, "[assistant tool call:") {
+		return score
+	}
+	if strings.HasPrefix(trimmed, "Found ") && strings.Contains(trimmed, "brain document") {
+		return score + 1
+	}
+	if strings.HasPrefix(trimmed, "Wrote brain document:") || strings.HasPrefix(trimmed, "Brain document:") {
+		return score + 1
+	}
+	if strings.HasPrefix(trimmed, "[") {
+		return score + 2
+	}
+	if strings.Contains(trimmed, "Found ") && strings.Contains(trimmed, "brain document") {
+		return score + 3
+	}
+	return score + 10
+}
+
+func shouldRetryLiteralSearch(err error, query string) bool {
+	if err == nil {
+		return false
+	}
+	if strings.TrimSpace(query) == "" {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "no such column:") || strings.Contains(msg, "fts5: syntax error")
+}
+
+func buildLiteralFTSQuery(query string) string {
+	parts := strings.Fields(query)
+	if len(parts) == 0 {
+		return `""`
+	}
+	for i, part := range parts {
+		parts[i] = `"` + strings.ReplaceAll(part, `"`, `""`) + `"`
+	}
+	return strings.Join(parts, " ")
 }
 
 func sanitizeSearchSnippet(snippet string) string {

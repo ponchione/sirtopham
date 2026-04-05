@@ -116,7 +116,7 @@ func filesFromAssistantToolUses(raw string) []string {
 		if err := json.Unmarshal(block.Input, &input); err != nil || input.Path == "" {
 			continue
 		}
-		if normalized, ok := normalizePathToken(input.Path); ok {
+		if normalized, _, ok := normalizePathToken(input.Path); ok {
 			appendUnique(&files, normalized)
 			continue
 		}

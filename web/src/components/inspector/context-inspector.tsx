@@ -234,9 +234,14 @@ function SignalsList({ signals }: { signals: ContextSignal[] }) {
 
   const typeColors: Record<string, string> = {
     file_ref: "bg-primary/20 text-primary text-glow-cyan",
+    file_ref_rejected: "bg-destructive/15 text-destructive",
     symbol_ref: "bg-[#b388ff]/20 text-[#b388ff]",
-    intent_verb: "bg-accent/20 text-accent text-glow-green",
-    momentum: "bg-[#ffab00]/20 text-[#ffab00]",
+    modification_intent: "bg-accent/20 text-accent text-glow-green",
+    creation_intent: "bg-accent/20 text-accent text-glow-green",
+    continuation: "bg-[#ffab00]/20 text-[#ffab00]",
+    git_context: "bg-[#ffab00]/20 text-[#ffab00]",
+    question_intent: "bg-[#ffab00]/20 text-[#ffab00]",
+    debugging_hints: "bg-[#ffab00]/20 text-[#ffab00]",
   };
 
   return (
@@ -245,13 +250,33 @@ function SignalsList({ signals }: { signals: ContextSignal[] }) {
         <span
           key={i}
           className={`px-1.5 py-0.5 text-[10px] font-medium ${typeColors[s.type] ?? "bg-muted text-muted-foreground"}`}
-          title={`${s.type}: ${s.value}${s.source ? ` (${s.source})` : ""}`}
+          title={signalTitle(s)}
         >
-          {s.value}
+          {signalLabel(s)}
         </span>
       ))}
     </div>
   );
+}
+
+function signalLabel(signal: ContextSignal): string {
+  switch (signal.type) {
+    case "file_ref":
+      return `file: ${signal.value}`;
+    case "file_ref_rejected":
+      return `rejected: ${signal.source ?? signal.value}`;
+    case "symbol_ref":
+      return `symbol: ${signal.value}`;
+    default:
+      return signal.value;
+  }
+}
+
+function signalTitle(signal: ContextSignal): string {
+  if (signal.type === "file_ref_rejected") {
+    return `rejected explicit file candidate: ${signal.source ?? "unknown"} (${signal.value})`;
+  }
+  return `${signal.type}: ${signal.value}${signal.source ? ` (${signal.source})` : ""}`;
 }
 
 function QueriesList({ queries }: { queries: string[] }) {

@@ -4,9 +4,9 @@ import "github.com/ponchione/sirtopham/internal/codeintel"
 
 // Signal records one analyzer extraction decision for observability.
 //
-// Common Type values in v0.1 are: "file_ref", "symbol_ref",
-// "modification_intent", "creation_intent", "git_context", and
-// "continuation".
+// Common Type values in v0.1 are: "file_ref", "file_ref_rejected",
+// "symbol_ref", "modification_intent", "creation_intent",
+// "git_context", and "continuation".
 type Signal struct {
 	Type   string `json:"type"`
 	Source string `json:"source"`
