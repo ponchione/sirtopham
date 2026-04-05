@@ -130,6 +130,9 @@ export interface AppConfig {
     extended_thinking: boolean;
     tool_output_max_tokens: number;
     tool_result_store_root?: string;
+    cache_system_prompt: boolean;
+    cache_assembled_context: boolean;
+    cache_conversation_history: boolean;
   };
   providers: Array<{
     name: string;

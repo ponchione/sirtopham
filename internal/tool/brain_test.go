@@ -9,6 +9,7 @@ import (
 
 	"github.com/ponchione/sirtopham/internal/brain"
 	"github.com/ponchione/sirtopham/internal/config"
+	"github.com/ponchione/sirtopham/internal/provider"
 )
 
 // ── helpers ──────────────────────────────────────────────────────────
@@ -238,6 +239,37 @@ func TestBrainSearchNoResults(t *testing.T) {
 	}
 	if !strings.Contains(result.Content, "No brain documents found") {
 		t.Fatalf("content = %q, want 'No brain documents found'", result.Content)
+	}
+}
+
+func TestBrainToolDefinitionsSteerVaultNotePathsToBrainTools(t *testing.T) {
+	reg := NewRegistry()
+	RegisterBrainTools(reg, newFakeBackend(map[string]string{}), brainConfig(true))
+
+	defs := reg.ToolDefinitions()
+	byName := make(map[string]provider.ToolDefinition, len(defs))
+	for _, def := range defs {
+		byName[def.Name] = def
+	}
+
+	brainRead, ok := byName["brain_read"]
+	if !ok {
+		t.Fatal("brain_read definition missing")
+	}
+	for _, want := range []string{"notes/...md", "file_read", "vault-relative"} {
+		if !strings.Contains(brainRead.Description, want) {
+			t.Fatalf("brain_read description = %q, want substring %q", brainRead.Description, want)
+		}
+	}
+
+	brainSearch, ok := byName["brain_search"]
+	if !ok {
+		t.Fatal("brain_search definition missing")
+	}
+	for _, want := range []string{"notes/...md", "search_text", "brain_read"} {
+		if !strings.Contains(brainSearch.Description, want) {
+			t.Fatalf("brain_search description = %q, want substring %q", brainSearch.Description, want)
+		}
 	}
 }
 

@@ -73,6 +73,8 @@ type IndexConfig struct {
 	MaxTotalFileSizeBytes int      `yaml:"max_total_file_size_bytes"`
 }
 
+var requiredIndexExcludePatterns = []string{"**/.git/**", "**/.sirtopham/**", "**/.brain/**", "**/node_modules/**", "**/vendor/**"}
+
 // Embedding configures the local embedding service used for semantic search.
 type Embedding struct {
 	BaseURL        string `yaml:"base_url"`
@@ -407,8 +409,26 @@ func (c *Config) normalize() {
 		c.Server.Port = defaultServerPort
 	}
 
+	c.Index.Exclude = appendMissingStrings(c.Index.Exclude, requiredIndexExcludePatterns...)
+
 	c.ServerHost = c.Server.Host
 	c.ServerPort = c.Server.Port
+}
+
+func appendMissingStrings(existing []string, values ...string) []string {
+	seen := make(map[string]struct{}, len(existing))
+	out := append([]string(nil), existing...)
+	for _, value := range out {
+		seen[value] = struct{}{}
+	}
+	for _, value := range values {
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		out = append(out, value)
+		seen[value] = struct{}{}
+	}
+	return out
 }
 
 func (c *Config) validateLogLevel() error {

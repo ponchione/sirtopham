@@ -401,7 +401,7 @@ func sanitizeSearchSnippet(snippet string) string {
 	if trimmed == "" {
 		return ""
 	}
-	unhighlighted := strings.ReplaceAll(strings.ReplaceAll(trimmed, "<b>", ""), "</b>", "")
+	unhighlighted := stripSearchSnippetHighlights(trimmed)
 	if strings.Contains(unhighlighted, "[failed_assistant]") {
 		return "[assistant stream failure tombstone]"
 	}
@@ -412,16 +412,16 @@ func sanitizeSearchSnippet(snippet string) string {
 		return "[interrupted tool result]"
 	}
 
-	if text, ok := sanitizeAssistantSnippetHeuristically(trimmed); ok {
-		return text
+	if text, ok := sanitizeAssistantSnippetHeuristically(unhighlighted); ok {
+		return stripSearchSnippetHighlights(text)
 	}
 	if !strings.HasPrefix(trimmed, "[") {
-		return snippet
+		return unhighlighted
 	}
 
-	blocks, err := provider.ContentBlocksFromRaw(json.RawMessage(trimmed))
+	blocks, err := provider.ContentBlocksFromRaw(json.RawMessage(unhighlighted))
 	if err != nil {
-		return snippet
+		return unhighlighted
 	}
 	texts := make([]string, 0, len(blocks))
 	toolNames := make([]string, 0, len(blocks))
@@ -434,12 +434,12 @@ func sanitizeSearchSnippet(snippet string) string {
 			if strings.Contains(block.Text, "[interrupted_assistant]") {
 				return "[assistant interrupted tombstone]"
 			}
-			if text := strings.TrimSpace(block.Text); text != "" {
+			if text := strings.TrimSpace(stripSearchSnippetHighlights(block.Text)); text != "" {
 				texts = append(texts, text)
 			}
 		case "tool_use":
-			if block.Name != "" {
-				toolNames = append(toolNames, block.Name)
+			if name := strings.TrimSpace(stripSearchSnippetHighlights(block.Name)); name != "" {
+				toolNames = append(toolNames, name)
 			}
 		}
 	}
@@ -449,7 +449,11 @@ func sanitizeSearchSnippet(snippet string) string {
 	if len(toolNames) > 0 {
 		return "[assistant tool call: " + toolNames[0] + "]"
 	}
-	return snippet
+	return unhighlighted
+}
+
+func stripSearchSnippetHighlights(text string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(text, "<b>", ""), "</b>", "")
 }
 
 func sanitizeAssistantSnippetHeuristically(trimmed string) (string, bool) {

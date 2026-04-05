@@ -4,7 +4,6 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
-	"sync"
 
 	"github.com/ponchione/sirtopham/internal/config"
 	"github.com/ponchione/sirtopham/internal/provider"
@@ -23,21 +22,21 @@ type ConfigHandler struct {
 	cfg       *config.Config
 	providers map[string]config.ProviderConfig
 	runtime   ProviderRuntimeInspector
+	defaults  *RuntimeDefaults
 	logger    *slog.Logger
-
-	// Runtime overrides (not persisted to config file).
-	mu               sync.RWMutex
-	overrideProvider string
-	overrideModel    string
 }
 
 // NewConfigHandler creates a handler and registers routes on the server.
 // runtime can be nil if the provider router is not available.
-func NewConfigHandler(s *Server, cfg *config.Config, runtime ProviderRuntimeInspector, logger *slog.Logger) *ConfigHandler {
+func NewConfigHandler(s *Server, cfg *config.Config, runtime ProviderRuntimeInspector, defaults *RuntimeDefaults, logger *slog.Logger) *ConfigHandler {
+	if defaults == nil {
+		defaults = NewRuntimeDefaults(cfg)
+	}
 	h := &ConfigHandler{
 		cfg:       cfg,
 		providers: cfg.Providers,
 		runtime:   runtime,
+		defaults:  defaults,
 		logger:    logger,
 	}
 
@@ -59,10 +58,13 @@ type configResponse struct {
 }
 
 type agentSettings struct {
-	MaxIterations       int    `json:"max_iterations"`
-	ExtendedThinking    bool   `json:"extended_thinking"`
-	ToolOutputMaxTokens int    `json:"tool_output_max_tokens"`
-	ToolResultStoreRoot string `json:"tool_result_store_root"`
+	MaxIterations            int    `json:"max_iterations"`
+	ExtendedThinking         bool   `json:"extended_thinking"`
+	ToolOutputMaxTokens      int    `json:"tool_output_max_tokens"`
+	ToolResultStoreRoot      string `json:"tool_result_store_root"`
+	CacheSystemPrompt        bool   `json:"cache_system_prompt"`
+	CacheAssembledContext    bool   `json:"cache_assembled_context"`
+	CacheConversationHistory bool   `json:"cache_conversation_history"`
 }
 
 type providerInfo struct {
@@ -77,18 +79,12 @@ type providerInfo struct {
 }
 
 func (h *ConfigHandler) handleGetConfig(w http.ResponseWriter, r *http.Request) {
-	h.mu.RLock()
-	overrideP := h.overrideProvider
-	overrideM := h.overrideModel
-	h.mu.RUnlock()
-
-	defaultProvider := h.cfg.Routing.Default.Provider
-	defaultModel := h.cfg.Routing.Default.Model
-	if overrideP != "" {
-		defaultProvider = overrideP
+	defaultProvider, defaultModel := h.defaults.Get()
+	if defaultProvider == "" {
+		defaultProvider = h.cfg.Routing.Default.Provider
 	}
-	if overrideM != "" {
-		defaultModel = overrideM
+	if defaultModel == "" {
+		defaultModel = h.cfg.Routing.Default.Model
 	}
 
 	var providers []providerInfo
@@ -120,10 +116,13 @@ func (h *ConfigHandler) handleGetConfig(w http.ResponseWriter, r *http.Request) 
 		DefaultProvider: defaultProvider,
 		DefaultModel:    defaultModel,
 		Agent: agentSettings{
-			MaxIterations:       h.cfg.Agent.MaxIterationsPerTurn,
-			ExtendedThinking:    h.cfg.Agent.ExtendedThinking,
-			ToolOutputMaxTokens: h.cfg.Agent.ToolOutputMaxTokens,
-			ToolResultStoreRoot: h.cfg.Agent.ToolResultStoreRoot,
+			MaxIterations:            h.cfg.Agent.MaxIterationsPerTurn,
+			ExtendedThinking:         h.cfg.Agent.ExtendedThinking,
+			ToolOutputMaxTokens:      h.cfg.Agent.ToolOutputMaxTokens,
+			ToolResultStoreRoot:      h.cfg.Agent.ToolResultStoreRoot,
+			CacheSystemPrompt:        h.cfg.Agent.CacheSystemPrompt,
+			CacheAssembledContext:    h.cfg.Agent.CacheAssembledContext,
+			CacheConversationHistory: h.cfg.Agent.CacheConversationHistory,
 		},
 		Providers: providers,
 	})
@@ -183,19 +182,18 @@ func (h *ConfigHandler) handlePutConfig(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	h.mu.Lock()
+	provider, model := h.defaults.Get()
 	if req.DefaultProvider != nil {
 		if _, ok := h.providers[*req.DefaultProvider]; !ok {
-			h.mu.Unlock()
 			writeError(w, http.StatusBadRequest, "unknown provider: "+*req.DefaultProvider)
 			return
 		}
-		h.overrideProvider = *req.DefaultProvider
+		provider = *req.DefaultProvider
 	}
 	if req.DefaultModel != nil {
-		h.overrideModel = *req.DefaultModel
+		model = *req.DefaultModel
 	}
-	h.mu.Unlock()
+	h.defaults.Set(provider, model)
 
 	h.handleGetConfig(w, r)
 }

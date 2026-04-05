@@ -667,8 +667,8 @@ func TestSearchSnippetSummaryForInterruptedToolResult(t *testing.T) {
 func TestSearchSnippetExtractsAssistantTextFromJSONBlocks(t *testing.T) {
 	input := `[{"type":"text","text":"I'll check <b>search_text</b>."},{"type":"tool_use","id":"tc1","name":"file_read","input":{"path":"internal/tool/search_text.go"}}]`
 	got := sanitizeSearchSnippet(input)
-	if got != "I'll check <b>search_text</b>." {
-		t.Fatalf("sanitizeSearchSnippet() = %q, want assistant text only", got)
+	if got != "I'll check search_text." {
+		t.Fatalf("sanitizeSearchSnippet() = %q, want assistant text only without FTS highlight tags", got)
 	}
 }
 
@@ -691,8 +691,8 @@ func TestSearchSnippetSanitizesTruncatedToolJSON(t *testing.T) {
 func TestSearchSnippetSanitizesTruncatedTextJSON(t *testing.T) {
 	input := `[{"type":"text","text":"internal/tool/<b>search_text</b>.go implements the search tool...`
 	got := sanitizeSearchSnippet(input)
-	if got != `internal/tool/<b>search_text</b>.go implements the search tool...` {
-		t.Fatalf("sanitizeSearchSnippet() = %q, want extracted text from truncated JSON", got)
+	if got != `internal/tool/search_text.go implements the search tool...` {
+		t.Fatalf("sanitizeSearchSnippet() = %q, want extracted text from truncated JSON without FTS highlight tags", got)
 	}
 }
 
@@ -727,8 +727,11 @@ func TestManagerSearchSanitizesNormalAssistantToolJSONSnippets(t *testing.T) {
 	if strings.Contains(results[0].Snippet, `"type":"tool_use"`) || strings.Contains(results[0].Snippet, `"input":`) {
 		t.Fatalf("Search snippet = %q, want tool JSON stripped", results[0].Snippet)
 	}
-	if results[0].Snippet != "I'll inspect <b>search_text</b>." {
-		t.Fatalf("Search snippet = %q, want assistant text only with FTS highlighting preserved", results[0].Snippet)
+	if strings.Contains(results[0].Snippet, "<b>") || strings.Contains(results[0].Snippet, "</b>") {
+		t.Fatalf("Search snippet = %q, want FTS highlight tags stripped", results[0].Snippet)
+	}
+	if results[0].Snippet != "I'll inspect search_text." {
+		t.Fatalf("Search snippet = %q, want assistant text only without FTS highlight tags", results[0].Snippet)
 	}
 }
 
@@ -892,8 +895,11 @@ func TestManagerSearchPrefersNaturalLanguageSnippetOverToolOutput(t *testing.T) 
 	if len(results) != 1 {
 		t.Fatalf("Search returned %d results, want 1 deduplicated conversation result", len(results))
 	}
-	if got := results[0].Snippet; got != "Note path: <b>runtime-token-snippet-quality</b>.md. Search found the same note: yes." {
-		t.Fatalf("Search snippet = %q, want natural-language assistant snippet", got)
+	if strings.Contains(results[0].Snippet, "<b>") || strings.Contains(results[0].Snippet, "</b>") {
+		t.Fatalf("Search snippet = %q, want FTS highlight tags stripped", results[0].Snippet)
+	}
+	if got := results[0].Snippet; got != "Note path: runtime-token-snippet-quality.md. Search found the same note: yes." {
+		t.Fatalf("Search snippet = %q, want natural-language assistant snippet without FTS highlight tags", got)
 	}
 }
 

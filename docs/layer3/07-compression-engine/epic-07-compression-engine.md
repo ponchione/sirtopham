@@ -59,7 +59,7 @@ Compression is invoked by the agent loop when the budget manager signals that hi
 ### Cache Invalidation
 
 - [ ] After compression completes, return a signal indicating that the conversation history shape has changed
-- [ ] The agent loop uses this signal to invalidate cached system prompt state (set `_cached_system_prompt = nil`)
+- [ ] The agent loop uses this signal to rebuild the next provider request so the history-prefix cache breakpoint reflects the compressed history shape
 - [ ] Cache block 1 (base prompt) and block 2 (assembled context) are unaffected — only block 3 (history prefix) is invalidated
 
 ### Tests

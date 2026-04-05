@@ -226,6 +226,9 @@ func runServe(cmd *cobra.Command, configPath string, portOverride int, hostOverr
 			EmitContextDebug:           cfg.Context.EmitContextDebug,
 			ContextConfig:              cfg.Context,
 			ToolResultStoreRoot:        cfg.Agent.ToolResultStoreRoot,
+			CacheSystemPrompt:          cfg.Agent.CacheSystemPrompt,
+			CacheAssembledContext:      cfg.Agent.CacheAssembledContext,
+			CacheConversationHistory:   cfg.Agent.CacheConversationHistory,
 			CompressHistoricalResults:  cfg.Agent.CompressHistoricalResults,
 			HistorySummarizeAfterTurns: cfg.Agent.HistorySummarizeAfterTurns,
 		},
@@ -253,10 +256,11 @@ func runServe(cmd *cobra.Command, configPath string, portOverride int, hostOverr
 	srv := server.New(serverCfg, logger)
 
 	// Register handlers.
+	runtimeDefaults := server.NewRuntimeDefaults(cfg)
 	server.NewConversationHandler(srv, convManager, projectID, logger)
-	server.NewWebSocketHandler(srv, agentLoop, convManager, cfg, logger)
+	server.NewWebSocketHandler(srv, agentLoop, convManager, cfg, runtimeDefaults, logger)
 	server.NewProjectHandler(srv, cfg, logger)
-	server.NewConfigHandler(srv, cfg, provRouter, logger)
+	server.NewConfigHandler(srv, cfg, provRouter, runtimeDefaults, logger)
 	server.NewMetricsHandler(srv, queries, logger)
 
 	// ── 12. Signal handling + graceful shutdown ────────────────────────

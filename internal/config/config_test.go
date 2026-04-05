@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -116,6 +117,33 @@ func TestLoadPartialYAMLOverridesSpecifiedFields(t *testing.T) {
 	}
 	if cfg.Brain.Enabled {
 		t.Fatal("Brain.Enabled = true, want false")
+	}
+}
+
+func TestLoadAppendsRequiredIndexExcludesWhenCustomListOmitsThem(t *testing.T) {
+	projectRoot := t.TempDir()
+	ensureDir(t, filepath.Join(projectRoot, ".brain"))
+	configPath := filepath.Join(t.TempDir(), "sirtopham.yaml")
+	content := "project_root: \"" + projectRoot + "\"\n" +
+		"index:\n" +
+		"  include:\n" +
+		"    - \"**/*.go\"\n" +
+		"  exclude:\n" +
+		"    - \"**/.git/**\"\n"
+
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+
+	for _, pattern := range []string{"**/.git/**", "**/.sirtopham/**", "**/.brain/**", "**/node_modules/**", "**/vendor/**"} {
+		if !slices.Contains(cfg.Index.Exclude, pattern) {
+			t.Fatalf("Index.Exclude = %#v, want to contain %q", cfg.Index.Exclude, pattern)
+		}
 	}
 }
 

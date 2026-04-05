@@ -85,6 +85,14 @@ type PromptConfig struct {
 	// ExtendedThinking enables extended thinking for providers that support it
 	// (currently Anthropic only).
 	ExtendedThinking bool
+
+	// Cache toggles control whether each prompt region gets an explicit cache
+	// marker when the provider supports them. Today only Anthropic honors these
+	// markers; other providers ignore them because they do not use explicit
+	// cache_control breakpoints in the request shape.
+	CacheSystemPrompt        bool
+	CacheAssembledContext    bool
+	CacheConversationHistory bool
 }
 
 // PromptBuilder constructs provider.Request objects from PromptConfig inputs.
@@ -111,8 +119,8 @@ func NewPromptBuilder(logger *slog.Logger) *PromptBuilder {
 //	Block 3 (history): conversation history prefix — grows monotonically
 //	Fresh (uncached): current turn messages
 //
-// Cache markers (cache_control: ephemeral) are placed on the last element of
-// each block for Anthropic; omitted for all other providers.
+// Cache markers (cache_control: ephemeral) are placed on the configured block
+// boundaries for Anthropic; omitted for all other providers.
 func (b *PromptBuilder) BuildPrompt(config PromptConfig) (*provider.Request, error) {
 	if strings.TrimSpace(config.BasePrompt) == "" {
 		return nil, fmt.Errorf("prompt builder: base prompt is required")
@@ -163,8 +171,8 @@ func (b *PromptBuilder) BuildPrompt(config PromptConfig) (*provider.Request, err
 
 // buildSystemBlocks constructs the system-level content blocks.
 //
-// Block 1: base prompt text. Cache marker on this block if no context follows.
-// Block 2: assembled context text (if non-empty). Cache marker on this block.
+// Block 1: base prompt text.
+// Block 2: assembled context text (if non-empty).
 func (b *PromptBuilder) buildSystemBlocks(config PromptConfig, wantCache bool) []provider.SystemBlock {
 	hasContext := config.ContextPackage != nil && strings.TrimSpace(config.ContextPackage.Content) != ""
 
@@ -172,8 +180,7 @@ func (b *PromptBuilder) buildSystemBlocks(config PromptConfig, wantCache bool) [
 
 	// Block 1: base system prompt.
 	baseBlock := provider.SystemBlock{Text: config.BasePrompt}
-	if wantCache && !hasContext {
-		// No block 2 follows, so block 1 gets the first cache breakpoint.
+	if wantCache && config.CacheSystemPrompt {
 		baseBlock.CacheControl = ephemeralCacheControl()
 	}
 	blocks = append(blocks, baseBlock)
@@ -181,7 +188,7 @@ func (b *PromptBuilder) buildSystemBlocks(config PromptConfig, wantCache bool) [
 	// Block 2: assembled context (optional).
 	if hasContext {
 		contextBlock := provider.SystemBlock{Text: config.ContextPackage.Content}
-		if wantCache {
+		if wantCache && config.CacheAssembledContext {
 			contextBlock.CacheControl = ephemeralCacheControl()
 		}
 		blocks = append(blocks, contextBlock)
@@ -216,10 +223,9 @@ func (b *PromptBuilder) buildMessages(config PromptConfig, wantCache bool) []pro
 		messages = append(messages, dbMessageToProviderMessage(dbMsg))
 	}
 
-	// Place cache marker on the last history message (block 3 breakpoint).
-	// For Anthropic, this enables prompt caching of the conversation prefix
-	// so that only current-turn messages are reprocessed on each LLM call.
-	if wantCache && historyLen > 0 {
+	// Place a cache marker on the last history message when the provider supports
+	// explicit breakpoints and the history-prefix cache toggle is enabled.
+	if wantCache && config.CacheConversationHistory && historyLen > 0 {
 		messages[historyLen-1].CacheControl = ephemeralCacheControl()
 	}
 

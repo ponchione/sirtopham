@@ -193,6 +193,16 @@ func explicitEntityExclusions(needs *ContextNeeds) map[string]struct{} {
 	for _, value := range needs.ExplicitSymbols {
 		exclusions[strings.ToLower(value)] = struct{}{}
 	}
+	for _, signal := range needs.Signals {
+		if signal.Type != "file_ref_rejected" {
+			continue
+		}
+		source := strings.TrimSpace(strings.ToLower(signal.Source))
+		if source == "" {
+			continue
+		}
+		exclusions[source] = struct{}{}
+	}
 	return exclusions
 }
 

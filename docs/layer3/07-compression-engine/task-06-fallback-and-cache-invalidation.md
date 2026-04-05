@@ -16,6 +16,6 @@ Implement the fallback path when auxiliary model summarization fails and the cac
 - [ ] The conversation continues with reduced context but does not crash or return an error to the user
 - [ ] Summarization failure logged with structured logging: provider name, model name, error message, number of messages that would have been summarized
 - [ ] **Cache invalidation:** After compression completes (success or fallback), returns a signal indicating conversation history shape has changed
-- [ ] The agent loop uses this signal to invalidate cached system prompt state (set `_cached_system_prompt = nil`)
+- [ ] The agent loop uses this signal to rebuild the next provider request so the history-prefix cache breakpoint reflects the compressed history shape
 - [ ] Cache block 1 (base prompt) and block 2 (assembled context) are unaffected — only block 3 (history prefix) is invalidated
 - [ ] Package compiles with no errors

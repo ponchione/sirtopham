@@ -1,8 +1,10 @@
 package server_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"net/http"
 	"sync"
 	"testing"
 	"time"
@@ -75,7 +77,7 @@ func setupWSTest(t *testing.T, agentMock *mockAgentService) (string, *mockConver
 		"codex": {Type: "codex", ContextLength: 200000},
 		"local": {Type: "openai-compatible", ContextLength: 32768},
 	}}
-	server.NewWebSocketHandler(srv, agentMock, convMock, cfg, newTestLogger())
+	server.NewWebSocketHandler(srv, agentMock, convMock, cfg, nil, newTestLogger())
 	_, base := startServer(t, srv)
 	return base, convMock
 }
@@ -273,7 +275,7 @@ func TestWebSocketUsesRoutingDefaultProvider(t *testing.T) {
 			"codex":     {Type: "codex", ContextLength: 200000},
 		},
 	}
-	server.NewWebSocketHandler(srv, agentMock, convMock, cfg, newTestLogger())
+	server.NewWebSocketHandler(srv, agentMock, convMock, cfg, nil, newTestLogger())
 	_, base := startServer(t, srv)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -314,6 +316,88 @@ func TestWebSocketUsesRoutingDefaultProvider(t *testing.T) {
 	conn.Close(websocket.StatusNormalClosure, "test done")
 }
 
+func TestWebSocketUsesUpdatedRuntimeDefaultsFromConfigAPI(t *testing.T) {
+	turnStarted := make(chan agent.RunTurnRequest, 1)
+	agentMock := &mockAgentService{
+		runTurnFn: func(ctx context.Context, req agent.RunTurnRequest) (*agent.TurnResult, error) {
+			turnStarted <- req
+			return &agent.TurnResult{}, nil
+		},
+	}
+	convMock := &mockConversationService{}
+	srv := server.New(server.Config{Host: "127.0.0.1", Port: 0, DevMode: true}, newTestLogger())
+	cfg := &config.Config{
+		ProjectRoot: "test-project",
+		Routing: config.RoutingConfig{Default: config.RouteConfig{Provider: "codex", Model: "old-default-model"}},
+		Providers: map[string]config.ProviderConfig{
+			"codex": {Type: "codex", ContextLength: 200000},
+			"local": {Type: "openai-compatible", ContextLength: 32768},
+		},
+	}
+	defaults := server.NewRuntimeDefaults(cfg)
+	server.NewConfigHandler(srv, cfg, nil, defaults, newTestLogger())
+	server.NewWebSocketHandler(srv, agentMock, convMock, cfg, defaults, newTestLogger())
+	_, base := startServer(t, srv)
+
+	updateBody := []byte(`{"default_provider":"local","default_model":"new-runtime-model"}`)
+	resp, err := http.Post(base+"/api/config", "application/json", bytes.NewReader(updateBody))
+	if err != nil {
+		t.Fatalf("update config request failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		// ignore; wrong method safety check for future accidental route changes
+	}
+	req, err := http.NewRequest(http.MethodPut, base+"/api/config", bytes.NewReader(updateBody))
+	if err != nil {
+		t.Fatalf("new PUT request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PUT /api/config failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT /api/config status = %d, want 200", resp.StatusCode)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	wsURL := "ws" + base[4:] + "/api/ws"
+	conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	if err != nil {
+		t.Fatalf("websocket dial failed: %v", err)
+	}
+	defer conn.CloseNow()
+
+	msg := map[string]string{"type": "message", "content": "hello"}
+	data, _ := json.Marshal(msg)
+	if err := conn.Write(ctx, websocket.MessageText, data); err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+	_, _, err = conn.Read(ctx)
+	if err != nil {
+		t.Fatalf("read conversation_created failed: %v", err)
+	}
+
+	select {
+	case runReq := <-turnStarted:
+		if runReq.Provider != "local" {
+			t.Fatalf("Provider = %q, want local", runReq.Provider)
+		}
+		if runReq.Model != "new-runtime-model" {
+			t.Fatalf("Model = %q, want new-runtime-model", runReq.Model)
+		}
+		if runReq.ModelContextLimit != 32768 {
+			t.Fatalf("ModelContextLimit = %d, want 32768", runReq.ModelContextLimit)
+		}
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for RunTurn")
+	}
+}
+
 func TestWebSocketUsesFallbackContextLimitForCodexWithoutConfiguredLength(t *testing.T) {
 	turnStarted := make(chan agent.RunTurnRequest, 1)
 	agentMock := &mockAgentService{
@@ -327,7 +411,7 @@ func TestWebSocketUsesFallbackContextLimitForCodexWithoutConfiguredLength(t *tes
 	cfg := &config.Config{ProjectRoot: "test-project", Providers: map[string]config.ProviderConfig{
 		"codex": {Type: "codex"},
 	}}
-	server.NewWebSocketHandler(srv, agentMock, convMock, cfg, newTestLogger())
+	server.NewWebSocketHandler(srv, agentMock, convMock, cfg, nil, newTestLogger())
 	_, base := startServer(t, srv)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
