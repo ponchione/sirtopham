@@ -2,10 +2,13 @@ import type { UseContextReportReturn } from "@/hooks/use-context-report";
 import { CollapsibleSection } from "@/components/inspector/collapsible-section";
 import { BudgetBar } from "@/components/inspector/budget-bar";
 import type {
+  BudgetCategory,
+  ContextNeeds,
   ContextSignal,
-  RAGResult,
-  BrainResult,
+  ExplicitFileResult,
   GraphResult,
+  BrainResult,
+  RAGResult,
 } from "@/types/metrics";
 
 interface ContextInspectorProps {
@@ -14,12 +17,13 @@ interface ContextInspectorProps {
 }
 
 export function ContextInspector({ ctx, onClose }: ContextInspectorProps) {
-  const { report, loading, currentTurn, totalTurns, nextTurn, prevTurn } = ctx;
+  const { report, loading, currentTurn, totalTurns, isFollowingLatest, nextTurn, prevTurn, jumpToLatest } = ctx;
+  const budgetCategories = normalizeBudgetBreakdown(report?.budget_breakdown);
 
   return (
     <div
       data-augmented-ui="tl-clip bl-clip border"
-      className="flex w-80 flex-col bg-sidebar overflow-hidden"
+      className="flex w-96 flex-col bg-sidebar overflow-hidden"
       style={{
         "--aug-tl": "15px",
         "--aug-bl": "15px",
@@ -28,7 +32,6 @@ export function ContextInspector({ ctx, onClose }: ContextInspectorProps) {
           "linear-gradient(180deg, #00e5ff, #00e67640, #00e5ff)",
       } as React.CSSProperties}
     >
-      {/* Header */}
       <div className="flex items-center justify-between border-b border-border px-3 py-2">
         <span className="text-xs font-semibold uppercase tracking-widest text-primary text-glow-cyan">
           Context Inspector
@@ -43,30 +46,39 @@ export function ContextInspector({ ctx, onClose }: ContextInspectorProps) {
         </button>
       </div>
 
-      {/* Turn navigation */}
-      <div className="flex items-center justify-between border-b border-border px-3 py-1.5">
-        <button
-          type="button"
-          onClick={prevTurn}
-          disabled={currentTurn <= 1}
-          className="p-0.5 text-muted-foreground hover:bg-muted disabled:opacity-30"
-        >
-          <ChevronLeftIcon />
-        </button>
-        <span className="text-xs text-muted-foreground">
-          {totalTurns > 0 ? `Turn ${currentTurn} of ${totalTurns}` : "No turns"}
-        </span>
-        <button
-          type="button"
-          onClick={nextTurn}
-          disabled={currentTurn >= totalTurns}
-          className="p-0.5 text-muted-foreground hover:bg-muted disabled:opacity-30"
-        >
-          <ChevronRightIcon />
-        </button>
+      <div className="border-b border-border px-3 py-1.5 space-y-1.5">
+        <div className="flex items-center justify-between">
+          <button
+            type="button"
+            onClick={prevTurn}
+            disabled={currentTurn <= 1}
+            className="p-0.5 text-muted-foreground hover:bg-muted disabled:opacity-30"
+          >
+            <ChevronLeftIcon />
+          </button>
+          <span className="text-xs text-muted-foreground">
+            {totalTurns > 0 ? `Turn ${currentTurn} of ${totalTurns}` : "No turns"}
+          </span>
+          <button
+            type="button"
+            onClick={nextTurn}
+            disabled={currentTurn >= totalTurns}
+            className="p-0.5 text-muted-foreground hover:bg-muted disabled:opacity-30"
+          >
+            <ChevronRightIcon />
+          </button>
+        </div>
+        {!isFollowingLatest && totalTurns > 0 && (
+          <button
+            type="button"
+            onClick={jumpToLatest}
+            className="w-full bg-primary/10 px-2 py-1 text-[10px] font-medium uppercase tracking-widest text-primary hover:bg-primary/15"
+          >
+            Jump to latest
+          </button>
+        )}
       </div>
 
-      {/* Content */}
       <div className="flex-1 overflow-y-auto px-3 py-2 space-y-1">
         {loading && (
           <p className="py-4 text-center text-xs text-muted-foreground">Loading…</p>
@@ -74,33 +86,26 @@ export function ContextInspector({ ctx, onClose }: ContextInspectorProps) {
 
         {!loading && !report && (
           <p className="py-4 text-center text-xs text-muted-foreground">
-            {totalTurns === 0 ? "No context data yet" : "No data for this turn"}
+            {totalTurns === 0
+              ? "No context data yet — send a message to generate the first report"
+              : "No stored context report for this turn"}
           </p>
         )}
 
         {report && (
           <>
-            {/* Budget */}
             <CollapsibleSection title="Token Budget" sectionColor="#00e5ff" defaultOpen>
               <BudgetBar
                 used={report.budget_used ?? 0}
                 total={report.budget_total ?? 0}
-                categories={report.budget_breakdown ?? []}
+                categories={budgetCategories}
               />
             </CollapsibleSection>
 
-            {/* Quality */}
-            <CollapsibleSection title="Quality" sectionColor="#00e676">
-              <QualityMetrics
-                hitRate={report.context_hit_rate}
-                usedSearch={report.agent_used_search_tool}
-                agentFiles={report.agent_read_files}
-                includedCount={report.included_count}
-                excludedCount={report.excluded_count}
-              />
+            <CollapsibleSection title="Quality" sectionColor="#00e676" defaultOpen>
+              <QualityMetrics report={report} />
             </CollapsibleSection>
 
-            {/* Latency */}
             <CollapsibleSection title="Latency" sectionColor="#ffab00">
               <LatencyDisplay
                 analysis={report.analysis_latency_ms}
@@ -109,27 +114,26 @@ export function ContextInspector({ ctx, onClose }: ContextInspectorProps) {
               />
             </CollapsibleSection>
 
-            {/* Signals */}
-            <CollapsibleSection title="Signals" sectionColor="#b388ff">
-              <SignalsList signals={report.signals ?? []} />
+            <CollapsibleSection title="Signals" sectionColor="#b388ff" defaultOpen>
+              <SignalsList signals={report.signals ?? report.needs?.signals ?? []} />
             </CollapsibleSection>
 
-            {/* Queries */}
-            <CollapsibleSection title="Queries" sectionColor="#00e5ff">
-              <QueriesList queries={report.needs?.queries ?? []} />
+            <CollapsibleSection title="Queries" sectionColor="#00e5ff" defaultOpen>
+              <QueriesList needs={report.needs} />
             </CollapsibleSection>
 
-            {/* RAG Results */}
-            <CollapsibleSection title={`Code Chunks (${report.rag_results?.length ?? 0})`} sectionColor="#00e676">
+            <CollapsibleSection title={`Explicit Files (${report.explicit_files?.length ?? 0})`} sectionColor="#00e5ff">
+              <ExplicitFilesList results={report.explicit_files ?? []} />
+            </CollapsibleSection>
+
+            <CollapsibleSection title={`Code Chunks (${report.rag_results?.length ?? 0})`} sectionColor="#00e676" defaultOpen>
               <RAGResultsList results={report.rag_results ?? []} />
             </CollapsibleSection>
 
-            {/* Brain Results */}
             <CollapsibleSection title={`Brain (${report.brain_results?.length ?? 0})`} sectionColor="#ffab00">
               <BrainResultsList results={report.brain_results ?? []} />
             </CollapsibleSection>
 
-            {/* Graph Results */}
             <CollapsibleSection title={`Graph (${report.graph_results?.length ?? 0})`} sectionColor="#b388ff">
               <GraphResultsList results={report.graph_results ?? []} />
             </CollapsibleSection>
@@ -140,53 +144,79 @@ export function ContextInspector({ ctx, onClose }: ContextInspectorProps) {
   );
 }
 
-// ── Sub-sections ─────────────────────────────────────────────────────
+function normalizeBudgetBreakdown(value: unknown): BudgetCategory[] {
+  if (!value) return [];
+  if (Array.isArray(value)) {
+    return value.filter((item): item is BudgetCategory => {
+      return typeof item === "object" && item !== null && "category" in item && "tokens" in item;
+    });
+  }
+  if (typeof value === "object") {
+    return Object.entries(value as Record<string, unknown>).flatMap(([category, tokens]) => {
+      if (typeof tokens !== "number") return [];
+      return [{ category, tokens }];
+    });
+  }
+  return [];
+}
 
-function QualityMetrics({
-  hitRate,
-  usedSearch,
-  agentFiles,
-  includedCount,
-  excludedCount,
-}: {
-  hitRate?: number;
-  usedSearch?: number;
-  agentFiles?: string[];
-  includedCount?: number;
-  excludedCount?: number;
-}) {
+function QualityMetrics({ report }: { report: UseContextReportReturn["report"] }) {
+  if (!report) return null;
+
+  const hitRate = report.context_hit_rate;
   const hitColor =
     hitRate == null ? "text-muted-foreground"
       : hitRate > 0.7 ? "text-accent"
       : hitRate > 0.4 ? "text-[#ffab00]"
       : "text-destructive";
 
+  const includedPaths = new Set<string>();
+  for (const result of report.rag_results ?? []) {
+    if (result.included) includedPaths.add(result.file_path);
+  }
+  for (const result of report.graph_results ?? []) {
+    if (result.included) includedPaths.add(result.file_path);
+  }
+  for (const result of report.explicit_files ?? []) {
+    if (result.included) includedPaths.add(result.file_path);
+  }
+
+  const uncoveredReads = (report.agent_read_files ?? []).filter((path) => !includedPaths.has(path));
+
   return (
-    <div className="space-y-1.5 text-xs">
-      <div className="flex justify-between">
-        <span className="text-muted-foreground">Hit rate</span>
-        <span className={hitColor}>
-          {hitRate != null ? `${(hitRate * 100).toFixed(0)}%` : "—"}
-        </span>
+    <div className="space-y-2 text-xs">
+      <MetricRow
+        label="Hit rate"
+        value={hitRate != null ? `${(hitRate * 100).toFixed(0)}%` : "—"}
+        valueClassName={hitColor}
+      />
+      <MetricRow
+        label="Reactive search"
+        value={report.agent_used_search_tool ? "Yes ⚠" : "No"}
+        valueClassName={report.agent_used_search_tool ? "text-[#ffab00]" : "text-accent"}
+      />
+      <MetricRow
+        label="Included in context / excluded"
+        value={`${report.included_count ?? 0} / ${report.excluded_count ?? 0}`}
+      />
+
+      <div className="space-y-1">
+        <div className="text-muted-foreground">Agent read files</div>
+        {report.agent_read_files && report.agent_read_files.length > 0 ? (
+          <CodeList items={report.agent_read_files} />
+        ) : (
+          <p className="text-[10px] text-muted-foreground">No reactive file reads recorded</p>
+        )}
       </div>
-      <div className="flex justify-between">
-        <span className="text-muted-foreground">Reactive search</span>
-        <span className={usedSearch ? "text-[#ffab00]" : "text-accent"}>
-          {usedSearch ? "Yes ⚠" : "No"}
-        </span>
+
+      <div className="space-y-1">
+        <div className="text-muted-foreground">Reads not already in context</div>
+        {uncoveredReads.length > 0 ? (
+          <CodeList items={uncoveredReads} danger />
+        ) : (
+          <p className="text-[10px] text-accent">All reads covered by context assembly</p>
+        )}
       </div>
-      <div className="flex justify-between">
-        <span className="text-muted-foreground">Included / excluded</span>
-        <span>{includedCount ?? 0} / {excludedCount ?? 0}</span>
-      </div>
-      {agentFiles && agentFiles.length > 0 && (
-        <div>
-          <span className="text-muted-foreground">Agent read files:</span>
-          <div className="mt-0.5 text-[10px] text-muted-foreground/80 max-h-20 overflow-y-auto">
-            {agentFiles.map((f, i) => <div key={i}>{f}</div>)}
-          </div>
-        </div>
-      )}
     </div>
   );
 }
@@ -218,10 +248,12 @@ function LatencyDisplay({
         ["Retrieval", retrieval],
         ["Total", total],
       ].map(([label, ms]) => (
-        <div key={label as string} className="flex justify-between">
-          <span className="text-muted-foreground">{label as string}</span>
-          <span className={color(ms as number | undefined)}>{fmt(ms as number | undefined)}</span>
-        </div>
+        <MetricRow
+          key={label as string}
+          label={label as string}
+          value={fmt(ms as number | undefined)}
+          valueClassName={color(ms as number | undefined)}
+        />
       ))}
     </div>
   );
@@ -232,64 +264,90 @@ function SignalsList({ signals }: { signals: ContextSignal[] }) {
     return <p className="text-xs text-muted-foreground">No signals detected</p>;
   }
 
-  const typeColors: Record<string, string> = {
-    file_ref: "bg-primary/20 text-primary text-glow-cyan",
-    file_ref_rejected: "bg-destructive/15 text-destructive",
-    symbol_ref: "bg-[#b388ff]/20 text-[#b388ff]",
-    modification_intent: "bg-accent/20 text-accent text-glow-green",
-    creation_intent: "bg-accent/20 text-accent text-glow-green",
-    continuation: "bg-[#ffab00]/20 text-[#ffab00]",
-    git_context: "bg-[#ffab00]/20 text-[#ffab00]",
-    question_intent: "bg-[#ffab00]/20 text-[#ffab00]",
-    debugging_hints: "bg-[#ffab00]/20 text-[#ffab00]",
-  };
-
   return (
-    <div className="flex flex-wrap gap-1">
-      {signals.map((s, i) => (
-        <span
-          key={i}
-          className={`px-1.5 py-0.5 text-[10px] font-medium ${typeColors[s.type] ?? "bg-muted text-muted-foreground"}`}
-          title={signalTitle(s)}
-        >
-          {signalLabel(s)}
-        </span>
+    <div className="space-y-1">
+      {signals.map((signal, index) => (
+        <div key={`${signal.type}-${signal.value}-${index}`} className="border border-border/50 bg-muted/30 px-2 py-1.5 text-[10px] space-y-1">
+          <div className="flex items-center justify-between gap-2">
+            <span className="font-medium text-foreground">{signal.type}</span>
+            {signal.confidence != null && (
+              <span className="text-muted-foreground">conf {(signal.confidence * 100).toFixed(0)}%</span>
+            )}
+          </div>
+          <MetricRow label="Value" value={signal.value || "—"} mono />
+          <MetricRow label="Source" value={signal.source || "—"} />
+        </div>
       ))}
     </div>
   );
 }
 
-function signalLabel(signal: ContextSignal): string {
-  switch (signal.type) {
-    case "file_ref":
-      return `file: ${signal.value}`;
-    case "file_ref_rejected":
-      return `rejected: ${signal.source ?? signal.value}`;
-    case "symbol_ref":
-      return `symbol: ${signal.value}`;
-    default:
-      return signal.value;
-  }
-}
+function QueriesList({ needs }: { needs?: ContextNeeds }) {
+  const semanticQueries = needs?.semantic_queries ?? needs?.queries ?? [];
+  const explicitFiles = needs?.explicit_files ?? [];
+  const explicitSymbols = needs?.explicit_symbols ?? [];
+  const momentumFiles = needs?.momentum_files ?? [];
 
-function signalTitle(signal: ContextSignal): string {
-  if (signal.type === "file_ref_rejected") {
-    return `rejected explicit file candidate: ${signal.source ?? "unknown"} (${signal.value})`;
-  }
-  return `${signal.type}: ${signal.value}${signal.source ? ` (${signal.source})` : ""}`;
-}
-
-function QueriesList({ queries }: { queries: string[] }) {
-  if (queries.length === 0) {
+  if (
+    semanticQueries.length === 0 &&
+    explicitFiles.length === 0 &&
+    explicitSymbols.length === 0 &&
+    momentumFiles.length === 0 &&
+    !needs?.momentum_module
+  ) {
     return <p className="text-xs text-muted-foreground">No queries generated</p>;
   }
+
   return (
-    <div className="space-y-0.5">
-      {queries.map((q, i) => (
-        <div key={i} className="bg-muted/50 px-2 py-1 text-[10px]">
-          {q}
-        </div>
+    <div className="space-y-1">
+      {semanticQueries.map((query, index) => (
+        <QueryRow key={`semantic-${index}`} label="semantic" value={query} />
       ))}
+      {explicitFiles.map((path, index) => (
+        <QueryRow key={`file-${index}`} label="explicit file" value={path} mono />
+      ))}
+      {explicitSymbols.map((symbol, index) => (
+        <QueryRow key={`symbol-${index}`} label="explicit symbol" value={symbol} mono />
+      ))}
+      {momentumFiles.map((path, index) => (
+        <QueryRow key={`momentum-file-${index}`} label="momentum file" value={path} mono />
+      ))}
+      {needs?.momentum_module && (
+        <QueryRow label="momentum module" value={needs.momentum_module} mono />
+      )}
+      {needs?.include_conventions && <QueryRow label="flag" value="include conventions" />}
+      {needs?.include_git_context && (
+        <QueryRow label="flag" value={`include git context${needs.git_context_depth ? ` (depth ${needs.git_context_depth})` : ""}`} />
+      )}
+    </div>
+  );
+}
+
+function ExplicitFilesList({ results }: { results: ExplicitFileResult[] }) {
+  if (results.length === 0) {
+    return <p className="text-xs text-muted-foreground">No explicit file retrievals for this turn</p>;
+  }
+
+  const includedCount = results.filter((result) => result.included).length;
+  const excludedCount = results.length - includedCount;
+
+  return (
+    <div className="space-y-2">
+      <ResultSummary includedCount={includedCount} excludedCount={excludedCount} />
+      <div className="space-y-1">
+        {results.map((result, index) => (
+          <IncludedCard
+            key={`${result.file_path}-${index}`}
+            included={result.included}
+            scoreLabel={result.token_count != null ? `${result.token_count} tok` : result.truncated ? "truncated" : undefined}
+            title={result.file_path}
+            meta={[
+              result.truncated ? "truncated" : undefined,
+              result.exclusion_reason,
+            ].filter(Boolean) as string[]}
+          />
+        ))}
+      </div>
     </div>
   );
 }
@@ -298,63 +356,199 @@ function RAGResultsList({ results }: { results: RAGResult[] }) {
   if (results.length === 0) {
     return <p className="text-xs text-muted-foreground">No code chunks</p>;
   }
+
+  const includedCount = results.filter((result) => result.included).length;
+  const excludedCount = results.length - includedCount;
+
   return (
-    <div className="space-y-0.5">
-      {results.map((r, i) => (
-        <div key={i} className="flex items-center gap-1.5 text-[10px]">
-          <span className={`shrink-0 px-1 py-0.5 font-medium ${r.included ? "bg-accent/20 text-accent" : "bg-destructive/20 text-destructive"}`}>
-            {r.score.toFixed(2)}
-          </span>
-          <span className="truncate text-muted-foreground" title={r.file_path}>
-            {r.chunk_name ?? r.file_path}
-          </span>
-        </div>
-      ))}
+    <div className="space-y-2">
+      <ResultSummary includedCount={includedCount} excludedCount={excludedCount} />
+      <div className="space-y-1">
+        {results.map((result, index) => (
+          <IncludedCard
+            key={`${result.file_path}-${result.chunk_id ?? result.chunk_name ?? index}`}
+            included={result.included}
+            scoreLabel={result.similarity_score != null ? result.similarity_score.toFixed(2) : result.score?.toFixed(2)}
+            title={result.chunk_name ?? result.name ?? result.file_path}
+            subtitle={result.file_path}
+            meta={[
+              result.chunk_type,
+              result.signature,
+              result.reason,
+              result.exclusion_reason,
+              result.line_start != null && result.line_end != null
+                ? `lines ${result.line_start}-${result.line_end}`
+                : undefined,
+              result.matched_by,
+              result.from_hop ? "structural hop" : undefined,
+            ].filter(Boolean) as string[]}
+          />
+        ))}
+      </div>
     </div>
   );
 }
 
 function BrainResultsList({ results }: { results: BrainResult[] }) {
   if (results.length === 0) {
-    return <p className="text-xs text-muted-foreground">No brain results</p>;
+    return <p className="text-xs text-muted-foreground">No brain results for this turn</p>;
   }
+
+  const includedCount = results.filter((result) => result.included).length;
+  const excludedCount = results.length - includedCount;
+
   return (
-    <div className="space-y-0.5">
-      {results.map((r, i) => (
-        <div key={i} className="flex items-center gap-1.5 text-[10px]">
-          <span className="shrink-0 bg-muted px-1 py-0.5 font-medium">
-            {r.score.toFixed(2)}
-          </span>
-          <span className="truncate text-muted-foreground" title={r.vault_path}>
-            {r.title ?? r.vault_path}
-          </span>
-          {r.match_mode && (
-            <span className="shrink-0 text-muted-foreground/50">{r.match_mode}</span>
-          )}
-        </div>
-      ))}
+    <div className="space-y-2">
+      <ResultSummary includedCount={includedCount} excludedCount={excludedCount} />
+      <div className="space-y-1">
+        {results.map((result, index) => (
+          <IncludedCard
+            key={`${result.vault_path ?? result.document_path}-${index}`}
+            included={result.included}
+            scoreLabel={(result.score ?? result.match_score)?.toFixed(2)}
+            title={result.title ?? result.vault_path ?? result.document_path ?? "untitled brain result"}
+            subtitle={result.vault_path ?? result.document_path}
+            meta={[
+              result.match_mode,
+              result.exclusion_reason,
+            ].filter(Boolean) as string[]}
+          />
+        ))}
+      </div>
     </div>
   );
 }
 
 function GraphResultsList({ results }: { results: GraphResult[] }) {
   if (results.length === 0) {
-    return <p className="text-xs text-muted-foreground">No graph results</p>;
+    return <p className="text-xs text-muted-foreground">No graph results for this turn</p>;
   }
+
+  const includedCount = results.filter((result) => result.included).length;
+  const excludedCount = results.length - includedCount;
+
   return (
-    <div className="space-y-0.5">
-      {results.map((r, i) => (
-        <div key={i} className="text-[10px]">
-          <span className="font-medium">{r.symbol}</span>
-          <span className="text-muted-foreground"> → {r.relationship} </span>
-          <span className="text-muted-foreground/70">{r.file_path}</span>
+    <div className="space-y-2">
+      <ResultSummary includedCount={includedCount} excludedCount={excludedCount} />
+      <div className="space-y-1">
+        {results.map((result, index) => (
+          <IncludedCard
+            key={`${result.symbol ?? result.symbol_name}-${result.file_path}-${index}`}
+            included={result.included}
+            scoreLabel={`depth ${result.depth ?? 0}`}
+            title={result.symbol ?? result.symbol_name ?? "unknown symbol"}
+            subtitle={result.file_path}
+            meta={[
+              result.relationship ?? result.relationship_type,
+              result.exclusion_reason,
+              result.line_start != null && result.line_end != null
+                ? `lines ${result.line_start}-${result.line_end}`
+                : undefined,
+            ].filter(Boolean) as string[]}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ResultSummary({
+  includedCount,
+  excludedCount,
+}: {
+  includedCount: number;
+  excludedCount: number;
+}) {
+  return (
+    <div className="flex justify-between text-[10px] text-muted-foreground">
+      <span>Included in context {includedCount}</span>
+      <span>Excluded {excludedCount}</span>
+    </div>
+  );
+}
+
+function IncludedCard({
+  included,
+  scoreLabel,
+  title,
+  subtitle,
+  meta,
+}: {
+  included?: boolean;
+  scoreLabel?: string;
+  title: string;
+  subtitle?: string;
+  meta?: string[];
+}) {
+  return (
+    <div className="border border-border/50 bg-muted/30 px-2 py-1.5 text-[10px] space-y-1">
+      <div className="flex items-start gap-2">
+        <span className={`shrink-0 px-1 py-0.5 font-medium ${included ? "bg-accent/20 text-accent" : "bg-destructive/20 text-destructive"}`}>
+          {included ? "included" : "excluded"}
+        </span>
+        {scoreLabel && (
+          <span className="shrink-0 bg-muted px-1 py-0.5 font-medium text-foreground">{scoreLabel}</span>
+        )}
+        <div className="min-w-0 flex-1">
+          <div className="break-words text-foreground">{title}</div>
+          {subtitle && <div className="break-words text-muted-foreground">{subtitle}</div>}
+        </div>
+      </div>
+      {meta && meta.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {meta.map((item, index) => (
+            <span key={`${item}-${index}`} className="bg-background/60 px-1 py-0.5 text-muted-foreground">
+              {item}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function QueryRow({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
+  return (
+    <div className="flex gap-2 bg-muted/50 px-2 py-1 text-[10px]">
+      <span className="shrink-0 uppercase tracking-widest text-muted-foreground">{label}</span>
+      <span className={`break-words ${mono ? "font-mono" : ""}`}>{value}</span>
+    </div>
+  );
+}
+
+function MetricRow({
+  label,
+  value,
+  valueClassName,
+  mono = false,
+}: {
+  label: string;
+  value: string;
+  valueClassName?: string;
+  mono?: boolean;
+}) {
+  return (
+    <div className="flex justify-between gap-3">
+      <span className="text-muted-foreground">{label}</span>
+      <span className={`${valueClassName ?? ""} text-right ${mono ? "font-mono" : ""}`}>{value}</span>
+    </div>
+  );
+}
+
+function CodeList({ items, danger = false }: { items: string[]; danger?: boolean }) {
+  return (
+    <div className="space-y-0.5 max-h-24 overflow-y-auto">
+      {items.map((item, index) => (
+        <div
+          key={`${item}-${index}`}
+          className={`break-all px-2 py-1 font-mono text-[10px] ${danger ? "bg-destructive/10 text-destructive" : "bg-muted/50 text-muted-foreground"}`}
+        >
+          {item}
         </div>
       ))}
     </div>
   );
 }
-
-// ── Icons ────────────────────────────────────────────────────────────
 
 function XIcon() {
   return (
