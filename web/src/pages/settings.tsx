@@ -1,9 +1,19 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useProviders } from "@/hooks/use-providers";
 import { useProjectInfo } from "@/hooks/use-project-info";
 import { api } from "@/lib/api";
-import { Button } from "@/components/ui/button";
 import type { AppConfig } from "@/types/metrics";
+
+function formatTimestamp(value?: string): string {
+  if (!value) return "Never";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString();
+}
+
+function modelOptionValue(provider: string, model: string): string {
+  return `${provider}::${model}`;
+}
 
 export function SettingsPage() {
   const { providers, loading: provLoading } = useProviders();
@@ -12,6 +22,7 @@ export function SettingsPage() {
   const [configLoading, setConfigLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
+  const [selectedDefaultModel, setSelectedDefaultModel] = useState("");
 
   // Load config on mount.
   useEffect(() => {
@@ -24,7 +35,32 @@ export function SettingsPage() {
       .catch(() => setConfigLoading(false));
   }, []);
 
-  const handleModelChange = async (provider: string, model: string) => {
+  const groupedProviders = useMemo(
+    () => providers.map((provider) => ({
+      ...provider,
+      models: provider.models.filter(
+        (model, index, all) => all.findIndex((candidate) => candidate.id === model.id) === index,
+      ),
+    })),
+    [providers],
+  );
+
+  useEffect(() => {
+    if (!config) {
+      return;
+    }
+    setSelectedDefaultModel(modelOptionValue(config.default_provider, config.default_model));
+  }, [config]);
+
+  const handleModelChange = async (nextValue: string) => {
+    const [provider, model] = nextValue.split("::", 2);
+    if (!provider || !model) {
+      return;
+    }
+
+    const previousValue = selectedDefaultModel;
+    setSelectedDefaultModel(nextValue);
+
     try {
       setSaving(true);
       setSaveMsg(null);
@@ -33,9 +69,11 @@ export function SettingsPage() {
         default_model: model,
       });
       setConfig(updated);
-      setSaveMsg("Saved");
+      setSelectedDefaultModel(modelOptionValue(updated.default_provider, updated.default_model));
+      setSaveMsg("Default model updated");
       setTimeout(() => setSaveMsg(null), 2000);
     } catch (err) {
+      setSelectedDefaultModel(previousValue);
       setSaveMsg(err instanceof Error ? err.message : "Failed to save");
     } finally {
       setSaving(false);
@@ -81,6 +119,14 @@ export function SettingsPage() {
                   <span>{project.language}</span>
                 </div>
               )}
+              <div className="flex justify-between gap-3">
+                <span className="text-muted-foreground">Last indexed</span>
+                <span className="text-right text-xs">{formatTimestamp(project.last_indexed_at)}</span>
+              </div>
+              <div className="flex justify-between gap-3">
+                <span className="text-muted-foreground">Indexed commit</span>
+                <span className="text-right text-xs font-mono">{project.last_indexed_commit ?? "Unknown"}</span>
+              </div>
             </div>
           ) : (
             <p className="text-xs text-muted-foreground">No project info available</p>
@@ -105,52 +151,41 @@ export function SettingsPage() {
                 "--aug-border-bg": "#1a2a3a",
               } as React.CSSProperties}
             >
-              <div className="flex items-center gap-2 text-sm">
-                <span className="text-muted-foreground">Current:</span>
-                <span className="font-medium text-primary">
-                  {config.default_provider}/{config.default_model}
-                </span>
-              </div>
-              {/* Model selector */}
-              {providers.length > 0 && (
-                <div className="space-y-1">
-                  {providers.map((prov) => (
-                    <div key={prov.name}>
-                      {prov.models.map((model) => {
-                        const isActive =
-                          config.default_provider === prov.name &&
-                          config.default_model === model.id;
-                        return (
-                          <Button
-                            key={model.id}
-                            variant={isActive ? "default" : "ghost"}
-                            size="sm"
-                            data-augmented-ui={isActive ? "tl-clip br-clip border" : undefined}
-                            className={`mr-1 mb-1 text-xs ${isActive ? "glow-cyan border-0" : ""}`}
-                            disabled={saving || isActive}
-                            onClick={() => handleModelChange(prov.name, model.id)}
-                            style={
-                              isActive
-                                ? ({
-                                    "--aug-tl": "4px",
-                                    "--aug-br": "4px",
-                                    "--aug-border-all": "1px",
-                                    "--aug-border-bg": "#00e5ff",
-                                  } as React.CSSProperties)
-                                : undefined
-                            }
-                          >
-                            {prov.name}/{model.id}
-                          </Button>
-                        );
-                      })}
-                    </div>
-                  ))}
+              <div className="space-y-1 text-sm">
+                <div className="text-muted-foreground">Current default</div>
+                <div className="font-medium text-primary">
+                  {config.default_model} <span className="text-muted-foreground">({config.default_provider})</span>
                 </div>
+              </div>
+
+              {groupedProviders.length > 0 && (
+                <label className="block space-y-1.5 text-xs">
+                  <span className="text-muted-foreground uppercase tracking-widest">Default provider/model</span>
+                  <select
+                    value={selectedDefaultModel}
+                    onChange={(e) => handleModelChange(e.target.value)}
+                    disabled={saving}
+                    className="w-full rounded border border-border bg-input px-3 py-2 text-sm text-foreground"
+                    aria-label="Default provider and model"
+                  >
+                    {groupedProviders.map((provider) => (
+                      <optgroup key={provider.name} label={provider.name}>
+                        {provider.models.map((model) => (
+                          <option
+                            key={`${provider.name}:${model.id}`}
+                            value={modelOptionValue(provider.name, model.id)}
+                          >
+                            {model.id}
+                          </option>
+                        ))}
+                      </optgroup>
+                    ))}
+                  </select>
+                </label>
               )}
 
               {saveMsg && (
-                <p className={`text-xs ${saveMsg === "Saved" ? "text-accent" : "text-destructive"}`}>
+                <p className={`text-xs ${saveMsg === "Default model updated" ? "text-accent" : "text-destructive"}`}>
                   {saveMsg}
                 </p>
               )}

@@ -128,15 +128,6 @@ needed — documented for spec reconciliation.**
 
 ## Layer 6 — Web Interface & Streaming
 
-### Settings default-model options are duplicated across provider prefixes
-**Severity:** Low | **Source:** manual runtime validation (2026-04-01)
-
-The Settings UI currently shows duplicated model/default-model entries under multiple provider prefixes (`anthropic`, `local`, `openrouter`, `codex`) instead of a clean provider-scoped set. This makes the default-model surface look noisy and potentially misleading during runtime selection/testing.
-
-**Future fix direction:** Audit `/api/config` provider/model payload shaping and the settings-page model option rendering so each provider shows only its own meaningful model set, without repeated aliases or cross-provider duplication.
-
----
-
 ### `search_semantic` should stay deferred until programmatic retrieval is proven end to end
 **Severity:** Info | **Source:** RAG indexing/retrieval planning review (2026-04-02)
 
