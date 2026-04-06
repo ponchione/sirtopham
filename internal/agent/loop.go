@@ -706,9 +706,18 @@ func (l *AgentLoop) RunTurn(ctx stdctx.Context, req RunTurnRequest) (*TurnResult
 			})
 		}
 
+		cleanupTurn := inflightTurn{
+			ConversationID:           req.ConversationID,
+			TurnNumber:               req.TurnNumber,
+			Iteration:                iteration,
+			CompletedIterations:      completedIterations,
+			AssistantResponseStarted: true,
+			AssistantMessageContent:  assistantContentJSON,
+			ToolMessages:             append([]conversation.IterationMessage(nil), persistMessages[1:]...),
+		}
 		if err := l.conversationManager.PersistIteration(ctx, req.ConversationID, req.TurnNumber, iteration, persistMessages); err != nil {
 			if isCancelled(ctx) {
-				return nil, l.handleCancellation(req.ConversationID, req.TurnNumber, iteration, completedIterations, ctx.Err())
+				return nil, l.handleTurnCancellation(cleanupTurn, ctx.Err())
 			}
 			return nil, fmt.Errorf("agent loop: persist iteration %d: %w", iteration, err)
 		}

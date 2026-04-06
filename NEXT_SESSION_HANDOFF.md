@@ -3,7 +3,7 @@
 Date: 2026-04-06
 Repo: /home/gernsback/source/sirtopham
 Branch: main
-State: several coherent low-risk slices are now complete, validated, and ready to commit. Checked-in default model still intentionally remains `gpt-5.4-mini`.
+State: several coherent low-risk slices are now complete, validated, and committed. Added one more cancellation-cleanup follow-through slice in this session. Checked-in default model still intentionally remains `gpt-5.4-mini`.
 
 ## Completed this session
 
@@ -39,6 +39,11 @@ State: several coherent low-risk slices are now complete, validated, and ready t
 5. Brain test determinism
 - fake brain-search hits are now sorted deterministically in tests to avoid map-iteration flakes
 
+6. Cancellation cleanup follow-through: persist-iteration cancellation replay
+- fixed the tool-use iteration persistence path so cancellation during `PersistIteration(...)` no longer falls back to a generic cancel-only cleanup path
+- the loop now replays the already-computed assistant/tool messages through cleanup persistence when the context is cancelled during iteration persistence
+- added a focused regression proving cancellation during tool-use iteration persistence preserves the original assistant `tool_use` message and computed tool result instead of dropping them
+
 ## Validation run
 
 Focused:
@@ -55,7 +60,7 @@ Everything passed.
 Best next implementation seam is no longer more speculative Stage 1 tool-output polish.
 
 Preferred order:
-1. cancellation cleanup follow-through
+1. another cancellation cleanup follow-through slice only if fresh evidence shows a remaining gap beyond the new persist-iteration replay fix
 2. file-edit error-contract / disambiguation hardening only if real runtime evidence shows weak model recovery
 3. only then any further downstream tombstone/tool-output consumer work
 

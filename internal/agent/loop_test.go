@@ -51,6 +51,7 @@ type loopConversationManagerStub struct {
 	err                   error
 	persistErr            error
 	persistIterErr        error
+	persistIterFn         func(ctx stdctx.Context, conversationID string, turnNumber, iteration int, messages []conversation.IterationMessage) error
 	cancelIterErr         error
 	reconstructFn         func(ctx stdctx.Context, conversationID string) ([]db.Message, error)
 	reconstructCalls      []string
@@ -72,7 +73,7 @@ func (s *loopConversationManagerStub) PersistUserMessage(_ stdctx.Context, conve
 	return s.persistErr
 }
 
-func (s *loopConversationManagerStub) PersistIteration(_ stdctx.Context, conversationID string, turnNumber, iteration int, messages []conversation.IterationMessage) error {
+func (s *loopConversationManagerStub) PersistIteration(ctx stdctx.Context, conversationID string, turnNumber, iteration int, messages []conversation.IterationMessage) error {
 	s.persistIterCalls = append(s.persistIterCalls, persistedIterationCall{
 		conversationID: conversationID,
 		turnNumber:     turnNumber,
@@ -80,6 +81,9 @@ func (s *loopConversationManagerStub) PersistIteration(_ stdctx.Context, convers
 		messages:       append([]conversation.IterationMessage(nil), messages...),
 	})
 	s.callOrder = append(s.callOrder, "persist_iteration")
+	if s.persistIterFn != nil {
+		return s.persistIterFn(ctx, conversationID, turnNumber, iteration, messages)
+	}
 	return s.persistIterErr
 }
 
@@ -1396,6 +1400,83 @@ func TestRunTurnCancelDuringToolExecution(t *testing.T) {
 	}
 	if !strings.Contains(pi.messages[1].Content, "status=interrupted_during_execution") {
 		t.Fatalf("interrupted tool message = %#v, want interrupted_during_execution status", pi.messages[1])
+	}
+}
+
+func TestRunTurnCancellationDuringPersistIterationReplaysComputedMessages(t *testing.T) {
+	assembler := &loopContextAssemblerStub{
+		pkg: &contextpkg.FullContextPackage{Content: "context", Frozen: true},
+	}
+	conversations := &loopConversationManagerStub{
+		history: []db.Message{},
+		seen:    loopSeenFilesStub{},
+	}
+	routerStub := &providerRouterStub{
+		streamEvents: [][]provider.StreamEvent{{
+			provider.ToolCallStart{ID: "t1", Name: "shell"},
+			provider.ToolCallEnd{ID: "t1", Input: json.RawMessage(`{"cmd":"pwd"}`)},
+			provider.StreamDone{
+				StopReason: provider.StopReasonToolUse,
+				Usage:      provider.Usage{InputTokens: 10, OutputTokens: 5},
+			},
+		}},
+	}
+	executor := &toolExecutorStub{results: map[string]*provider.ToolResult{
+		"t1": {ToolUseID: "t1", Content: "pwd output"},
+	}}
+
+	ctx, cancel := stdctx.WithCancel(stdctx.Background())
+	defer cancel()
+	persistCalls := 0
+	conversations.persistIterFn = func(callCtx stdctx.Context, conversationID string, turnNumber, iteration int, messages []conversation.IterationMessage) error {
+		persistCalls++
+		if persistCalls == 1 {
+			cancel()
+			return callCtx.Err()
+		}
+		return nil
+	}
+
+	loop := NewAgentLoop(AgentLoopDeps{
+		ContextAssembler:    assembler,
+		ConversationManager: conversations,
+		ProviderRouter:      routerStub,
+		ToolExecutor:        executor,
+		PromptBuilder:       NewPromptBuilder(nil),
+	})
+	loop.now = func() time.Time { return time.Unix(1700000600, 0).UTC() }
+
+	_, err := loop.RunTurn(ctx, RunTurnRequest{
+		ConversationID:    "conv-persist-cancel",
+		TurnNumber:        1,
+		Message:           "run command",
+		ModelContextLimit: 200000,
+	})
+	if err == nil || !errors.Is(err, ErrTurnCancelled) {
+		t.Fatalf("error = %v, want ErrTurnCancelled", err)
+	}
+	if len(conversations.cancelIterCalls) != 0 {
+		t.Fatalf("CancelIteration calls = %d, want 0", len(conversations.cancelIterCalls))
+	}
+	if len(conversations.persistIterCalls) != 2 {
+		t.Fatalf("PersistIteration calls = %d, want original attempt plus cleanup replay", len(conversations.persistIterCalls))
+	}
+	first := conversations.persistIterCalls[0]
+	second := conversations.persistIterCalls[1]
+	if len(first.messages) != 2 || len(second.messages) != 2 {
+		t.Fatalf("persisted message counts = %d/%d, want 2/2", len(first.messages), len(second.messages))
+	}
+	if first.messages[0].Content != second.messages[0].Content {
+		t.Fatalf("assistant cleanup replay mismatch:\nfirst=%q\nsecond=%q", first.messages[0].Content, second.messages[0].Content)
+	}
+	if first.messages[1].Content != second.messages[1].Content {
+		t.Fatalf("tool cleanup replay mismatch:\nfirst=%q\nsecond=%q", first.messages[1].Content, second.messages[1].Content)
+	}
+	if !strings.Contains(second.messages[0].Content, `"type":"tool_use"`) {
+		t.Fatalf("assistant cleanup replay = %#v, want original assistant tool_use message", second.messages[0])
+	}
+	if second.messages[1].Content != "pwd output" {
+		t.Fatalf("tool cleanup replay = %#v, want original computed tool result", second.messages[1])
 	}
 }
 
