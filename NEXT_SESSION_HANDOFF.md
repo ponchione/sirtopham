@@ -3,86 +3,125 @@
 Date: 2026-04-06
 Repo: /home/gernsback/source/sirtopham
 Branch: main
-State: several coherent low-risk slices are now complete, validated, and committed. Added one more cancellation-cleanup follow-through slice in this session. Checked-in default model still intentionally remains `gpt-5.4-mini`.
+Focus: harness-completion follow-through is in a good stopping state; next session should start with fresh UI/runtime validation rather than more speculative polish.
 
-## Completed this session
+## What landed in this session
 
-1. Tool-output Stage 1 follow-through
-- persisted tool-result references now use a structured marker/preview format
-- persisted `shell` previews preserve tail/error context instead of losing the failure at the head-truncation boundary
-- added an explicit `ToolOutputManager` seam so aggregate budgeting is no longer wired directly in the loop
-- aggregate-budget persistence ordering is now deterministic:
-  - `shell` first
-  - other persistable tool classes next
-  - `file_read` last
-- persisted references keep a useful minimum preview budget instead of being immediately shrunk away
-- added/reporting coverage for persisted-vs-inline budget outcomes
+Already-complete harness gate before this continuation:
+- P0 items 1-4
+- P1 items 5-8
+- P2 item 9
 
-2. Conversation search / tombstone consumer hardening
-- search snippets now sanitize assistant/tool JSON more reliably
-- tombstone-bearing assistant/tool payloads collapse to compact summaries instead of leaking raw payload text
-- title cleaning rejects tombstone markers so they do not become persisted conversation titles
-- added focused manager/search/title tests for those cases
+Newly completed in this continuation:
 
-3. Codex visible-model alignment guardrail
-- extracted the static visible model list into `internal/provider/codex/model_discovery.go`
-- added `discoverVisibleModels(...)` against `codex app-server --listen stdio://`
-- added tests for parsing the machine-readable `model/list` response
-- added a non-short installed-Codex parity test to catch drift between the checked-in static list and the local visible runtime list
-- production `Models()` still returns the static list; discovery is currently a validation/test helper, not runtime behavior
+10. Persist inspector open/closed state across SPA navigation
+- `ConversationPage` now seeds inspector state from a module-level session value
+- inspector open/closed state survives route changes in the SPA
+- state still resets on full page refresh
+- commit: `29fdbad` `feat(web): persist inspector state across spa navigation`
 
-4. Router health hardening
-- request-shape / client-side validation failures that surface as provider 400s no longer poison provider health
-- auth failures still affect health and still return remediation for the default provider
-- added router coverage for the non-poisoning validation case and auth/error behavior
+11. Bring settings model selection UX closer to spec
+- replaced the flat button wall with a grouped provider/model dropdown
+- current default is shown prominently as `model (provider)`
+- selection is grouped by provider via `optgroup`
+- save success/error feedback still works
+- failed saves revert the selector to the prior value
+- resolved the stale TECH-DEBT entry about duplicated provider/model presentation
+- commits:
+  - `ff4ef78` `feat(settings): group default model selection by provider`
+  - `3d3e0c3` `docs: drop stale metrics path reconciliation note`
 
-5. Brain test determinism
-- fake brain-search hits are now sorted deterministically in tests to avoid map-iteration flakes
+13. Remaining thin inspector ergonomics got a worthwhile low-churn polish pass
+- richer top-level empty states
+- clearer `Included in context / excluded` wording
+- explicit files / RAG / brain / graph sections now show inclusion summaries consistently
+- empty states for those sections are more specific to the active turn
+- commit: `9a5da22` `feat(inspector): clarify empty states and inclusion summaries`
 
-6. Cancellation cleanup follow-through: persist-iteration cancellation replay
-- fixed the tool-use iteration persistence path so cancellation during `PersistIteration(...)` no longer falls back to a generic cancel-only cleanup path
-- the loop now replays the already-computed assistant/tool messages through cleanup persistence when the context is cancelled during iteration persistence
-- added a focused regression proving cancellation during tool-use iteration persistence preserves the original assistant `tool_use` message and computed tool result instead of dropping them
+Also completed just before this continuation:
+- item 9 metrics refresh on turn completion
+- commit: `7cfb17b` `feat(web): refresh conversation metrics on turn completion`
 
-## Validation run
+## Validation run completed
 
-Focused:
-- `go test ./internal/agent -count=1`
-- `go test -tags sqlite_fts5 ./internal/conversation ./internal/provider/codex ./internal/provider/router ./internal/tool -count=1`
+Frontend validation was rerun after each web slice:
+- `cd web && npx tsc --noEmit`
+- `cd web && npm run build`
 
-Broad:
-- `make test`
+All of the above passed on each rerun.
 
-Everything passed.
+## Harness status now
+
+Functionally complete gate items:
+- P0: items 1-4
+- P1: items 5-8
+- P2: item 9
+
+Useful follow-through now also landed:
+- item 10 complete
+- item 11 complete
+- item 13 got a meaningful polish pass
+- item 12 had at least one stale reconciliation note removed from `TECH-DEBT.md`
+
+Practical read:
+- the harness is past the original completion gate
+- this is a good place to stop implementation churn and switch to a fresh-session validation pass
 
 ## Recommended next step
 
-Best next implementation seam is no longer more speculative Stage 1 tool-output polish.
+Do a fresh-session browser/runtime validation pass rather than immediately coding more.
 
-Preferred order:
-1. another cancellation cleanup follow-through slice only if fresh evidence shows a remaining gap beyond the new persist-iteration replay fix
-2. file-edit error-contract / disambiguation hardening only if real runtime evidence shows weak model recovery
-3. only then any further downstream tombstone/tool-output consumer work
+Best next work, in order:
+1. Validate the completed harness flows end to end in the UI
+   - context inspector historical navigation
+   - manual-vs-live follow behavior
+   - metrics panel auto-refresh after turn completion
+   - inspector open/closed persistence across in-app conversation navigation
+   - settings default model dropdown UX
+   - conversation override badge/selector behavior
+2. If validation finds no regressions, decide whether to call the harness effectively complete
+3. Only then return for any evidence-driven cleanup
 
-## Guardrails
+If a fresh coding slice is needed after validation, the best candidate is:
+- any remaining item-13 inspector polish that shows up during real UI use, not speculative cleanup from the punchlist alone
 
-- do not spend the next session on generic prompt tuning
-- do not wholesale port `sirtopham-handoff/` stubs
-- keep checked-in default model at `gpt-5.4-mini` unless the user explicitly wants the launch switch flipped
-- do not treat the Codex model-discovery helper as a mandate for runtime dynamic discovery unless drift appears again
+## Files most relevant to the finished harness slice
 
-## Local-only dirty state not suitable for commit
+- `web/src/pages/conversation.tsx`
+- `web/src/pages/settings.tsx`
+- `web/src/components/inspector/context-inspector.tsx`
+- `web/src/hooks/use-context-report.ts`
+- `web/src/hooks/use-conversation-metrics.ts`
+- `web/src/components/chat/conversation-metrics.tsx`
+- `web/src/hooks/use-conversation.ts`
+- `web/src/hooks/use-websocket.ts`
+- `web/src/types/events.ts`
+- `web/src/types/metrics.ts`
+- `internal/server/configapi.go`
+- `internal/server/project.go`
+- `cmd/sirtopham/config.go`
 
-Keep out of the commit unless explicitly intended:
+## Repo-state warning
+
+`git status --short` still shows lots of unrelated dirty state outside this harness work. Be surgical.
+
+Local-only state to keep out of commits unless explicitly intended:
 - `.brain/.obsidian/workspace.json`
 - `sirtopham.yaml`
 
-## Useful commands
+## Current git picture
 
-- `go test ./internal/agent -count=1`
-- `go test -tags sqlite_fts5 ./internal/conversation ./internal/provider/codex ./internal/provider/router ./internal/tool -count=1`
-- `make test`
+Recent commits from this continuation:
+- `9a5da22` `feat(inspector): clarify empty states and inclusion summaries`
+- `3d3e0c3` `docs: drop stale metrics path reconciliation note`
+- `ff4ef78` `feat(settings): group default model selection by provider`
+- `29fdbad` `feat(web): persist inspector state across spa navigation`
+- `7cfb17b` `feat(web): refresh conversation metrics on turn completion`
+
+Current branch state at handoff time:
+- `main` ahead of `origin/main` by 10 commits
+- nothing was pushed
 
 ## Bottom line
 
-This is a good stopping point. The current work set now includes: Stage 1 tool-output hardening with a real manager seam and deterministic persistence policy; search/title sanitation for tombstone-heavy transcripts; a Codex visible-model drift guardrail via `app-server` discovery tests; router health protection against bad request/model validation churn; and deterministic brain-tool tests. The next session should move to cancellation cleanup or evidence-driven file-edit recovery behavior rather than polishing these slices further.
+This is a good fresh-session boundary. The harness completion work is no longer blocked on the original punchlist; the next highest-value step is a real browser/runtime validation pass, not more speculative implementation.
