@@ -137,16 +137,6 @@ The intended architecture is that indexing and retrieval/context assembly are ba
 
 ---
 
-### Metrics endpoint paths differ from spec
-**Severity:** Info | **Source:** Layer 6 audit (2026-04-01)
-
-The spec defines `/api/conversations/:id/metrics` and `/api/conversations/:id/context-reports`.
-The implementation uses `/api/metrics/conversation/:id` and
-`/api/metrics/conversation/:id/context/:turn`. **No change needed — implementation
-paths are cleaner. Spec should be updated.**
-
----
-
 ### Conversation list page is a landing page, not a dedicated list view
 **Severity:** Info | **Source:** Layer 6 audit (2026-04-01)
 
