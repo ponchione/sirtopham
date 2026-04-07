@@ -28,21 +28,15 @@ func main() {
 	initCmd := newInitCmd(&configPath)
 	indexCmd := newIndexCmd(&configPath)
 
-	configCmd := &cobra.Command{
-		Use:   "config",
-		Short: "Show or validate configuration",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			fmt.Println("not yet implemented")
-			return nil
-		},
-	}
+	configCmd := newConfigCmd(&configPath)
+	llmCmd := newLLMCmd(&configPath)
 
 	authCmd := newAuthCmd(&configPath)
 	doctorCmd := newDoctorCmd(&configPath)
 	serveCmd := newServeCmd(&configPath)
 	brainServeCmd := newBrainServeCmd()
 
-	rootCmd.AddCommand(serveCmd, brainServeCmd, initCmd, indexCmd, configCmd, authCmd, doctorCmd)
+	rootCmd.AddCommand(serveCmd, brainServeCmd, initCmd, indexCmd, configCmd, llmCmd, authCmd, doctorCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)

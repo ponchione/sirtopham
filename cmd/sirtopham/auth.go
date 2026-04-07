@@ -11,6 +11,7 @@ import (
 	"time"
 
 	appconfig "github.com/ponchione/sirtopham/internal/config"
+	"github.com/ponchione/sirtopham/internal/localservices"
 	"github.com/ponchione/sirtopham/internal/provider"
 	"github.com/spf13/cobra"
 )
@@ -69,12 +70,27 @@ func runProviderDiagnostics(cmd *cobra.Command, configPath string, jsonOutput bo
 		return fmt.Errorf("load config: %w", err)
 	}
 	reports := collectProviderAuthReports(cmd.Context(), cfg, includePing)
+	var llmStatus *localservices.StackStatus
+	if includePing {
+		status, err := newLLMManager().Status(cmd.Context(), cfg)
+		if err == nil {
+			llmStatus = &status
+		}
+	}
 	if jsonOutput {
 		enc := json.NewEncoder(cmd.OutOrStdout())
 		enc.SetIndent("", "  ")
-		return enc.Encode(reports)
+		payload := map[string]any{"providers": reports}
+		if llmStatus != nil {
+			payload["local_services"] = llmStatus
+		}
+		return enc.Encode(payload)
 	}
 	printProviderAuthReports(cmd.OutOrStdout(), reports)
+	if llmStatus != nil {
+		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "local_services:")
+		_ = printLLMStatus(cmd.OutOrStdout(), *llmStatus, false)
+	}
 	return nil
 }
 

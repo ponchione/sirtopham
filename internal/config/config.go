@@ -11,8 +11,14 @@ import (
 )
 
 const (
-	defaultServerHost = "localhost"
-	defaultServerPort = 8090
+	defaultServerHost           = "localhost"
+	defaultServerPort           = 8090
+	defaultQwenCoderBaseURL     = "http://localhost:12434"
+	defaultNomicEmbedBaseURL    = "http://localhost:12435"
+	localServicesModeOff        = "off"
+	localServicesModeManual     = "manual"
+	localServicesModeAuto       = "auto"
+	localServicesProviderDocker = "docker-compose"
 )
 
 var allowedProviderTypes = map[string]struct{}{
@@ -28,14 +34,15 @@ type Config struct {
 	ServerPort  int    `yaml:"server_port"`
 	ServerHost  string `yaml:"server_host"`
 
-	Server    ServerConfig              `yaml:"server"`
-	Routing   RoutingConfig             `yaml:"routing"`
-	Providers map[string]ProviderConfig `yaml:"providers"`
-	Index     IndexConfig               `yaml:"index"`
-	Embedding Embedding                 `yaml:"embedding"`
-	Agent     AgentConfig               `yaml:"agent"`
-	Context   ContextConfig             `yaml:"context"`
-	Brain     BrainConfig               `yaml:"brain"`
+	Server        ServerConfig              `yaml:"server"`
+	Routing       RoutingConfig             `yaml:"routing"`
+	Providers     map[string]ProviderConfig `yaml:"providers"`
+	Index         IndexConfig               `yaml:"index"`
+	Embedding     Embedding                 `yaml:"embedding"`
+	Agent         AgentConfig               `yaml:"agent"`
+	Context       ContextConfig             `yaml:"context"`
+	Brain         BrainConfig               `yaml:"brain"`
+	LocalServices LocalServicesConfig       `yaml:"local_services"`
 }
 
 type ServerConfig struct {
@@ -46,7 +53,8 @@ type ServerConfig struct {
 }
 
 type RoutingConfig struct {
-	Default RouteConfig `yaml:"default"`
+	Default  RouteConfig `yaml:"default"`
+	Fallback RouteConfig `yaml:"fallback"`
 }
 
 type RouteConfig struct {
@@ -97,10 +105,10 @@ type AgentConfig struct {
 	CacheConversationHistory bool     `yaml:"cache_conversation_history"`
 
 	// Phase 2: History compression (spec 11).
-	CompressHistoricalResults    bool `yaml:"compress_historical_results"`
-	StripHistoricalLineNumbers   bool `yaml:"strip_historical_line_numbers"`
-	ElideDuplicateReads          bool `yaml:"elide_duplicate_reads"`
-	HistorySummarizeAfterTurns   int  `yaml:"history_summarize_after_turns"`
+	CompressHistoricalResults  bool `yaml:"compress_historical_results"`
+	StripHistoricalLineNumbers bool `yaml:"strip_historical_line_numbers"`
+	ElideDuplicateReads        bool `yaml:"elide_duplicate_reads"`
+	HistorySummarizeAfterTurns int  `yaml:"history_summarize_after_turns"`
 }
 
 type ContextConfig struct {
@@ -122,16 +130,56 @@ type ContextConfig struct {
 }
 
 type BrainConfig struct {
-	Enabled                 bool    `yaml:"enabled"`
-	VaultPath               string  `yaml:"vault_path"`
-	EmbeddingModel          string  `yaml:"embedding_model"`
-	ChunkAtHeadings         bool    `yaml:"chunk_at_headings"`
-	ReindexOnStartup        bool    `yaml:"reindex_on_startup"`
-	MaxBrainTokens          int     `yaml:"max_brain_tokens"`
-	BrainRelevanceThreshold float64 `yaml:"brain_relevance_threshold"`
-	IncludeGraphHops        bool    `yaml:"include_graph_hops"`
-	GraphHopDepth           int     `yaml:"graph_hop_depth"`
-	LogBrainQueries         bool    `yaml:"log_brain_queries"`
+	Enabled                 bool     `yaml:"enabled"`
+	VaultPath               string   `yaml:"vault_path"`
+	EmbeddingModel          string   `yaml:"embedding_model"`
+	ChunkAtHeadings         bool     `yaml:"chunk_at_headings"`
+	ReindexOnStartup        bool     `yaml:"reindex_on_startup"`
+	MaxBrainTokens          int      `yaml:"max_brain_tokens"`
+	BrainRelevanceThreshold float64  `yaml:"brain_relevance_threshold"`
+	IncludeGraphHops        bool     `yaml:"include_graph_hops"`
+	GraphHopDepth           int      `yaml:"graph_hop_depth"`
+	LogBrainQueries         bool     `yaml:"log_brain_queries"`
+	LogBrainOperations      bool     `yaml:"log_brain_operations"`
+	LintStaleDays           int      `yaml:"lint_stale_days"`
+	LintOrphanAllowlist     []string `yaml:"lint_orphan_allowlist"`
+}
+
+type LocalServicesConfig struct {
+	Enabled                    bool                      `yaml:"enabled"`
+	Mode                       string                    `yaml:"mode"`
+	Provider                   string                    `yaml:"provider"`
+	ComposeFile                string                    `yaml:"compose_file"`
+	ProjectDir                 string                    `yaml:"project_dir"`
+	RequiredNetworks           []string                  `yaml:"required_networks"`
+	AutoCreateNetworks         bool                      `yaml:"auto_create_networks"`
+	StartupTimeoutSeconds      int                       `yaml:"startup_timeout_seconds"`
+	HealthcheckIntervalSeconds int                       `yaml:"healthcheck_interval_seconds"`
+	Services                   map[string]ManagedService `yaml:"services"`
+}
+
+type ManagedService struct {
+	BaseURL    string `yaml:"base_url"`
+	HealthPath string `yaml:"health_path"`
+	ModelsPath string `yaml:"models_path"`
+	Required   bool   `yaml:"required"`
+}
+
+func defaultManagedServices() map[string]ManagedService {
+	return map[string]ManagedService{
+		"qwen-coder": {
+			BaseURL:    defaultQwenCoderBaseURL,
+			HealthPath: "/health",
+			ModelsPath: "/v1/models",
+			Required:   true,
+		},
+		"nomic-embed": {
+			BaseURL:    defaultNomicEmbedBaseURL,
+			HealthPath: "/health",
+			ModelsPath: "/v1/models",
+			Required:   true,
+		},
+	}
 }
 
 func Default() *Config {
@@ -155,13 +203,13 @@ func Default() *Config {
 		Routing: RoutingConfig{
 			Default: RouteConfig{
 				Provider: "anthropic",
-				Model:    "claude-sonnet-4-6",
+				Model:    "claude-sonnet-4-6-20250514",
 			},
 		},
 		Providers: map[string]ProviderConfig{
 			"anthropic": {
 				Type:          "anthropic",
-				Model:         "claude-sonnet-4-6",
+				Model:         "claude-sonnet-4-6-20250514",
 				APIKeyEnv:     "ANTHROPIC_API_KEY",
 				ContextLength: 200000,
 			},
@@ -183,7 +231,7 @@ func Default() *Config {
 			MaxTotalFileSizeBytes: 524288,
 		},
 		Embedding: Embedding{
-			BaseURL:        "http://localhost:8081",
+			BaseURL:        defaultNomicEmbedBaseURL,
 			Model:          "nomic-embed-code",
 			BatchSize:      32,
 			TimeoutSeconds: 30,
@@ -233,6 +281,21 @@ func Default() *Config {
 			IncludeGraphHops:        true,
 			GraphHopDepth:           1,
 			LogBrainQueries:         true,
+			LogBrainOperations:      true,
+			LintStaleDays:           90,
+			LintOrphanAllowlist:     nil,
+		},
+		LocalServices: LocalServicesConfig{
+			Enabled:                    true,
+			Mode:                       localServicesModeManual,
+			Provider:                   localServicesProviderDocker,
+			ComposeFile:                "./ops/llm/docker-compose.yml",
+			ProjectDir:                 "./ops/llm",
+			RequiredNetworks:           []string{"llm-net"},
+			AutoCreateNetworks:         true,
+			StartupTimeoutSeconds:      180,
+			HealthcheckIntervalSeconds: 2,
+			Services:                   defaultManagedServices(),
 		},
 	}
 
@@ -315,6 +378,9 @@ func (c *Config) Validate() error {
 	if err := c.validateEmbedding(); err != nil {
 		return err
 	}
+	if err := c.validateLocalServices(); err != nil {
+		return err
+	}
 	if err := c.validateNumericFields(); err != nil {
 		return err
 	}
@@ -391,6 +457,17 @@ func (c *Config) ServerAddress() string {
 	return fmt.Sprintf("%s:%d", c.Server.Host, c.Server.Port)
 }
 
+func (c *Config) LocalService(name string) ManagedService {
+	if c == nil {
+		return ManagedService{}
+	}
+	return c.LocalServices.Services[name]
+}
+
+func (c *Config) QwenCoderBaseURL() string {
+	return strings.TrimRight(c.LocalService("qwen-coder").BaseURL, "/")
+}
+
 func (c *Config) normalize() {
 	if c.Providers == nil {
 		c.Providers = map[string]ProviderConfig{}
@@ -410,9 +487,85 @@ func (c *Config) normalize() {
 	}
 
 	c.Index.Exclude = appendMissingStrings(c.Index.Exclude, requiredIndexExcludePatterns...)
+	c.normalizeLocalServices()
 
 	c.ServerHost = c.Server.Host
 	c.ServerPort = c.Server.Port
+}
+
+func (c *Config) normalizeLocalServices() {
+	if c.LocalServices.Mode == "" {
+		c.LocalServices.Mode = localServicesModeManual
+	}
+	if c.LocalServices.Provider == "" {
+		c.LocalServices.Provider = localServicesProviderDocker
+	}
+	if c.LocalServices.ComposeFile == "" {
+		c.LocalServices.ComposeFile = "./ops/llm/docker-compose.yml"
+	}
+	if c.LocalServices.ProjectDir == "" {
+		c.LocalServices.ProjectDir = "./ops/llm"
+	}
+	if c.LocalServices.StartupTimeoutSeconds == 0 {
+		c.LocalServices.StartupTimeoutSeconds = 180
+	}
+	if c.LocalServices.HealthcheckIntervalSeconds == 0 {
+		c.LocalServices.HealthcheckIntervalSeconds = 2
+	}
+	if len(c.LocalServices.RequiredNetworks) == 0 {
+		c.LocalServices.RequiredNetworks = []string{"llm-net"}
+	}
+	defaults := defaultManagedServices()
+	if c.LocalServices.Services == nil {
+		c.LocalServices.Services = defaults
+		return
+	}
+	for name, svc := range defaults {
+		current, ok := c.LocalServices.Services[name]
+		if !ok {
+			c.LocalServices.Services[name] = svc
+			continue
+		}
+		if strings.TrimSpace(current.BaseURL) == "" {
+			current.BaseURL = svc.BaseURL
+		}
+		if strings.TrimSpace(current.HealthPath) == "" {
+			current.HealthPath = svc.HealthPath
+		}
+		if strings.TrimSpace(current.ModelsPath) == "" {
+			current.ModelsPath = svc.ModelsPath
+		}
+		c.LocalServices.Services[name] = current
+	}
+}
+
+func (c *Config) resolveLocalServicePaths() error {
+	if !c.LocalServices.Enabled {
+		return nil
+	}
+	if strings.TrimSpace(c.LocalServices.ComposeFile) != "" {
+		composePath := c.LocalServices.ComposeFile
+		if !filepath.IsAbs(composePath) {
+			composePath = filepath.Join(c.ProjectRoot, composePath)
+		}
+		resolved, err := expandPath(composePath)
+		if err != nil {
+			return fmt.Errorf("invalid field local_services.compose_file=%q: %w", c.LocalServices.ComposeFile, err)
+		}
+		c.LocalServices.ComposeFile = resolved
+	}
+	if strings.TrimSpace(c.LocalServices.ProjectDir) != "" {
+		projectDir := c.LocalServices.ProjectDir
+		if !filepath.IsAbs(projectDir) {
+			projectDir = filepath.Join(c.ProjectRoot, projectDir)
+		}
+		resolved, err := expandPath(projectDir)
+		if err != nil {
+			return fmt.Errorf("invalid field local_services.project_dir=%q: %w", c.LocalServices.ProjectDir, err)
+		}
+		c.LocalServices.ProjectDir = resolved
+	}
+	return nil
 }
 
 func appendMissingStrings(existing []string, values ...string) []string {
@@ -478,6 +631,10 @@ func (c *Config) validatePaths() error {
 		c.Agent.ToolResultStoreRoot = toolResultStoreRoot
 	}
 
+	if err := c.resolveLocalServicePaths(); err != nil {
+		return err
+	}
+
 	if !c.Brain.Enabled {
 		return nil
 	}
@@ -510,6 +667,18 @@ func (c *Config) validateRouting() error {
 	if _, ok := c.Providers[c.Routing.Default.Provider]; !ok {
 		return fmt.Errorf("invalid field routing.default.provider=%q (provider not configured)", c.Routing.Default.Provider)
 	}
+	if c.Routing.Fallback.Provider == "" && c.Routing.Fallback.Model == "" {
+		return nil
+	}
+	if c.Routing.Fallback.Provider == "" {
+		return errors.New("invalid field routing.fallback.provider=\"\" (must be set when routing.fallback.model is configured)")
+	}
+	if c.Routing.Fallback.Model == "" {
+		return errors.New("invalid field routing.fallback.model=\"\" (must be set when routing.fallback.provider is configured)")
+	}
+	if _, ok := c.Providers[c.Routing.Fallback.Provider]; !ok {
+		return fmt.Errorf("invalid field routing.fallback.provider=%q (provider not configured)", c.Routing.Fallback.Provider)
+	}
 	return nil
 }
 
@@ -536,29 +705,66 @@ func (c *Config) validateEmbedding() error {
 	return nil
 }
 
+func (c *Config) validateLocalServices() error {
+	if !c.LocalServices.Enabled {
+		return nil
+	}
+	mode := strings.ToLower(strings.TrimSpace(c.LocalServices.Mode))
+	switch mode {
+	case localServicesModeOff, localServicesModeManual, localServicesModeAuto:
+		c.LocalServices.Mode = mode
+	default:
+		return fmt.Errorf("invalid field local_services.mode=%q (expected off, manual, or auto)", c.LocalServices.Mode)
+	}
+	providerName := strings.ToLower(strings.TrimSpace(c.LocalServices.Provider))
+	if providerName == "" {
+		return errors.New("invalid field local_services.provider=\"\" (must not be empty)")
+	}
+	if providerName != localServicesProviderDocker {
+		return fmt.Errorf("invalid field local_services.provider=%q (expected %s)", c.LocalServices.Provider, localServicesProviderDocker)
+	}
+	c.LocalServices.Provider = providerName
+	if c.LocalServices.StartupTimeoutSeconds <= 0 {
+		return fmt.Errorf("invalid field local_services.startup_timeout_seconds=%d (must be > 0)", c.LocalServices.StartupTimeoutSeconds)
+	}
+	if c.LocalServices.HealthcheckIntervalSeconds <= 0 {
+		return fmt.Errorf("invalid field local_services.healthcheck_interval_seconds=%d (must be > 0)", c.LocalServices.HealthcheckIntervalSeconds)
+	}
+	if len(c.LocalServices.Services) == 0 {
+		return errors.New("invalid field local_services.services (must configure at least one managed service)")
+	}
+	for name, svc := range c.LocalServices.Services {
+		if strings.TrimSpace(svc.BaseURL) == "" {
+			return fmt.Errorf("invalid field local_services.services.%s.base_url=\"\" (must not be empty)", name)
+		}
+	}
+	return nil
+}
+
 func (c *Config) validateNumericFields() error {
 	for field, value := range map[string]int{
-		"index.max_rag_results":             c.Index.MaxRAGResults,
-		"index.max_tree_lines":              c.Index.MaxTreeLines,
-		"index.max_file_size_bytes":         c.Index.MaxFileSizeBytes,
-		"index.max_total_file_size_bytes":   c.Index.MaxTotalFileSizeBytes,
-		"agent.max_iterations_per_turn":     c.Agent.MaxIterationsPerTurn,
-		"agent.loop_detection_threshold":    c.Agent.LoopDetectionThreshold,
-		"agent.tool_output_max_tokens":      c.Agent.ToolOutputMaxTokens,
-		"agent.shell_timeout_seconds":       c.Agent.ShellTimeoutSeconds,
-		"context.max_assembled_tokens":      c.Context.MaxAssembledTokens,
-		"context.max_chunks":                c.Context.MaxChunks,
-		"context.max_explicit_files":        c.Context.MaxExplicitFiles,
-		"context.convention_budget_tokens":  c.Context.ConventionBudgetTokens,
-		"context.git_context_budget_tokens": c.Context.GitContextBudgetTokens,
-		"context.structural_hop_depth":      c.Context.StructuralHopDepth,
-		"context.structural_hop_budget":     c.Context.StructuralHopBudget,
-		"context.momentum_lookback_turns":   c.Context.MomentumLookbackTurns,
-		"context.compression_head_preserve": c.Context.CompressionHeadPreserve,
-		"context.compression_tail_preserve": c.Context.CompressionTailPreserve,
-		"brain.max_brain_tokens":                c.Brain.MaxBrainTokens,
-		"brain.graph_hop_depth":                 c.Brain.GraphHopDepth,
-		"agent.history_summarize_after_turns":   c.Agent.HistorySummarizeAfterTurns,
+		"index.max_rag_results":               c.Index.MaxRAGResults,
+		"index.max_tree_lines":                c.Index.MaxTreeLines,
+		"index.max_file_size_bytes":           c.Index.MaxFileSizeBytes,
+		"index.max_total_file_size_bytes":     c.Index.MaxTotalFileSizeBytes,
+		"agent.max_iterations_per_turn":       c.Agent.MaxIterationsPerTurn,
+		"agent.loop_detection_threshold":      c.Agent.LoopDetectionThreshold,
+		"agent.tool_output_max_tokens":        c.Agent.ToolOutputMaxTokens,
+		"agent.shell_timeout_seconds":         c.Agent.ShellTimeoutSeconds,
+		"context.max_assembled_tokens":        c.Context.MaxAssembledTokens,
+		"context.max_chunks":                  c.Context.MaxChunks,
+		"context.max_explicit_files":          c.Context.MaxExplicitFiles,
+		"context.convention_budget_tokens":    c.Context.ConventionBudgetTokens,
+		"context.git_context_budget_tokens":   c.Context.GitContextBudgetTokens,
+		"context.structural_hop_depth":        c.Context.StructuralHopDepth,
+		"context.structural_hop_budget":       c.Context.StructuralHopBudget,
+		"context.momentum_lookback_turns":     c.Context.MomentumLookbackTurns,
+		"context.compression_head_preserve":   c.Context.CompressionHeadPreserve,
+		"context.compression_tail_preserve":   c.Context.CompressionTailPreserve,
+		"brain.max_brain_tokens":              c.Brain.MaxBrainTokens,
+		"brain.graph_hop_depth":               c.Brain.GraphHopDepth,
+		"brain.lint_stale_days":               c.Brain.LintStaleDays,
+		"agent.history_summarize_after_turns": c.Agent.HistorySummarizeAfterTurns,
 	} {
 		if value < 0 {
 			return fmt.Errorf("invalid field %s=%d (must be >= 0)", field, value)

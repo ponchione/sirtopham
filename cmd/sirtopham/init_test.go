@@ -59,6 +59,11 @@ func TestRunInitUsesProjectNamedArtifacts(t *testing.T) {
 	if !strings.Contains(string(configData), "**/.eyebox/**") {
 		t.Fatalf("expected eyebox.yaml to exclude .eyebox, got:\n%s", string(configData))
 	}
+	for _, want := range []string{"local_services:", "compose_file: ./ops/llm/docker-compose.yml", "base_url: http://localhost:12434", "base_url: http://localhost:12435"} {
+		if !strings.Contains(string(configData), want) {
+			t.Fatalf("expected eyebox.yaml to contain %q, got:\n%s", want, string(configData))
+		}
+	}
 
 	gitignoreData, err := os.ReadFile(filepath.Join(projectRoot, ".gitignore"))
 	if err != nil {

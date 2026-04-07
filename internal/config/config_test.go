@@ -69,6 +69,12 @@ func TestLoadMissingFileReturnsDefaults(t *testing.T) {
 	if cfg.DatabasePath() == "" {
 		t.Fatal("DatabasePath() returned empty string")
 	}
+	if !cfg.Brain.LogBrainOperations {
+		t.Fatal("Brain.LogBrainOperations = false, want true")
+	}
+	if cfg.Brain.LintStaleDays != 90 {
+		t.Fatalf("Brain.LintStaleDays = %d, want 90", cfg.Brain.LintStaleDays)
+	}
 }
 
 func TestLoadPartialYAMLOverridesSpecifiedFields(t *testing.T) {
@@ -118,6 +124,39 @@ func TestLoadPartialYAMLOverridesSpecifiedFields(t *testing.T) {
 	if cfg.Brain.Enabled {
 		t.Fatal("Brain.Enabled = true, want false")
 	}
+	if cfg.Brain.LintStaleDays != 90 {
+		t.Fatalf("Brain.LintStaleDays = %d, want default 90", cfg.Brain.LintStaleDays)
+	}
+}
+
+func TestLoadAllowsConfiguredFallback(t *testing.T) {
+	projectRoot := t.TempDir()
+	ensureDir(t, filepath.Join(projectRoot, ".brain"))
+	configPath := filepath.Join(t.TempDir(), "sirtopham.yaml")
+	content := "project_root: \"" + projectRoot + "\"\n" +
+		"routing:\n" +
+		"  default:\n" +
+		"    provider: anthropic\n" +
+		"    model: claude-sonnet-4-6-20250514\n" +
+		"  fallback:\n" +
+		"    provider: openrouter\n" +
+		"    model: anthropic/claude-sonnet-4\n"
+
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+
+	if got := cfg.Routing.Fallback.Provider; got != "openrouter" {
+		t.Fatalf("Routing.Fallback.Provider = %q, want openrouter", got)
+	}
+	if got := cfg.Routing.Fallback.Model; got != "anthropic/claude-sonnet-4" {
+		t.Fatalf("Routing.Fallback.Model = %q, want anthropic/claude-sonnet-4", got)
+	}
 }
 
 func TestLoadAppendsRequiredIndexExcludesWhenCustomListOmitsThem(t *testing.T) {
@@ -158,8 +197,14 @@ func TestLoadProvidesEmbeddingDefaults(t *testing.T) {
 		t.Fatalf("Load returned error: %v", err)
 	}
 
-	if cfg.Embedding.BaseURL != "http://localhost:8081" {
-		t.Fatalf("Embedding.BaseURL = %q, want http://localhost:8081", cfg.Embedding.BaseURL)
+	if cfg.Embedding.BaseURL != "http://localhost:12435" {
+		t.Fatalf("Embedding.BaseURL = %q, want http://localhost:12435", cfg.Embedding.BaseURL)
+	}
+	if cfg.LocalServices.Mode != "manual" {
+		t.Fatalf("LocalServices.Mode = %q, want manual", cfg.LocalServices.Mode)
+	}
+	if got := cfg.LocalServices.Services["qwen-coder"].BaseURL; got != "http://localhost:12434" {
+		t.Fatalf("LocalServices.Services[qwen-coder].BaseURL = %q, want http://localhost:12434", got)
 	}
 	if cfg.Embedding.Model != "nomic-embed-code" {
 		t.Fatalf("Embedding.Model = %q, want nomic-embed-code", cfg.Embedding.Model)
@@ -199,8 +244,8 @@ func TestLoadAppliesPartialEmbeddingOverrides(t *testing.T) {
 	if cfg.Embedding.BatchSize != 64 {
 		t.Fatalf("Embedding.BatchSize = %d, want 64", cfg.Embedding.BatchSize)
 	}
-	if cfg.Embedding.BaseURL != "http://localhost:8081" {
-		t.Fatalf("Embedding.BaseURL = %q, want default http://localhost:8081", cfg.Embedding.BaseURL)
+	if cfg.Embedding.BaseURL != "http://localhost:12435" {
+		t.Fatalf("Embedding.BaseURL = %q, want default http://localhost:12435", cfg.Embedding.BaseURL)
 	}
 	if cfg.Embedding.TimeoutSeconds != 30 {
 		t.Fatalf("Embedding.TimeoutSeconds = %d, want default 30", cfg.Embedding.TimeoutSeconds)
@@ -220,18 +265,18 @@ func TestLoadRejectsInvalidEmbeddingConfig(t *testing.T) {
 		wantSubstr string
 	}{
 		{
-			name: "empty base url",
-			yaml: "project_root: \"" + projectRoot + "\"\nembedding:\n  base_url: \"\"\n",
+			name:       "empty base url",
+			yaml:       "project_root: \"" + projectRoot + "\"\nembedding:\n  base_url: \"\"\n",
 			wantSubstr: "embedding.base_url",
 		},
 		{
-			name: "zero batch size",
-			yaml: "project_root: \"" + projectRoot + "\"\nembedding:\n  batch_size: 0\n",
+			name:       "zero batch size",
+			yaml:       "project_root: \"" + projectRoot + "\"\nembedding:\n  batch_size: 0\n",
 			wantSubstr: "embedding.batch_size=0",
 		},
 		{
-			name: "zero timeout",
-			yaml: "project_root: \"" + projectRoot + "\"\nembedding:\n  timeout_seconds: 0\n",
+			name:       "zero timeout",
+			yaml:       "project_root: \"" + projectRoot + "\"\nembedding:\n  timeout_seconds: 0\n",
 			wantSubstr: "embedding.timeout_seconds=0",
 		},
 	}
@@ -271,6 +316,21 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 			name:       "unknown provider type",
 			yaml:       "project_root: \"" + projectRoot + "\"\nbrain:\n  vault_path: \"" + projectRoot + "\"\nproviders:\n  anthropic:\n    type: mystery\n",
 			wantSubstr: "providers.anthropic.type=\"mystery\"",
+		},
+		{
+			name:       "fallback provider without model",
+			yaml:       "project_root: \"" + projectRoot + "\"\nbrain:\n  vault_path: \"" + projectRoot + "\"\nrouting:\n  default:\n    provider: anthropic\n    model: claude-sonnet-4-6\n  fallback:\n    provider: openrouter\n",
+			wantSubstr: "routing.fallback.model",
+		},
+		{
+			name:       "fallback model without provider",
+			yaml:       "project_root: \"" + projectRoot + "\"\nbrain:\n  vault_path: \"" + projectRoot + "\"\nrouting:\n  default:\n    provider: anthropic\n    model: claude-sonnet-4-6\n  fallback:\n    model: anthropic/claude-sonnet-4\n",
+			wantSubstr: "routing.fallback.provider",
+		},
+		{
+			name:       "fallback provider must be configured",
+			yaml:       "project_root: \"" + projectRoot + "\"\nbrain:\n  vault_path: \"" + projectRoot + "\"\nrouting:\n  default:\n    provider: anthropic\n    model: claude-sonnet-4-6\n  fallback:\n    provider: missing\n    model: foo\n",
+			wantSubstr: "routing.fallback.provider",
 		},
 		{
 			name:       "negative token budget",

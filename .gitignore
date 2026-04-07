@@ -30,3 +30,7 @@ vendor/
 .brain
 .sirtopham
 /sirtopham
+/ops/llm/models/*
+!/ops/llm/models/.gitignore
+/ops/llm/logs/*
+!/ops/llm/logs/.gitkeep
