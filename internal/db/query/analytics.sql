@@ -37,7 +37,7 @@ SELECT
     COUNT(*) AS total_turns,
     SUM(agent_used_search_tool) AS reactive_search_turns,
     AVG(context_hit_rate) AS avg_hit_rate,
-    AVG(budget_used) AS avg_budget_used
+    AVG(CAST(budget_used AS REAL) * 100.0 / NULLIF(budget_total, 0)) AS avg_budget_used
 FROM context_reports
 WHERE conversation_id = ?;
 

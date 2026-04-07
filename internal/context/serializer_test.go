@@ -41,6 +41,13 @@ func TestMarkdownSerializerGroupsChunksAnnotatesSeenFilesAndIsDeterministic(t *t
 			RelationshipType: "upstream",
 			Depth:            1,
 		}},
+		SelectedBrainHits: []BrainHit{{
+			DocumentPath: "notes/auth.md",
+			Title:        "Auth decisions",
+			Snippet:      "Use the vault note for durable auth rationale.",
+			MatchScore:   0.83,
+			MatchMode:    "keyword",
+		}},
 		ConventionText: "Tests use table-driven style.\nErrors wrap context.",
 		GitContext:     "abc123 fix auth\ndef456 add tests",
 	}
@@ -70,6 +77,12 @@ func TestMarkdownSerializerGroupsChunksAnnotatesSeenFilesAndIsDeterministic(t *t
 	}
 	if !strings.Contains(content, "## Structural Context") {
 		t.Fatalf("content missing structural context section\n%s", content)
+	}
+	if !strings.Contains(content, "## Project Brain") {
+		t.Fatalf("content missing project brain section\n%s", content)
+	}
+	if !strings.Contains(content, "notes/auth.md") {
+		t.Fatalf("content missing brain path\n%s", content)
 	}
 	if strings.Count(content, "```")%2 != 0 {
 		t.Fatalf("content has unbalanced code fences\n%s", content)

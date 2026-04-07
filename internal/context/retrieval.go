@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -38,6 +39,7 @@ type RetrievalOrchestrator struct {
 	searcher             codeintel.Searcher
 	graph                codeintel.GraphStore
 	conventions          ConventionSource
+	brain                BrainSearcher
 	projectRoot          string
 	fileReader           fileReaderFunc
 	gitRunner            gitRunnerFunc
@@ -45,8 +47,8 @@ type RetrievalOrchestrator struct {
 	maxExplicitFileBytes int
 }
 
-// NewRetrievalOrchestrator constructs the concrete Slice 4 retriever.
-func NewRetrievalOrchestrator(searcher codeintel.Searcher, graph codeintel.GraphStore, conventions ConventionSource, projectRoot string) *RetrievalOrchestrator {
+// NewRetrievalOrchestrator constructs the concrete retriever used by context assembly.
+func NewRetrievalOrchestrator(searcher codeintel.Searcher, graph codeintel.GraphStore, conventions ConventionSource, brain BrainSearcher, projectRoot string) *RetrievalOrchestrator {
 	if conventions == nil {
 		conventions = NoopConventionSource{}
 	}
@@ -54,6 +56,7 @@ func NewRetrievalOrchestrator(searcher codeintel.Searcher, graph codeintel.Graph
 		searcher:             searcher,
 		graph:                graph,
 		conventions:          conventions,
+		brain:                brain,
 		projectRoot:          projectRoot,
 		fileReader:           os.ReadFile,
 		gitRunner:            defaultGitRunner,
@@ -75,6 +78,7 @@ func (o *RetrievalOrchestrator) Retrieve(ctx stdctx.Context, needs *ContextNeeds
 	var (
 		ragHits        []RAGHit
 		graphHits      []GraphHit
+		brainHits      []BrainHit
 		fileResults    []FileResult
 		conventionText string
 		gitContext     string
@@ -127,6 +131,21 @@ func (o *RetrievalOrchestrator) Retrieve(ctx stdctx.Context, needs *ContextNeeds
 		}()
 	}
 
+	if len(queries) > 0 && o.brain != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			pathCtx, cancel := o.pathContext(ctx)
+			defer cancel()
+			hits, err := o.retrieveBrainSearch(pathCtx, queries)
+			if err != nil {
+				slog.Warn("context retrieval brain search failed", "error", err)
+				return
+			}
+			brainHits = hits
+		}()
+	}
+
 	if needs.IncludeConventions {
 		wg.Add(1)
 		go func() {
@@ -161,7 +180,7 @@ func (o *RetrievalOrchestrator) Retrieve(ctx stdctx.Context, needs *ContextNeeds
 
 	results := &RetrievalResults{
 		RAGHits:        ragHits,
-		BrainHits:      []BrainHit{},
+		BrainHits:      brainHits,
 		GraphHits:      graphHits,
 		FileResults:    fileResults,
 		ConventionText: conventionText,
@@ -212,6 +231,53 @@ func (o *RetrievalOrchestrator) retrieveSemanticSearch(ctx stdctx.Context, queri
 		})
 	}
 	return hits, nil
+}
+
+func (o *RetrievalOrchestrator) retrieveBrainSearch(ctx stdctx.Context, queries []string) ([]BrainHit, error) {
+	if o.brain == nil || len(queries) == 0 {
+		return nil, nil
+	}
+
+	seen := make(map[string]BrainHit)
+	for _, query := range queries {
+		query = strings.TrimSpace(query)
+		if query == "" {
+			continue
+		}
+		hits, err := o.brain.SearchKeyword(ctx, query)
+		if err != nil {
+			return nil, err
+		}
+		for _, hit := range hits {
+			path := strings.TrimSpace(hit.Path)
+			if path == "" {
+				continue
+			}
+			candidate := BrainHit{
+				DocumentPath: path,
+				Title:        filepath.Base(path),
+				Snippet:      strings.TrimSpace(hit.Snippet),
+				MatchScore:   hit.Score,
+				MatchMode:    "keyword",
+			}
+			existing, ok := seen[path]
+			if !ok || candidate.MatchScore > existing.MatchScore {
+				seen[path] = candidate
+			}
+		}
+	}
+
+	results := make([]BrainHit, 0, len(seen))
+	for _, hit := range seen {
+		results = append(results, hit)
+	}
+	sort.SliceStable(results, func(i, j int) bool {
+		if results[i].MatchScore != results[j].MatchScore {
+			return results[i].MatchScore > results[j].MatchScore
+		}
+		return results[i].DocumentPath < results[j].DocumentPath
+	})
+	return results, nil
 }
 
 func (o *RetrievalOrchestrator) retrieveExplicitFiles(ctx stdctx.Context, explicitFiles []string, cfg config.ContextConfig) ([]FileResult, error) {

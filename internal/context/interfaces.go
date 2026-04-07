@@ -3,6 +3,7 @@ package context
 import (
 	stdctx "context"
 
+	"github.com/ponchione/sirtopham/internal/brain"
 	"github.com/ponchione/sirtopham/internal/config"
 	"github.com/ponchione/sirtopham/internal/db"
 )
@@ -33,6 +34,12 @@ type MomentumTracker interface {
 // Implementations may return an empty string when conventions are unavailable.
 type ConventionSource interface {
 	Load(ctx stdctx.Context) (string, error)
+}
+
+// BrainSearcher provides the narrow brain search surface context assembly needs
+// for proactive retrieval.
+type BrainSearcher interface {
+	SearchKeyword(ctx stdctx.Context, query string) ([]brain.SearchHit, error)
 }
 
 // Retriever executes the retrieval phase and returns the collected pre-budget

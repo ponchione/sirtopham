@@ -89,6 +89,8 @@ func (h *ConfigHandler) handleGetConfig(w http.ResponseWriter, r *http.Request) 
 		defaultModel = h.cfg.Routing.Default.Model
 	}
 
+	providerNames := h.cfg.ProviderNamesForSurfaces()
+
 	var providers []providerInfo
 	if h.runtime != nil {
 		models, modelErr := h.runtime.Models(r.Context())
@@ -101,11 +103,15 @@ func (h *ConfigHandler) handleGetConfig(w http.ResponseWriter, r *http.Request) 
 			if authErr != nil {
 				authStatuses = nil
 			}
-			providers = h.buildProviderList(models, authStatuses, health)
+			providers = h.buildProviderList(providerNames, models, authStatuses, health)
 		}
 	}
 	if providers == nil {
-		for name, pc := range h.providers {
+		for _, name := range providerNames {
+			pc, ok := h.providers[name]
+			if !ok {
+				continue
+			}
 			pi := providerInfo{Name: name, Type: pc.Type, Healthy: true, Status: "available"}
 			if pc.Model != "" {
 				pi.Models = []string{pc.Model}
@@ -133,8 +139,13 @@ func (h *ConfigHandler) handleGetConfig(w http.ResponseWriter, r *http.Request) 
 }
 
 func (h *ConfigHandler) availableModelsByProvider(ctx context.Context) map[string]map[string]struct{} {
-	available := make(map[string]map[string]struct{}, len(h.providers))
-	for name, pc := range h.providers {
+	providerNames := h.cfg.ProviderNamesForSurfaces()
+	available := make(map[string]map[string]struct{}, len(providerNames))
+	for _, name := range providerNames {
+		pc, ok := h.providers[name]
+		if !ok {
+			continue
+		}
 		models := map[string]struct{}{}
 		if pc.Model != "" {
 			models[pc.Model] = struct{}{}
@@ -160,9 +171,9 @@ func (h *ConfigHandler) availableModelsByProvider(ctx context.Context) map[strin
 	return available
 }
 
-func (h *ConfigHandler) buildProviderList(models []provider.Model, authStatuses map[string]*provider.AuthStatus, health map[string]*routerpkg.ProviderHealth) []providerInfo {
+func (h *ConfigHandler) buildProviderList(providerNames []string, models []provider.Model, authStatuses map[string]*provider.AuthStatus, health map[string]*routerpkg.ProviderHealth) []providerInfo {
 	provModels := map[string][]string{}
-	for name := range h.providers {
+	for _, name := range providerNames {
 		provModels[name] = []string{}
 	}
 	for _, m := range models {
@@ -176,7 +187,11 @@ func (h *ConfigHandler) buildProviderList(models []provider.Model, authStatuses 
 	}
 
 	var result []providerInfo
-	for name, pc := range h.providers {
+	for _, name := range providerNames {
+		pc, ok := h.providers[name]
+		if !ok {
+			continue
+		}
 		lastError := ""
 		healthy := false
 		status := "unavailable"
@@ -274,7 +289,11 @@ func (h *ConfigHandler) handleProviders(w http.ResponseWriter, r *http.Request) 
 	}
 
 	var result []providerStatus
-	for name, pc := range h.providers {
+	for _, name := range h.cfg.ProviderNamesForSurfaces() {
+		pc, ok := h.providers[name]
+		if !ok {
+			continue
+		}
 		status := "unavailable"
 		healthy := false
 		lastError := ""
@@ -324,7 +343,11 @@ func (h *ConfigHandler) handleAuthProviders(w http.ResponseWriter, r *http.Reque
 	}
 
 	var result []authProviderStatus
-	for name, pc := range h.providers {
+	for _, name := range h.cfg.ProviderNamesForSurfaces() {
+		pc, ok := h.providers[name]
+		if !ok {
+			continue
+		}
 		status := "unavailable"
 		healthy := false
 		lastError := ""

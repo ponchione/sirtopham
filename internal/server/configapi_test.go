@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -323,6 +324,69 @@ func TestConfigEndpointGroupsModelsByProvider(t *testing.T) {
 	// OpenAI should only have gpt model.
 	if len(body.Providers[1].Models) != 1 || body.Providers[1].Models[0] != "gpt-4o" {
 		t.Fatalf("openai models in /api/config: %v", body.Providers[1].Models)
+	}
+}
+
+func TestConfigAndProviderEndpointsHideDefaultInjectedProvidersWhenConfigSpecifiedOnes(t *testing.T) {
+	cfg := config.Default()
+	cfg.ProjectRoot = t.TempDir()
+	cfg.Brain.Enabled = false
+	cfg.ConfiguredProviders = []string{"codex"}
+	cfg.Providers = map[string]config.ProviderConfig{
+		"anthropic":  {Type: "anthropic", Model: "claude-sonnet-4-20250514"},
+		"openrouter": {Type: "openai-compatible", Model: "anthropic/claude-sonnet-4"},
+		"codex":      {Type: "codex", Model: "gpt-5.4-mini"},
+	}
+
+	runtime := &stubRuntimeInspector{models: []provider.Model{
+		{ID: "claude-sonnet-4-20250514", Provider: "anthropic"},
+		{ID: "anthropic/claude-sonnet-4", Provider: "openrouter"},
+		{ID: "gpt-5.4-mini", Provider: "codex"},
+	}, authStatuses: map[string]*provider.AuthStatus{
+		"codex": {Provider: "codex", Mode: "oauth", Source: "sirtopham_store", HasAccessToken: true},
+	}, health: map[string]*router.ProviderHealth{
+		"anthropic":  {Healthy: true},
+		"openrouter": {Healthy: true},
+		"codex":      {Healthy: true},
+	}}
+
+	srv := server.New(server.Config{Host: "127.0.0.1", Port: 0}, newTestLogger())
+	server.NewConfigHandler(srv, cfg, runtime, nil, newTestLogger())
+	_, base := startServer(t, srv)
+
+	for _, path := range []string{"/api/config", "/api/providers", "/api/auth/providers"} {
+		resp, err := http.Get(base + path)
+		if err != nil {
+			t.Fatalf("request %s failed: %v", path, err)
+		}
+		defer resp.Body.Close()
+		var body struct {
+			Providers []struct {
+				Name string `json:"name"`
+			} `json:"providers"`
+		}
+		var names []string
+		if path == "/api/config" {
+			if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+				t.Fatalf("decode %s: %v", path, err)
+			}
+			for _, provider := range body.Providers {
+				names = append(names, provider.Name)
+			}
+		} else {
+			var entries []struct {
+				Name string `json:"name"`
+			}
+			if err := json.NewDecoder(resp.Body).Decode(&entries); err != nil {
+				t.Fatalf("decode %s: %v", path, err)
+			}
+			for _, provider := range entries {
+				names = append(names, provider.Name)
+			}
+		}
+		if !slices.Equal(names, []string{"codex"}) {
+			t.Fatalf("providers for %s = %#v, want [codex]", path, names)
+		}
 	}
 }
 

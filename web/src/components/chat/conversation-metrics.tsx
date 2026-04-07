@@ -100,7 +100,7 @@ export function ConversationMetricsPanel({ conversationId, refreshKey }: Convers
             {ctxQ.reactive_search_count} / {ctxQ.total_turns}
           </div>
           <div className="text-muted-foreground">Avg budget used</div>
-          <div className="text-right">{(ctxQ.avg_budget_used_pct * 100).toFixed(0)}%</div>
+          <div className="text-right">{ctxQ.avg_budget_used_pct.toFixed(0)}%</div>
         </div>
       </CollapsibleSection>
     </div>

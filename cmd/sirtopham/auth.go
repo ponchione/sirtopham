@@ -95,8 +95,9 @@ func runProviderDiagnostics(cmd *cobra.Command, configPath string, jsonOutput bo
 }
 
 func collectProviderAuthReports(ctx context.Context, cfg *appconfig.Config, includePing bool) []authProviderReport {
-	names := make([]string, 0, len(cfg.Providers))
-	for name := range cfg.Providers {
+	providerNames := cfg.ProviderNamesForSurfaces()
+	names := make([]string, 0, len(providerNames))
+	for _, name := range providerNames {
 		names = append(names, name)
 	}
 	sort.Strings(names)

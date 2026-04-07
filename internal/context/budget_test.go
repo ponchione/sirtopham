@@ -31,15 +31,17 @@ func TestPriorityBudgetManagerComputesBudgetTotal(t *testing.T) {
 func TestPriorityBudgetManagerFillsInPriorityOrderAndTracksBreakdown(t *testing.T) {
 	manager := PriorityBudgetManager{}
 	file := FileResult{FilePath: "internal/auth/middleware.go", Content: strings.Repeat("f", 40)}
+	brain := BrainHit{DocumentPath: "notes/auth.md", Title: "Auth decisions", Snippet: strings.Repeat("b", 40), MatchScore: 0.91, MatchMode: "keyword"}
 	ragTop := RAGHit{ChunkID: "rag-top", FilePath: "internal/auth/service.go", Name: "ValidateToken", Description: "Validates auth tokens.", Body: strings.Repeat("r", 32), SimilarityScore: 0.92, HitCount: 3}
 	ragLow := RAGHit{ChunkID: "rag-low", FilePath: "internal/auth/helper.go", Name: "Helper", Description: "Helper code.", Body: strings.Repeat("l", 32), SimilarityScore: 0.88, HitCount: 1}
 	graph := GraphHit{ChunkID: "graph-1", FilePath: "internal/auth/handler.go", SymbolName: "AuthHandler", RelationshipType: "upstream"}
 	conventions := "Tests use table-driven style."
 	git := "abc123 fix auth"
 
-	budgetLimit := estimateFileResultTokens(file) + estimateRAGHitTokens(ragTop)
+	budgetLimit := estimateFileResultTokens(file) + estimateBrainHitTokens(brain) + estimateRAGHitTokens(ragTop)
 	result, err := manager.Fit(&RetrievalResults{
 		FileResults:    []FileResult{file},
+		BrainHits:      []BrainHit{brain},
 		RAGHits:        []RAGHit{ragTop, ragLow},
 		GraphHits:      []GraphHit{graph},
 		ConventionText: conventions,
@@ -56,6 +58,9 @@ func TestPriorityBudgetManagerFillsInPriorityOrderAndTracksBreakdown(t *testing.
 
 	if len(result.SelectedFileResults) != 1 {
 		t.Fatalf("SelectedFileResults = %v, want 1", result.SelectedFileResults)
+	}
+	if len(result.SelectedBrainHits) != 1 || result.SelectedBrainHits[0].DocumentPath != "notes/auth.md" {
+		t.Fatalf("SelectedBrainHits = %v, want notes/auth.md", result.SelectedBrainHits)
 	}
 	if len(result.SelectedRAGHits) != 1 || result.SelectedRAGHits[0].ChunkID != "rag-top" {
 		t.Fatalf("SelectedRAGHits = %v, want rag-top only", result.SelectedRAGHits)
@@ -83,6 +88,9 @@ func TestPriorityBudgetManagerFillsInPriorityOrderAndTracksBreakdown(t *testing.
 	}
 	if result.BudgetBreakdown["explicit_files"] != estimateFileResultTokens(file) {
 		t.Fatalf("explicit_files breakdown = %d, want %d", result.BudgetBreakdown["explicit_files"], estimateFileResultTokens(file))
+	}
+	if result.BudgetBreakdown["brain"] != estimateBrainHitTokens(brain) {
+		t.Fatalf("brain breakdown = %d, want %d", result.BudgetBreakdown["brain"], estimateBrainHitTokens(brain))
 	}
 	if result.BudgetBreakdown["rag"] != estimateRAGHitTokens(ragTop) {
 		t.Fatalf("rag breakdown = %d, want %d", result.BudgetBreakdown["rag"], estimateRAGHitTokens(ragTop))
@@ -120,6 +128,10 @@ func estimateFileResultTokens(file FileResult) int {
 
 func estimateRAGHitTokens(hit RAGHit) int {
 	return approxTokens(hit.FilePath + "\n" + hit.Description + "\n" + hit.Body)
+}
+
+func estimateBrainHitTokens(hit BrainHit) int {
+	return approxTokens(hit.DocumentPath + "\n" + hit.Title + "\n" + hit.Snippet)
 }
 
 func approxTokens(text string) int {
