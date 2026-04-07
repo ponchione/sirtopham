@@ -30,8 +30,17 @@ type RouteTarget struct {
 // RouterConfig holds the routing configuration parsed from the routing section
 // of sirtopham.yaml.
 type RouterConfig struct {
-	Default RouteTarget `yaml:"default"`
+	Default  RouteTarget `yaml:"default"`
+	Fallback RouteTarget `yaml:"fallback"`
 }
+
+type errorClass int
+
+const (
+	errorClassAuth errorClass = iota
+	errorClassRetriable
+	errorClassFatal
+)
 
 // ProviderHealth tracks the health status of a registered provider.
 type ProviderHealth struct {
@@ -151,8 +160,11 @@ func (r *Router) Complete(ctx context.Context, req *provider.Request) (*provider
 
 	r.markFailure(targetName, callErr)
 
-	if provider.IsAuthenticationFailure(callErr) {
+	switch classifyError(callErr) {
+	case errorClassAuth:
 		return nil, wrapAuthError(targetName, callErr)
+	case errorClassRetriable:
+		return r.completeWithFallback(ctx, req, targetName, callErr)
 	}
 	return nil, callErr
 }
@@ -175,8 +187,11 @@ func (r *Router) Stream(ctx context.Context, req *provider.Request) (<-chan prov
 
 	r.markFailure(targetName, callErr)
 
-	if provider.IsAuthenticationFailure(callErr) {
+	switch classifyError(callErr) {
+	case errorClassAuth:
 		return nil, wrapAuthError(targetName, callErr)
+	case errorClassRetriable:
+		return r.streamWithFallback(ctx, req, targetName, callErr)
 	}
 	return nil, callErr
 }
@@ -304,6 +319,108 @@ func cloneRequestWithModel(req *provider.Request, model string) *provider.Reques
 	cloned := *req
 	cloned.Model = model
 	return &cloned
+}
+
+func classifyError(err error) errorClass {
+	if provider.IsAuthenticationFailure(err) {
+		return errorClassAuth
+	}
+
+	var pe *provider.ProviderError
+	if errors.As(err, &pe) && pe.Retriable {
+		return errorClassRetriable
+	}
+
+	return errorClassFatal
+}
+
+func (r *Router) fallbackTarget(primaryProvider string) (provider.Provider, string, string, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	fallback := r.config.Fallback
+	if fallback.Provider == "" || fallback.Model == "" || fallback.Provider == primaryProvider {
+		return nil, "", "", false
+	}
+
+	p, ok := r.providers[fallback.Provider]
+	if !ok {
+		return nil, fallback.Provider, fallback.Model, false
+	}
+
+	return p, fallback.Provider, fallback.Model, true
+}
+
+func (r *Router) completeWithFallback(ctx context.Context, req *provider.Request, primaryProvider string, primaryErr error) (*provider.Response, error) {
+	fallbackProvider, fallbackName, fallbackModel, ok := r.fallbackTarget(primaryProvider)
+	if fallbackName == "" {
+		return nil, primaryErr
+	}
+	if !ok {
+		return nil, fmt.Errorf("primary provider failed and fallback provider not available: %s: %w", fallbackName, primaryErr)
+	}
+
+	r.logger.Warn("primary provider failed, attempting fallback",
+		"primary_provider", primaryProvider,
+		"error", primaryErr,
+		"fallback_provider", fallbackName,
+	)
+
+	callReq := cloneRequestWithModel(req, fallbackModel)
+	resp, err := fallbackProvider.Complete(ctx, callReq)
+	if err == nil {
+		r.markSuccess(fallbackName)
+		return resp, nil
+	}
+
+	r.markFailure(fallbackName, err)
+	if classifyError(err) == errorClassAuth {
+		return nil, wrapAuthError(fallbackName, err)
+	}
+
+	r.logger.Warn("both primary and fallback providers failed",
+		"primary_provider", primaryProvider,
+		"primary_error", primaryErr,
+		"fallback_provider", fallbackName,
+		"fallback_error", err,
+	)
+	return nil, err
+}
+
+func (r *Router) streamWithFallback(ctx context.Context, req *provider.Request, primaryProvider string, primaryErr error) (<-chan provider.StreamEvent, error) {
+	fallbackProvider, fallbackName, fallbackModel, ok := r.fallbackTarget(primaryProvider)
+	if fallbackName == "" {
+		return nil, primaryErr
+	}
+	if !ok {
+		return nil, fmt.Errorf("primary provider failed and fallback provider not available: %s: %w", fallbackName, primaryErr)
+	}
+
+	r.logger.Warn("primary provider failed, attempting fallback",
+		"primary_provider", primaryProvider,
+		"error", primaryErr,
+		"fallback_provider", fallbackName,
+	)
+
+	callReq := cloneRequestWithModel(req, fallbackModel)
+	ch, err := fallbackProvider.Stream(ctx, callReq)
+	if err == nil {
+		r.markSuccess(fallbackName)
+		return ch, nil
+	}
+
+	r.markFailure(fallbackName, err)
+	if classifyError(err) == errorClassAuth {
+		return nil, wrapAuthError(fallbackName, err)
+	}
+
+	r.logger.Warn("both primary and fallback providers failed",
+		"primary_provider", primaryProvider,
+		"primary_error", primaryErr,
+		"fallback_provider", fallbackName,
+		"fallback_error", err,
+	)
+	return nil, err
 }
 
 // wrapAuthError wraps an error with an actionable authentication failure message.

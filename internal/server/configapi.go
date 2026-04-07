@@ -51,10 +51,12 @@ func NewConfigHandler(s *Server, cfg *config.Config, runtime ProviderRuntimeInsp
 // ── GET /api/config ──────────────────────────────────────────────────
 
 type configResponse struct {
-	DefaultProvider string         `json:"default_provider"`
-	DefaultModel    string         `json:"default_model"`
-	Agent           agentSettings  `json:"agent"`
-	Providers       []providerInfo `json:"providers"`
+	DefaultProvider  string         `json:"default_provider"`
+	DefaultModel     string         `json:"default_model"`
+	FallbackProvider string         `json:"fallback_provider"`
+	FallbackModel    string         `json:"fallback_model"`
+	Agent            agentSettings  `json:"agent"`
+	Providers        []providerInfo `json:"providers"`
 }
 
 type agentSettings struct {
@@ -113,8 +115,10 @@ func (h *ConfigHandler) handleGetConfig(w http.ResponseWriter, r *http.Request) 
 	}
 
 	writeJSON(w, http.StatusOK, configResponse{
-		DefaultProvider: defaultProvider,
-		DefaultModel:    defaultModel,
+		DefaultProvider:  defaultProvider,
+		DefaultModel:     defaultModel,
+		FallbackProvider: h.cfg.Routing.Fallback.Provider,
+		FallbackModel:    h.cfg.Routing.Fallback.Model,
 		Agent: agentSettings{
 			MaxIterations:            h.cfg.Agent.MaxIterationsPerTurn,
 			ExtendedThinking:         h.cfg.Agent.ExtendedThinking,
@@ -126,6 +130,34 @@ func (h *ConfigHandler) handleGetConfig(w http.ResponseWriter, r *http.Request) 
 		},
 		Providers: providers,
 	})
+}
+
+func (h *ConfigHandler) availableModelsByProvider(ctx context.Context) map[string]map[string]struct{} {
+	available := make(map[string]map[string]struct{}, len(h.providers))
+	for name, pc := range h.providers {
+		models := map[string]struct{}{}
+		if pc.Model != "" {
+			models[pc.Model] = struct{}{}
+		}
+		available[name] = models
+	}
+	if h.runtime == nil {
+		return available
+	}
+	models, err := h.runtime.Models(ctx)
+	if err != nil {
+		return available
+	}
+	for _, m := range models {
+		if m.Provider == "" {
+			continue
+		}
+		if _, ok := available[m.Provider]; !ok {
+			continue
+		}
+		available[m.Provider][m.ID] = struct{}{}
+	}
+	return available
 }
 
 func (h *ConfigHandler) buildProviderList(models []provider.Model, authStatuses map[string]*provider.AuthStatus, health map[string]*routerpkg.ProviderHealth) []providerInfo {
@@ -192,6 +224,18 @@ func (h *ConfigHandler) handlePutConfig(w http.ResponseWriter, r *http.Request) 
 	}
 	if req.DefaultModel != nil {
 		model = *req.DefaultModel
+	}
+	availableModels := h.availableModelsByProvider(r.Context())
+	providerModels, ok := availableModels[provider]
+	if !ok {
+		writeError(w, http.StatusBadRequest, "unknown provider: "+provider)
+		return
+	}
+	if model != "" && len(providerModels) > 0 {
+		if _, ok := providerModels[model]; !ok {
+			writeError(w, http.StatusBadRequest, "model "+model+" not available on provider "+provider)
+			return
+		}
 	}
 	h.defaults.Set(provider, model)
 

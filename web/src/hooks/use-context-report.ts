@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import type { ContextReport } from "@/types/metrics";
 
 export interface UseContextReportReturn {
@@ -8,9 +8,12 @@ export interface UseContextReportReturn {
   error: string | null;
   currentTurn: number;
   totalTurns: number;
+  isFollowingLatest: boolean;
   goToTurn: (turn: number) => void;
   nextTurn: () => void;
   prevTurn: () => void;
+  jumpToLatest: () => void;
+  setHistoryTurns: (totalTurns: number) => void;
   /** Accept a real-time context_debug event from WebSocket. */
   setLiveReport: (report: ContextReport) => void;
 }
@@ -21,6 +24,16 @@ export function useContextReport(conversationId?: string): UseContextReportRetur
   const [error, setError] = useState<string | null>(null);
   const [currentTurn, setCurrentTurn] = useState(0);
   const [totalTurns, setTotalTurns] = useState(0);
+  const [isFollowingLatest, setIsFollowingLatest] = useState(true);
+
+  useEffect(() => {
+    setReport(null);
+    setLoading(false);
+    setError(null);
+    setCurrentTurn(0);
+    setTotalTurns(0);
+    setIsFollowingLatest(true);
+  }, [conversationId]);
 
   const fetchReport = useCallback(
     async (turn: number) => {
@@ -33,9 +46,9 @@ export function useContextReport(conversationId?: string): UseContextReportRetur
         );
         setReport(data);
       } catch (err) {
-        if (err instanceof Error && err.message.includes("404")) {
+        if (err instanceof ApiError && err.status === 404) {
           setReport(null);
-          setError(null); // Not an error — just no data for this turn.
+          setError(null);
         } else {
           setError(err instanceof Error ? err.message : "Failed to load context report");
         }
@@ -46,7 +59,6 @@ export function useContextReport(conversationId?: string): UseContextReportRetur
     [conversationId],
   );
 
-  // Fetch when turn changes.
   useEffect(() => {
     if (currentTurn > 0) {
       fetchReport(currentTurn);
@@ -57,6 +69,7 @@ export function useContextReport(conversationId?: string): UseContextReportRetur
     (turn: number) => {
       if (turn >= 1 && turn <= totalTurns) {
         setCurrentTurn(turn);
+        setIsFollowingLatest(turn === totalTurns);
       }
     },
     [totalTurns],
@@ -70,11 +83,41 @@ export function useContextReport(conversationId?: string): UseContextReportRetur
     goToTurn(currentTurn - 1);
   }, [currentTurn, goToTurn]);
 
+  const jumpToLatest = useCallback(() => {
+    if (totalTurns > 0) {
+      setCurrentTurn(totalTurns);
+      setIsFollowingLatest(true);
+    }
+  }, [totalTurns]);
+
+  const setHistoryTurns = useCallback((turnCount: number) => {
+    if (turnCount <= 0) {
+      setReport(null);
+      setError(null);
+      setCurrentTurn(0);
+      setTotalTurns(0);
+      setIsFollowingLatest(true);
+      return;
+    }
+
+    setTotalTurns((prevTotal) => {
+      const nextTotal = Math.max(prevTotal, turnCount);
+      setCurrentTurn((prevTurn) => {
+        if (prevTurn <= 0) return nextTotal;
+        return Math.min(prevTurn, nextTotal);
+      });
+      setIsFollowingLatest((prevFollow) => (prevFollow ? true : currentTurn >= nextTotal));
+      return nextTotal;
+    });
+  }, [currentTurn]);
+
   const setLiveReport = useCallback((newReport: ContextReport) => {
-    setReport(newReport);
-    setCurrentTurn(newReport.turn_number);
     setTotalTurns((prev) => Math.max(prev, newReport.turn_number));
-  }, []);
+    if (isFollowingLatest) {
+      setReport(newReport);
+      setCurrentTurn(newReport.turn_number);
+    }
+  }, [isFollowingLatest]);
 
   return {
     report,
@@ -82,9 +125,12 @@ export function useContextReport(conversationId?: string): UseContextReportRetur
     error,
     currentTurn,
     totalTurns,
+    isFollowingLatest,
     goToTurn,
     nextTurn,
     prevTurn,
+    jumpToLatest,
+    setHistoryTurns,
     setLiveReport,
   };
 }

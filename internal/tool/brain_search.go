@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/ponchione/sirtopham/internal/brain"
 	"github.com/ponchione/sirtopham/internal/config"
@@ -30,14 +31,21 @@ type brainSearchInput struct {
 	MaxResults *int     `json:"max_results,omitempty"`
 }
 
-func (b *BrainSearch) Name() string        { return "brain_search" }
-func (b *BrainSearch) Description() string { return "Search the project brain (Obsidian vault) by keyword" }
-func (b *BrainSearch) ToolPurity() Purity  { return Pure }
+func (b *BrainSearch) Name() string { return "brain_search" }
+func (b *BrainSearch) Description() string {
+	return "Search the project brain (Obsidian vault) by keyword"
+}
+func (b *BrainSearch) ToolPurity() Purity {
+	if b.config.LogBrainQueries {
+		return Mutating
+	}
+	return Pure
+}
 
 func (b *BrainSearch) Schema() json.RawMessage {
 	return json.RawMessage(`{
 		"name": "brain_search",
-		"description": "Search the project brain (Obsidian knowledge vault) for documents by keyword. Use this when the prompt refers to brain notes like 'notes/...md' or '.brain/notes/...md', or when search_text found nothing but the content may live in the brain. Prefer brain_search/brain_read over search_text/file_read for vault-relative note paths. Returns matching document paths, titles, and relevant snippets. Use this to find architectural decisions, debugging journals, conventions, and other project knowledge.",
+		"description": "Search the project brain (Obsidian knowledge vault) for documents by keyword. Use this when the prompt refers to brain notes like 'notes/...md' or '.brain/notes/...md', or when search_text found nothing but the content may live in the brain. Prefer brain_search/brain_read over search_text/file_read for vault-relative note paths, never use search_text for .brain paths, and do not double-check a successful brain hit with repo search tools. Returns matching document paths, titles, and relevant snippets. Use this to find architectural decisions, debugging journals, conventions, and other project knowledge.",
 		"input_schema": {
 			"type": "object",
 			"properties": {
@@ -83,13 +91,15 @@ func (b *BrainSearch) Execute(ctx context.Context, projectRoot string, input jso
 		}, nil
 	}
 
-	if params.Query == "" {
+	normalizedQuery := strings.Join(strings.Fields(params.Query), " ")
+	if normalizedQuery == "" {
 		return &ToolResult{
 			Success: false,
 			Content: "query is required",
 			Error:   "empty query",
 		}, nil
 	}
+	params.Query = normalizedQuery
 
 	// Semantic/auto mode falls through to keyword search with a notice.
 	semanticNotice := ""
@@ -127,9 +137,13 @@ func (b *BrainSearch) Execute(ctx context.Context, projectRoot string, input jso
 	}
 
 	if len(hits) == 0 {
+		content := semanticNotice + fmt.Sprintf("No brain documents found for query: '%s'", params.Query)
+		if err := b.appendQueryLog(ctx, query, 0); err != nil {
+			return &ToolResult{Success: false, Content: fmt.Sprintf("Brain search completed but failed to append query log: %v", err), Error: err.Error()}, nil
+		}
 		return &ToolResult{
 			Success: true,
-			Content: semanticNotice + fmt.Sprintf("No brain documents found for query: '%s'", params.Query),
+			Content: content,
 		}, nil
 	}
 
@@ -146,11 +160,35 @@ func (b *BrainSearch) Execute(ctx context.Context, projectRoot string, input jso
 	if semanticNotice != "" {
 		content = semanticNotice + content
 	}
+	if err := b.appendQueryLog(ctx, query, len(formatted)); err != nil {
+		return &ToolResult{Success: false, Content: fmt.Sprintf("Brain search completed but failed to append query log: %v", err), Error: err.Error()}, nil
+	}
 
 	return &ToolResult{
 		Success: true,
 		Content: content,
 	}, nil
+}
+
+func (b *BrainSearch) appendQueryLog(ctx context.Context, query string, resultCount int) error {
+	if !b.config.LogBrainQueries {
+		return nil
+	}
+	summary := fmt.Sprintf("Returned %d %s via keyword search.", resultCount, pluralizeBrainSearchResults(resultCount))
+	return appendBrainLog(ctx, b.client, BrainLogEntry{
+		Timestamp: time.Now().UTC(),
+		Operation: "query",
+		Target:    strings.Join(strings.Fields(query), " "),
+		Summary:   summary,
+		Session:   sessionIDFromContext(ctx),
+	})
+}
+
+func pluralizeBrainSearchResults(count int) string {
+	if count == 1 {
+		return "result"
+	}
+	return "results"
 }
 
 // titleFromPath extracts a human-readable title from a vault path.

@@ -3,6 +3,7 @@ package tool
 import (
 	"github.com/ponchione/sirtopham/internal/brain"
 	"github.com/ponchione/sirtopham/internal/config"
+	"github.com/ponchione/sirtopham/internal/provider"
 )
 
 // RegisterFileTools registers all file tools (file_read, file_write, file_edit)
@@ -37,12 +38,19 @@ func RegisterSearchTools(r *Registry, searcher SemanticSearcher) {
 }
 
 // RegisterBrainTools registers all brain tools (brain_search, brain_read,
-// brain_write, brain_update) in the given registry. The backend parameter is
+// brain_write, brain_update, brain_lint) in the given registry. The backend parameter is
 // the configured brain backend — pass nil if brain is disabled (tools will
 // return guidance messages when invoked).
 func RegisterBrainTools(r *Registry, client brain.Backend, cfg config.BrainConfig) {
+	RegisterBrainToolsWithProvider(r, client, cfg, nil)
+}
+
+// RegisterBrainToolsWithProvider registers brain tools with an optional
+// model provider for the explicit opt-in contradictions check in brain_lint.
+func RegisterBrainToolsWithProvider(r *Registry, client brain.Backend, cfg config.BrainConfig, llm provider.Provider) {
 	r.Register(NewBrainSearch(client, cfg))
 	r.Register(NewBrainRead(client, cfg))
 	r.Register(NewBrainWrite(client, cfg))
 	r.Register(NewBrainUpdate(client, cfg))
+	r.Register(NewBrainLintWithProvider(client, cfg, llm))
 }

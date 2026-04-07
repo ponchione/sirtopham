@@ -1,6 +1,7 @@
 package server_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/ponchione/sirtopham/internal/config"
+	appdb "github.com/ponchione/sirtopham/internal/db"
 	"github.com/ponchione/sirtopham/internal/server"
 )
 
@@ -100,6 +102,57 @@ func TestProjectEndpointCachesLanguage(t *testing.T) {
 
 	if body2.Language != "go" {
 		t.Fatalf("request 2: expected cached language=go, got %q (cache not working)", body2.Language)
+	}
+}
+
+func TestProjectEndpointIncludesIndexMetadata(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := config.Default()
+	cfg.ProjectRoot = dir
+	cfg.Brain.Enabled = false
+
+	database, err := appdb.OpenDB(context.Background(), cfg.DatabasePath())
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer database.Close()
+	if err := appdb.Init(context.Background(), database); err != nil {
+		t.Fatalf("init db: %v", err)
+	}
+	_, err = database.ExecContext(context.Background(), `
+INSERT INTO projects(id, name, root_path, language, last_indexed_commit, last_indexed_at, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+`, cfg.ProjectRoot, filepath.Base(dir), dir, "go", "abc123def", "2026-04-06T12:34:56Z", "2026-04-06T12:00:00Z", "2026-04-06T12:34:56Z")
+	if err != nil {
+		t.Fatalf("insert project row: %v", err)
+	}
+
+	srv := server.New(server.Config{Host: "127.0.0.1", Port: 0}, newTestLogger())
+	server.NewProjectHandler(srv, cfg, newTestLogger())
+	_, base := startServer(t, srv)
+
+	resp, err := http.Get(base + "/api/project")
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var body struct {
+		LastIndexedAt     string `json:"last_indexed_at"`
+		LastIndexedCommit string `json:"last_indexed_commit"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.LastIndexedAt != "2026-04-06T12:34:56Z" {
+		t.Fatalf("last_indexed_at = %q, want 2026-04-06T12:34:56Z", body.LastIndexedAt)
+	}
+	if body.LastIndexedCommit != "abc123def" {
+		t.Fatalf("last_indexed_commit = %q, want abc123def", body.LastIndexedCommit)
 	}
 }
 

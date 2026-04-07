@@ -71,6 +71,13 @@ func validConfig() RouterConfig {
 	}
 }
 
+func validConfigWithFallback() RouterConfig {
+	return RouterConfig{
+		Default:  RouteTarget{Provider: "anthropic", Model: "claude-sonnet-4-6"},
+		Fallback: RouteTarget{Provider: "local", Model: "qwen2.5-coder-7b"},
+	}
+}
+
 // --- Constructor tests ---
 
 func TestNewRouter_ValidConfig(t *testing.T) {
@@ -362,6 +369,74 @@ func TestComplete_RateLimitErrorReturnsDirectly(t *testing.T) {
 	}
 }
 
+func TestComplete_RetriableErrorFallsBackWhenConfigured(t *testing.T) {
+	r, _ := NewRouter(validConfigWithFallback(), nil, nil)
+
+	primaryErr := &provider.ProviderError{
+		Provider:   "anthropic",
+		StatusCode: 502,
+		Message:    "bad gateway",
+		Retriable:  true,
+	}
+	anthropicMock := &mockProvider{
+		name:        "anthropic",
+		completeErr: primaryErr,
+	}
+	localResp := &provider.Response{Model: "qwen2.5-coder-7b"}
+	localMock := &mockProvider{
+		name:         "local",
+		completeResp: localResp,
+	}
+
+	_ = r.RegisterProvider(anthropicMock)
+	_ = r.RegisterProvider(localMock)
+
+	req := &provider.Request{}
+	got, err := r.Complete(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != localResp {
+		t.Fatal("expected fallback response from local")
+	}
+	if anthropicMock.getCompleteCalls() != 1 {
+		t.Fatalf("expected 1 anthropic call, got %d", anthropicMock.getCompleteCalls())
+	}
+	if localMock.getCompleteCalls() != 1 {
+		t.Fatalf("expected 1 local call, got %d", localMock.getCompleteCalls())
+	}
+	if localMock.lastReq.Model != "qwen2.5-coder-7b" {
+		t.Fatalf("expected fallback model qwen2.5-coder-7b, got %q", localMock.lastReq.Model)
+	}
+	if req.Model != "" {
+		t.Fatalf("expected caller request to remain unmodified, got %q", req.Model)
+	}
+}
+
+func TestComplete_RetriableErrorWithMissingFallbackReturnsWrappedPrimaryError(t *testing.T) {
+	r, _ := NewRouter(validConfigWithFallback(), nil, nil)
+
+	primaryErr := &provider.ProviderError{
+		Provider:   "anthropic",
+		StatusCode: 503,
+		Message:    "service unavailable",
+		Retriable:  true,
+	}
+	anthropicMock := &mockProvider{
+		name:        "anthropic",
+		completeErr: primaryErr,
+	}
+	_ = r.RegisterProvider(anthropicMock)
+
+	_, err := r.Complete(context.Background(), &provider.Request{})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !contains(err.Error(), "fallback provider not available: local") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 // --- Stream routing tests ---
 
 func TestStream_DefaultRouting(t *testing.T) {
@@ -425,6 +500,53 @@ func TestStream_RetriableErrorReturnsDirectly(t *testing.T) {
 	_, err := r.Stream(context.Background(), req)
 	if err != retriableErr {
 		t.Fatalf("expected retriable error returned directly, got: %v", err)
+	}
+}
+
+func TestStream_RetriableErrorFallsBackWhenConfigured(t *testing.T) {
+	r, _ := NewRouter(validConfigWithFallback(), nil, nil)
+
+	primaryErr := &provider.ProviderError{
+		Provider:   "anthropic",
+		StatusCode: 502,
+		Message:    "bad gateway",
+		Retriable:  true,
+	}
+	anthropicMock := &mockProvider{
+		name:      "anthropic",
+		streamErr: primaryErr,
+	}
+
+	localCh := make(chan provider.StreamEvent, 1)
+	localCh <- provider.TokenDelta{Text: "fallback-response"}
+	close(localCh)
+	localMock := &mockProvider{
+		name:     "local",
+		streamCh: localCh,
+	}
+
+	_ = r.RegisterProvider(anthropicMock)
+	_ = r.RegisterProvider(localMock)
+
+	req := &provider.Request{}
+	got, err := r.Stream(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	event := <-got
+	td, ok := event.(provider.TokenDelta)
+	if !ok {
+		t.Fatal("expected TokenDelta event")
+	}
+	if td.Text != "fallback-response" {
+		t.Fatalf("expected fallback-response, got %q", td.Text)
+	}
+	if localMock.lastReq.Model != "qwen2.5-coder-7b" {
+		t.Fatalf("expected fallback model qwen2.5-coder-7b, got %q", localMock.lastReq.Model)
+	}
+	if req.Model != "" {
+		t.Fatalf("expected caller request to remain unmodified, got %q", req.Model)
 	}
 }
 

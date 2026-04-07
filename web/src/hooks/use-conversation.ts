@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useReducer } from "react";
+import { useCallback, useEffect, useReducer, useRef } from "react";
 import { useWebSocket } from "@/hooks/use-websocket";
 import type {
   ServerMessage,
@@ -351,7 +351,12 @@ function flattenText(blocks: ContentBlock[]): string {
 
 export function useConversation(conversationId?: string) {
   const [state, dispatch] = useReducer(reducer, initialState);
-  const { status, lastEvent, sendMessage: wsSend, cancel: wsCancel } = useWebSocket();
+  const { status, eventQueue, eventTick, sendMessage: wsSend, sendModelOverride, cancel: wsCancel } = useWebSocket();
+
+  // Cursor into the append-only WebSocket event queue. Lets us drain every
+  // frame even when React 18 batching coalesces multiple arrivals into a
+  // single re-render (B1 fix).
+  const processedEventsRef = useRef(0);
 
   // Set conversation ID from route param.
   useEffect(() => {
@@ -360,13 +365,15 @@ export function useConversation(conversationId?: string) {
     }
   }, [conversationId]);
 
-  // Dispatch server events into reducer.
+  // Drain every queued WebSocket event in arrival order. Previously this used
+  // `lastEvent` state which silently dropped frames under rapid-fire batching.
   useEffect(() => {
-    if (!lastEvent) return;
+    const queue = eventQueue.current;
+    while (processedEventsRef.current < queue.length) {
+      const msg = queue[processedEventsRef.current] as ServerMessage<ServerEventData>;
+      processedEventsRef.current += 1;
 
-    const msg = lastEvent as ServerMessage<ServerEventData>;
-
-    switch (msg.type) {
+      switch (msg.type) {
       case "token": {
         const data = msg.data as TokenEvent;
         dispatch({ type: "token", token: data.token });
@@ -455,16 +462,24 @@ export function useConversation(conversationId?: string) {
         }
         break;
       }
+      }
     }
-  }, [lastEvent]);
+  }, [eventTick, eventQueue]);
 
   const sendMessage = useCallback(
-    (content: string) => {
+    (content: string, override?: { provider: string; model: string }) => {
       dispatch({ type: "user_message", content });
+      if (override) {
+        sendModelOverride(override.provider, override.model);
+      }
       wsSend(content, state.conversationId ?? undefined);
     },
-    [wsSend, state.conversationId],
+    [sendModelOverride, wsSend, state.conversationId],
   );
+
+  const setModelOverride = useCallback((provider: string, model: string) => {
+    sendModelOverride(provider, model);
+  }, [sendModelOverride]);
 
   const cancel = useCallback(() => {
     wsCancel();
@@ -478,6 +493,7 @@ export function useConversation(conversationId?: string) {
     ...state,
     connectionStatus: status,
     sendMessage,
+    setModelOverride,
     cancel,
     loadHistory,
   };

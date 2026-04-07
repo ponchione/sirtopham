@@ -149,7 +149,7 @@ export type ServerEventData =
 
 // ── Client → Server messages ────────────────────────────────────────
 
-export type ClientMessageType = "message" | "cancel";
+export type ClientMessageType = "message" | "model_override" | "cancel";
 
 /** A message sent from the client to the server via WebSocket. */
 export interface ClientMessage {

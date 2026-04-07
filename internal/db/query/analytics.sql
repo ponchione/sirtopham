@@ -40,3 +40,25 @@ SELECT
     AVG(budget_used) AS avg_budget_used
 FROM context_reports
 WHERE conversation_id = ?;
+
+-- name: GetConversationLastTurnUsage :one
+-- Returns the latest chat turn's aggregated sub_calls usage. Used to populate
+-- the per-conversation turn-usage chip on page reload (B3).
+WITH latest_turn AS (
+    SELECT MAX(sc.turn_number) AS n
+    FROM sub_calls sc
+    WHERE sc.conversation_id = ?
+      AND sc.purpose = 'chat'
+      AND sc.turn_number IS NOT NULL
+)
+SELECT
+    sc.turn_number,
+    CAST(COALESCE(MAX(sc.iteration), 1) AS INTEGER) AS iteration_count,
+    CAST(COALESCE(SUM(sc.tokens_in), 0) AS INTEGER) AS tokens_in,
+    CAST(COALESCE(SUM(sc.tokens_out), 0) AS INTEGER) AS tokens_out,
+    CAST(COALESCE(SUM(sc.latency_ms), 0) AS INTEGER) AS latency_ms
+FROM sub_calls sc, latest_turn lt
+WHERE sc.conversation_id = ?
+  AND sc.purpose = 'chat'
+  AND sc.turn_number = lt.n
+GROUP BY sc.turn_number;
