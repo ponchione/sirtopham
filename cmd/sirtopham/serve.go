@@ -160,7 +160,14 @@ func runServe(cmd *cobra.Command, configPath string, portOverride int, hostOverr
 	defer codeStore.Close()
 	semanticEmbedder := embedder.New(cfg.Embedding)
 	semanticSearcher := codesearcher.New(codeStore, semanticEmbedder)
-	retrievalOrchestrator := contextpkg.NewRetrievalOrchestrator(semanticSearcher, nil, nil, cfg.ProjectRoot)
+
+	brainBackend, closeBrainBackend, err := buildBrainBackend(cmd.Context(), cfg.Brain, logger)
+	if err != nil {
+		return fmt.Errorf("build brain backend: %w", err)
+	}
+	defer closeBrainBackend()
+
+	retrievalOrchestrator := contextpkg.NewRetrievalOrchestrator(semanticSearcher, nil, nil, brainBackend, cfg.ProjectRoot)
 
 	// ── 6. Build tool registry + executor ──────────────────────────────
 	registry := tool.NewRegistry()
@@ -170,12 +177,6 @@ func runServe(cmd *cobra.Command, configPath string, portOverride int, hostOverr
 		TimeoutSeconds: cfg.Agent.ShellTimeoutSeconds,
 		Denylist:       cfg.Agent.ShellDenylist,
 	})
-
-	brainBackend, closeBrainBackend, err := buildBrainBackend(cmd.Context(), cfg.Brain, logger)
-	if err != nil {
-		return fmt.Errorf("build brain backend: %w", err)
-	}
-	defer closeBrainBackend()
 	tool.RegisterBrainToolsWithProvider(registry, brainBackend, cfg.Brain, provRouter)
 	tool.RegisterSearchTools(registry, semanticSearcher)
 

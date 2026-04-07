@@ -2,6 +2,21 @@
 
 Local Go implementation of the sirtopham coding-agent harness.
 
+## Current Phase
+
+v0.1 harness closeout is effectively complete.
+
+The project is now moving into v0.2 work. The main new scope is brain-related:
+- proactive brain retrieval during context assembly
+- brain-aware budget fitting / serialization / inspector reporting
+- cleanup of the runtime/docs contract for what the brain backend actually is
+
+If you are resuming implementation work, read these first:
+- `TECH-DEBT.md`
+- `NEXT_SESSION_HANDOFF.md`
+- `docs/specs/09-project-brain.md`
+- `docs/specs/06-context-assembly.md`
+
 ## What Matters For Bring-Up
 
 - The backend binary is built from `./cmd/sirtopham`.

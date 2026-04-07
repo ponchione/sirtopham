@@ -33,6 +33,9 @@ func (MarkdownSerializer) Serialize(result *BudgetResult, seenFiles SeenFileLook
 	if structural := serializeStructuralContext(result.SelectedGraphHits); structural != "" {
 		sections = append(sections, structural)
 	}
+	if brain := serializeProjectBrain(result.SelectedBrainHits); brain != "" {
+		sections = append(sections, brain)
+	}
 	if conventions := serializeConventions(result.ConventionText); conventions != "" {
 		sections = append(sections, conventions)
 	}
@@ -44,6 +47,7 @@ func (MarkdownSerializer) Serialize(result *BudgetResult, seenFiles SeenFileLook
 
 func budgetResultIsEmpty(result *BudgetResult) bool {
 	return len(result.SelectedFileResults) == 0 &&
+		len(result.SelectedBrainHits) == 0 &&
 		len(result.SelectedRAGHits) == 0 &&
 		len(result.SelectedGraphHits) == 0 &&
 		strings.TrimSpace(result.ConventionText) == "" &&
@@ -157,6 +161,35 @@ func serializeStructuralContext(hits []GraphHit) string {
 		lines = append(lines, line)
 	}
 	return "## Structural Context\n\n" + strings.Join(lines, "\n")
+}
+
+func serializeProjectBrain(hits []BrainHit) string {
+	if len(hits) == 0 {
+		return ""
+	}
+	sorted := append([]BrainHit(nil), hits...)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		if sorted[i].MatchScore != sorted[j].MatchScore {
+			return sorted[i].MatchScore > sorted[j].MatchScore
+		}
+		return sorted[i].DocumentPath < sorted[j].DocumentPath
+	})
+
+	var lines []string
+	for _, hit := range sorted {
+		line := fmt.Sprintf("- %s", hit.DocumentPath)
+		if title := strings.TrimSpace(hit.Title); title != "" {
+			line += fmt.Sprintf(": %s", title)
+		}
+		if mode := strings.TrimSpace(hit.MatchMode); mode != "" {
+			line += fmt.Sprintf(" [%s]", mode)
+		}
+		if snippet := strings.TrimSpace(hit.Snippet); snippet != "" {
+			line += fmt.Sprintf(" — %s", snippet)
+		}
+		lines = append(lines, line)
+	}
+	return "## Project Brain\n\n" + strings.Join(lines, "\n")
 }
 
 func serializeConventions(text string) string {

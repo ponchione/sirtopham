@@ -45,6 +45,30 @@ export function SettingsPage() {
     [providers],
   );
 
+  const selectableProviders = useMemo(
+    () => groupedProviders
+      .map((provider) => {
+        if (provider.models.length > 0) {
+          return provider;
+        }
+        if (config && provider.name === config.default_provider && config.default_model) {
+          return {
+            ...provider,
+            models: [{
+              id: config.default_model,
+              name: config.default_model,
+              context_window: 0,
+              supports_tools: false,
+              supports_thinking: false,
+            }],
+          };
+        }
+        return null;
+      })
+      .filter((provider): provider is NonNullable<typeof provider> => provider !== null),
+    [config, groupedProviders],
+  );
+
   useEffect(() => {
     if (!config) {
       return;
@@ -158,7 +182,7 @@ export function SettingsPage() {
                 </div>
               </div>
 
-              {groupedProviders.length > 0 && (
+              {selectableProviders.length > 0 && (
                 <label className="block space-y-1.5 text-xs">
                   <span className="text-muted-foreground uppercase tracking-widest">Default provider/model</span>
                   <select
@@ -168,7 +192,7 @@ export function SettingsPage() {
                     className="w-full rounded border border-border bg-input px-3 py-2 text-sm text-foreground"
                     aria-label="Default provider and model"
                   >
-                    {groupedProviders.map((provider) => (
+                    {selectableProviders.map((provider) => (
                       <optgroup key={provider.name} label={provider.name}>
                         {provider.models.map((model) => (
                           <option

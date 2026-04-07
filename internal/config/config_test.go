@@ -77,6 +77,33 @@ func TestLoadMissingFileReturnsDefaults(t *testing.T) {
 	}
 }
 
+func TestLoadTracksExplicitProviderNames(t *testing.T) {
+	projectRoot := t.TempDir()
+	ensureDir(t, filepath.Join(projectRoot, ".brain"))
+	configPath := filepath.Join(t.TempDir(), "sirtopham.yaml")
+	content := "project_root: \"" + projectRoot + "\"\n" +
+		"providers:\n" +
+		"  codex:\n" +
+		"    type: codex\n" +
+		"    model: gpt-5.4-mini\n"
+
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+
+	if !slices.Equal(cfg.ConfiguredProviders, []string{"codex"}) {
+		t.Fatalf("ConfiguredProviders = %#v, want [codex]", cfg.ConfiguredProviders)
+	}
+	if _, ok := cfg.Providers["codex"]; !ok {
+		t.Fatalf("expected codex provider to remain configured, got %#v", cfg.Providers)
+	}
+}
+
 func TestLoadPartialYAMLOverridesSpecifiedFields(t *testing.T) {
 	projectRoot := t.TempDir()
 	configPath := filepath.Join(t.TempDir(), "sirtopham.yaml")

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ponchione/sirtopham/internal/brain"
 	"github.com/ponchione/sirtopham/internal/codeintel"
 	"github.com/ponchione/sirtopham/internal/config"
 )
@@ -90,6 +91,30 @@ func (s *retrievalConventionSourceStub) Load(ctx stdctx.Context) (string, error)
 	return s.text, nil
 }
 
+type retrievalBrainSearcherStub struct {
+	hits       []brain.SearchHit
+	err        error
+	delay      time.Duration
+	calls      int
+	gotQueries []string
+}
+
+func (s *retrievalBrainSearcherStub) SearchKeyword(ctx stdctx.Context, query string) ([]brain.SearchHit, error) {
+	s.calls++
+	s.gotQueries = append(s.gotQueries, query)
+	if s.delay > 0 {
+		select {
+		case <-time.After(s.delay):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	if s.err != nil {
+		return nil, s.err
+	}
+	return append([]brain.SearchHit(nil), s.hits...), nil
+}
+
 func TestNoopConventionSourceReturnsEmptyString(t *testing.T) {
 	source := NoopConventionSource{}
 
@@ -132,8 +157,13 @@ func TestRetrievalOrchestratorRunsAllEnabledPathsAndMapsResults(t *testing.T) {
 		LineEnd:   18,
 	}}}}
 	conventions := &retrievalConventionSourceStub{text: "- use table-driven tests"}
+	brainSearcher := &retrievalBrainSearcherStub{hits: []brain.SearchHit{{
+		Path:    "notes/auth.md",
+		Snippet: "Auth middleware decisions live here.",
+		Score:   0.87,
+	}}}
 
-	orchestrator := NewRetrievalOrchestrator(searcher, graph, conventions, projectRoot)
+	orchestrator := NewRetrievalOrchestrator(searcher, graph, conventions, brainSearcher, projectRoot)
 	var gotGitDepth int
 	var gotGitDir string
 	orchestrator.gitRunner = func(ctx stdctx.Context, workdir string, depth int) (string, error) {
@@ -201,6 +231,21 @@ func TestRetrievalOrchestratorRunsAllEnabledPathsAndMapsResults(t *testing.T) {
 	if results.GraphHits[0].RelationshipType != "upstream" {
 		t.Fatalf("RelationshipType = %q, want upstream", results.GraphHits[0].RelationshipType)
 	}
+	if brainSearcher.calls != 1 {
+		t.Fatalf("brain search calls = %d, want 1", brainSearcher.calls)
+	}
+	if !slices.Equal(brainSearcher.gotQueries, []string{"auth middleware"}) {
+		t.Fatalf("brain queries = %v, want [auth middleware]", brainSearcher.gotQueries)
+	}
+	if len(results.BrainHits) != 1 {
+		t.Fatalf("len(BrainHits) = %d, want 1", len(results.BrainHits))
+	}
+	if results.BrainHits[0].DocumentPath != "notes/auth.md" {
+		t.Fatalf("DocumentPath = %q, want notes/auth.md", results.BrainHits[0].DocumentPath)
+	}
+	if results.BrainHits[0].MatchMode != "keyword" {
+		t.Fatalf("MatchMode = %q, want keyword", results.BrainHits[0].MatchMode)
+	}
 
 	if results.ConventionText != "- use table-driven tests" {
 		t.Fatalf("ConventionText = %q, want convention text", results.ConventionText)
@@ -234,7 +279,7 @@ func TestRetrievalOrchestratorFiltersAndMergesOverlappingGraphHits(t *testing.T)
 		LineStart: 10,
 		LineEnd:   20,
 	}}}}
-	orchestrator := NewRetrievalOrchestrator(searcher, graph, NoopConventionSource{}, t.TempDir())
+	orchestrator := NewRetrievalOrchestrator(searcher, graph, NoopConventionSource{}, nil, t.TempDir())
 
 	results, err := orchestrator.Retrieve(stdctx.Background(), &ContextNeeds{ExplicitSymbols: []string{"ValidateToken"}}, []string{"auth token"}, config.ContextConfig{RelevanceThreshold: 0.35})
 	if err != nil {
@@ -259,7 +304,7 @@ func TestRetrievalOrchestratorSkipsTraversalAndMissingFilesGracefully(t *testing
 	projectRoot := t.TempDir()
 	mustWriteFile(t, projectRoot, "internal/auth/middleware.go", "0123456789abcdef")
 
-	orchestrator := NewRetrievalOrchestrator(nil, nil, NoopConventionSource{}, projectRoot)
+	orchestrator := NewRetrievalOrchestrator(nil, nil, NoopConventionSource{}, nil, projectRoot)
 	orchestrator.maxExplicitFileBytes = 8
 
 	results, err := orchestrator.Retrieve(stdctx.Background(), &ContextNeeds{ExplicitFiles: []string{
@@ -290,7 +335,7 @@ func TestRetrievalOrchestratorTimeoutDoesNotBlockOtherPaths(t *testing.T) {
 		results: []codeintel.SearchResult{{Chunk: codeintel.Chunk{ID: "chunk-slow", FilePath: "internal/auth/middleware.go", Name: "ValidateToken"}, Score: 0.9}},
 		delay:   200 * time.Millisecond,
 	}
-	orchestrator := NewRetrievalOrchestrator(searcher, nil, NoopConventionSource{}, projectRoot)
+	orchestrator := NewRetrievalOrchestrator(searcher, nil, NoopConventionSource{}, nil, projectRoot)
 	orchestrator.timeout = 20 * time.Millisecond
 
 	start := time.Now()
@@ -315,7 +360,7 @@ func TestRetrievalOrchestratorContinuesAfterPathErrors(t *testing.T) {
 
 	searcher := &retrievalSearcherStub{err: errors.New("search failed")}
 	conventions := &retrievalConventionSourceStub{err: errors.New("cache unavailable")}
-	orchestrator := NewRetrievalOrchestrator(searcher, nil, conventions, projectRoot)
+	orchestrator := NewRetrievalOrchestrator(searcher, nil, conventions, nil, projectRoot)
 	orchestrator.gitRunner = func(ctx stdctx.Context, workdir string, depth int) (string, error) {
 		return "", errors.New("git failed")
 	}

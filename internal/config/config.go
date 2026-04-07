@@ -34,6 +34,8 @@ type Config struct {
 	ServerPort  int    `yaml:"server_port"`
 	ServerHost  string `yaml:"server_host"`
 
+	ConfiguredProviders []string `yaml:"-"`
+
 	Server        ServerConfig              `yaml:"server"`
 	Routing       RoutingConfig             `yaml:"routing"`
 	Providers     map[string]ProviderConfig `yaml:"providers"`
@@ -312,6 +314,7 @@ func Load(path string) (*Config, error) {
 			return nil, fmt.Errorf("read config %s: %w", path, err)
 		}
 	} else {
+		cfg.ConfiguredProviders = configuredProviderNamesFromYAML(data)
 		if err := yaml.Unmarshal(data, cfg); err != nil {
 			return nil, fmt.Errorf("parse config %s: %w", path, err)
 		}
@@ -326,6 +329,37 @@ func Load(path string) (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+func configuredProviderNamesFromYAML(data []byte) []string {
+	if len(strings.TrimSpace(string(data))) == 0 {
+		return nil
+	}
+	var raw struct {
+		Providers map[string]ProviderConfig `yaml:"providers"`
+	}
+	if err := yaml.Unmarshal(data, &raw); err != nil || len(raw.Providers) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(raw.Providers))
+	for name := range raw.Providers {
+		names = append(names, name)
+	}
+	return names
+}
+
+func (c *Config) ProviderNamesForSurfaces() []string {
+	if c == nil {
+		return nil
+	}
+	if len(c.ConfiguredProviders) > 0 {
+		return append([]string(nil), c.ConfiguredProviders...)
+	}
+	names := make([]string, 0, len(c.Providers))
+	for name := range c.Providers {
+		names = append(names, name)
+	}
+	return names
 }
 
 func (c *Config) ApplyEnvOverrides() {

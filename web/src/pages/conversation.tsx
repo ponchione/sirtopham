@@ -177,9 +177,37 @@ export function ConversationPage() {
     }
   }, [convId, loadHistory, ctxReport]);
 
+  const selectableProviders = useMemo(() => {
+    const dedupeModels = <T extends { id: string }>(models: T[]): T[] => (
+      models.filter((model, index, all) => all.findIndex((candidate) => candidate.id === model.id) === index)
+    );
+
+    return providers
+      .map((provider) => {
+        const models = dedupeModels(provider.models);
+        if (models.length > 0) {
+          return { ...provider, models };
+        }
+        if (provider.name === selectedProvider && selectedModel) {
+          return {
+            ...provider,
+            models: [{
+              id: selectedModel,
+              name: selectedModel,
+              context_window: 0,
+              supports_tools: false,
+              supports_thinking: false,
+            }],
+          };
+        }
+        return null;
+      })
+      .filter((provider): provider is NonNullable<typeof provider> => provider !== null);
+  }, [providers, selectedModel, selectedProvider]);
+
   const selectedProviderModels = useMemo(
-    () => providers.find((provider) => provider.name === selectedProvider)?.models ?? [],
-    [providers, selectedProvider],
+    () => selectableProviders.find((provider) => provider.name === selectedProvider)?.models ?? [],
+    [selectableProviders, selectedProvider],
   );
 
   useEffect(() => {
@@ -293,14 +321,14 @@ export function ConversationPage() {
                   value={selectedProvider}
                   onChange={(e) => {
                     const provider = e.target.value;
-                    const providerModels = providers.find((item) => item.name === provider)?.models ?? [];
-                    const nextModel = providerModels[0]?.id ?? "";
+                    const providerModels = selectableProviders.find((item) => item.name === provider)?.models ?? [];
+                    const nextModel = providerModels[0]?.id ?? selectedModel;
                     handleModelOverrideChange(provider, nextModel);
                   }}
                   className="h-7 rounded border border-border bg-input px-2 text-xs text-foreground"
                   aria-label="Conversation provider"
                 >
-                  {providers.map((provider) => (
+                  {selectableProviders.map((provider) => (
                     <option key={provider.name} value={provider.name}>
                       {provider.name}
                     </option>

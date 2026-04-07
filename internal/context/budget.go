@@ -33,7 +33,7 @@ func (PriorityBudgetManager) Fit(results *RetrievalResults, modelContextLimit in
 	budget := &BudgetResult{
 		BudgetTotal:       budgetTotal,
 		BudgetUsed:        0,
-		BudgetBreakdown:   map[string]int{"explicit_files": 0, "rag": 0, "structural": 0, "conventions": 0, "git": 0},
+		BudgetBreakdown:   map[string]int{"explicit_files": 0, "brain": 0, "rag": 0, "structural": 0, "conventions": 0, "git": 0},
 		IncludedChunks:    []string{},
 		ExcludedChunks:    []string{},
 		ExclusionReasons:  map[string]string{},
@@ -55,6 +55,9 @@ func (PriorityBudgetManager) Fit(results *RetrievalResults, modelContextLimit in
 
 	for i := range results.FileResults {
 		consumeFileResult(&remaining, budget, &results.FileResults[i])
+	}
+	for i := range results.BrainHits {
+		consumeBrainHit(&remaining, budget, &results.BrainHits[i])
 	}
 	for i := range topRAG {
 		consumeRAGHit(&remaining, budget, &topRAG[i])
@@ -148,6 +151,21 @@ func consumeFileResult(remaining *int, budget *BudgetResult, file *FileResult) {
 	budget.SelectedFileResults = append(budget.SelectedFileResults, *file)
 	markIncluded(budget, file.FilePath)
 	budget.BudgetBreakdown["explicit_files"] += tokens
+	*remaining -= tokens
+}
+
+func consumeBrainHit(remaining *int, budget *BudgetResult, hit *BrainHit) {
+	tokens := estimateBrainHitTokensForBudget(*hit)
+	key := hit.DocumentPath
+	if !fits(*remaining, tokens) {
+		markExcluded(budget, key, "budget_exceeded")
+		return
+	}
+	hit.Included = true
+	hit.ExclusionReason = ""
+	budget.SelectedBrainHits = append(budget.SelectedBrainHits, *hit)
+	markIncluded(budget, key)
+	budget.BudgetBreakdown["brain"] += tokens
 	*remaining -= tokens
 }
 
@@ -255,6 +273,10 @@ func estimateFileResultTokensForBudget(file FileResult) int {
 
 func estimateRAGHitTokensForBudget(hit RAGHit) int {
 	return approximateTokenCount(hit.FilePath + "\n" + hit.Description + "\n" + hit.Body)
+}
+
+func estimateBrainHitTokensForBudget(hit BrainHit) int {
+	return approximateTokenCount(hit.DocumentPath + "\n" + hit.Title + "\n" + hit.Snippet)
 }
 
 func estimateGraphHitTokensForBudget(hit GraphHit) int {

@@ -118,6 +118,44 @@ func TestInitCreatesTablesAndRoundTrips(t *testing.T) {
 	}
 }
 
+func TestGetConversationContextQualityReturnsBudgetPercent(t *testing.T) {
+	ctx := context.Background()
+	db := newTestDB(t)
+	queries := New(db)
+
+	projectID := sid.New()
+	conversationID := sid.New()
+	createdAt := time.Now().UTC().Format(time.RFC3339)
+
+	mustExec(t, db, `INSERT INTO projects(id, name, root_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`, projectID, "proj", "/tmp/proj", createdAt, createdAt)
+	mustExec(t, db, `INSERT INTO conversations(id, project_id, title, model, provider, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`, conversationID, projectID, "Metrics", "claude", "anthropic", createdAt, createdAt)
+
+	mustExec(t, db, `INSERT INTO context_reports(conversation_id, turn_number, analysis_latency_ms, retrieval_latency_ms, total_latency_ms,
+		needs_json, signals_json, rag_results_json, brain_results_json, graph_results_json, explicit_files_json,
+		budget_total, budget_used, budget_breakdown_json, included_count, excluded_count,
+		agent_used_search_tool, agent_read_files_json, context_hit_rate, created_at)
+		VALUES (?, 1, 1, 2, 3, ?, ?, ?, ?, ?, ?, 30000, 3400, ?, 3, 1, 0, ?, 0.5, ?)`,
+		conversationID, `{}`, `[]`, `[]`, `[]`, `[]`, `[]`, `{"rag":3400}`, `[]`, createdAt)
+	mustExec(t, db, `INSERT INTO context_reports(conversation_id, turn_number, analysis_latency_ms, retrieval_latency_ms, total_latency_ms,
+		needs_json, signals_json, rag_results_json, brain_results_json, graph_results_json, explicit_files_json,
+		budget_total, budget_used, budget_breakdown_json, included_count, excluded_count,
+		agent_used_search_tool, agent_read_files_json, context_hit_rate, created_at)
+		VALUES (?, 2, 1, 2, 3, ?, ?, ?, ?, ?, ?, 30000, 2262, ?, 3, 1, 1, ?, 0.7, ?)`,
+		conversationID, `{}`, `[]`, `[]`, `[]`, `[]`, `[]`, `{"rag":2262}`, `[]`, createdAt)
+
+	quality, err := queries.GetConversationContextQuality(ctx, conversationID)
+	if err != nil {
+		t.Fatalf("GetConversationContextQuality returned error: %v", err)
+	}
+	if !quality.AvgBudgetUsed.Valid {
+		t.Fatalf("expected avg budget used to be valid: %+v", quality)
+	}
+	const want = 9.436666666666667
+	if diff := quality.AvgBudgetUsed.Float64 - want; diff < -0.000001 || diff > 0.000001 {
+		t.Fatalf("avg budget used = %v, want %v", quality.AvgBudgetUsed.Float64, want)
+	}
+}
+
 func TestFTSAndCascadeBehavior(t *testing.T) {
 	ctx := context.Background()
 	db := newTestDB(t)

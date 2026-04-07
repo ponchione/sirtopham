@@ -67,6 +67,38 @@ func TestCollectProviderAuthReports_StatusSkipsPing(t *testing.T) {
 	}
 }
 
+func TestCollectProviderAuthReports_UsesConfiguredProvidersForSurfaces(t *testing.T) {
+	orig := buildProviderForAuthReports
+	defer func() { buildProviderForAuthReports = orig }()
+
+	providerStub := &testAuthProvider{
+		name:       "codex",
+		authStatus: &provider.AuthStatus{Provider: "codex", Mode: "oauth", Source: "sirtopham_store"},
+	}
+	buildProviderForAuthReports = func(name string, cfg appconfig.ProviderConfig) (provider.Provider, error) {
+		if name != "codex" {
+			t.Fatalf("buildProviderForAuthReports called for %q, want codex only", name)
+		}
+		return providerStub, nil
+	}
+
+	cfg := &appconfig.Config{
+		ConfiguredProviders: []string{"codex"},
+		Providers: map[string]appconfig.ProviderConfig{
+			"anthropic":  {Type: "anthropic"},
+			"openrouter": {Type: "openai-compatible"},
+			"codex":      {Type: "codex"},
+		},
+	}
+	reports := collectProviderAuthReports(context.Background(), cfg, false)
+	if len(reports) != 1 {
+		t.Fatalf("expected 1 report, got %d", len(reports))
+	}
+	if reports[0].Name != "codex" {
+		t.Fatalf("report name = %q, want codex", reports[0].Name)
+	}
+}
+
 func TestCollectProviderAuthReports_DoctorRunsPing(t *testing.T) {
 	orig := buildProviderForAuthReports
 	defer func() { buildProviderForAuthReports = orig }()
