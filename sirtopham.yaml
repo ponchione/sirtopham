@@ -11,12 +11,12 @@ server:
 routing:
   default:
     provider: codex
-    model: gpt-5.1-codex-mini
+    model: gpt-5.4-mini
 
 providers:
   codex:
     type: codex
-    model: gpt-5.1-codex-mini
+    model: gpt-5.4-mini
 
 index:
   include:
@@ -58,3 +58,33 @@ brain:
   vault_path: .brain
   reindex_on_startup: true
   log_brain_queries: true
+
+local_services:
+  enabled: true
+  mode: manual
+  provider: docker-compose
+  compose_file: ./ops/llm/docker-compose.yml
+  project_dir: ./ops/llm
+  required_networks:
+    - llm-net
+  auto_create_networks: true
+  startup_timeout_seconds: 180
+  healthcheck_interval_seconds: 2
+  services:
+    qwen-coder:
+      base_url: http://localhost:12434
+      health_path: /health
+      models_path: /v1/models
+      required: true
+    nomic-embed:
+      base_url: http://localhost:12435
+      health_path: /health
+      models_path: /v1/models
+      required: true
+
+embedding:
+  base_url: http://localhost:12435
+  model: nomic-embed-code
+  batch_size: 32
+  timeout_seconds: 30
+  query_prefix: "Represent this query for searching relevant code: "

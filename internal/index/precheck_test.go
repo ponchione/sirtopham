@@ -2,89 +2,34 @@ package index
 
 import (
 	"context"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
-	"github.com/ponchione/sirtopham/internal/config"
+	appconfig "github.com/ponchione/sirtopham/internal/config"
 )
 
-func TestRunIndexPrecheckPassesWhenBothServicesHealthy(t *testing.T) {
-	oldBaseURL := describerBaseURL
-	qwen := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/health":
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"status":"ok"}`))
-		case "/v1/models":
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"data":[{"id":"qwen"}]}`))
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer qwen.Close()
-
-	embed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/health":
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"status":"ok"}`))
-		case "/v1/models":
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"data":[{"id":"nomic"}]}`))
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer embed.Close()
-
-	describerBaseURL = qwen.URL
-	defer func() { describerBaseURL = oldBaseURL }()
-
-	cfg := config.Default()
+func TestRunIndexPrecheckPassesWhenLocalServicesDisabled(t *testing.T) {
+	cfg := appconfig.Default()
 	cfg.Brain.Enabled = false
-	cfg.Embedding.BaseURL = embed.URL
+	cfg.LocalServices.Enabled = false
 	if err := runIndexPrecheck(context.Background(), cfg); err != nil {
 		t.Fatalf("runIndexPrecheck: %v", err)
 	}
 }
 
-func TestRunIndexPrecheckFailsWhenEmbeddingServiceMissing(t *testing.T) {
-	oldBaseURL := describerBaseURL
-	qwen := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/health" {
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"status":"ok"}`))
-			return
-		}
-		if r.URL.Path == "/v1/models" {
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"data":[{"id":"qwen"}]}`))
-			return
-		}
-		http.NotFound(w, r)
-	}))
-	defer qwen.Close()
-	describerBaseURL = qwen.URL
-	defer func() { describerBaseURL = oldBaseURL }()
-
-	cfg := config.Default()
+func TestRunIndexPrecheckFailsInManualModeWhenServicesMissing(t *testing.T) {
+	cfg := appconfig.Default()
 	cfg.Brain.Enabled = false
-	cfg.Embedding.BaseURL = "http://127.0.0.1:1"
-	if err := runIndexPrecheck(context.Background(), cfg); err == nil {
-		t.Fatal("expected precheck error")
-	} else if got := err.Error(); !containsAll(got, []string{"nomic-embed", "not reachable"}) {
-		t.Fatalf("unexpected error: %v", err)
+	cfg.LocalServices.Mode = "manual"
+	cfg.LocalServices.Services["qwen-coder"] = appconfig.ManagedService{BaseURL: "http://127.0.0.1:1", HealthPath: "/health", ModelsPath: "/v1/models", Required: true}
+	cfg.LocalServices.Services["nomic-embed"] = appconfig.ManagedService{BaseURL: "http://127.0.0.1:2", HealthPath: "/health", ModelsPath: "/v1/models", Required: true}
+	err := runIndexPrecheck(context.Background(), cfg)
+	if err == nil {
+		t.Fatal("expected error")
 	}
-}
-
-func containsAll(s string, parts []string) bool {
-	for _, part := range parts {
-		if !strings.Contains(s, part) {
-			return false
+	for _, want := range []string{"index precheck", "local services ensure-up failed"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error = %v, want substring %q", err, want)
 		}
 	}
-	return true
 }

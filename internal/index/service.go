@@ -31,11 +31,12 @@ var indexLocks = struct {
 }{active: map[string]struct{}{}}
 
 type dependencies struct {
-	openDB      func(context.Context, string) (*sql.DB, error)
-	newStore    func(context.Context, string) (codeintel.Store, error)
-	newParser   func(string) (codeintel.Parser, error)
-	newEmbedder func(config.Embedding) codeintel.Embedder
-	now         func() time.Time
+	openDB              func(context.Context, string) (*sql.DB, error)
+	newStore            func(context.Context, string) (codeintel.Store, error)
+	newParser           func(string) (codeintel.Parser, error)
+	newEmbedder         func(config.Embedding) codeintel.Embedder
+	ensureIndexServices func(context.Context, *config.Config) error
+	now                 func() time.Time
 }
 
 func defaultDependencies() dependencies {
@@ -52,7 +53,8 @@ func defaultDependencies() dependencies {
 		newEmbedder: func(cfg config.Embedding) codeintel.Embedder {
 			return embedder.New(cfg)
 		},
-		now: time.Now,
+		ensureIndexServices: runIndexPrecheck,
+		now:                 time.Now,
 	}
 }
 
@@ -87,8 +89,10 @@ func runWithDependencies(ctx context.Context, opts Options, deps dependencies) (
 	}
 	defer releaseProjectLock(projectRoot)
 
-	if err := runIndexPrecheck(ctx, cfg); err != nil {
-		return nil, err
+	if deps.ensureIndexServices != nil {
+		if err := deps.ensureIndexServices(ctx, cfg); err != nil {
+			return nil, err
+		}
 	}
 
 	startedAt := deps.now().UTC()

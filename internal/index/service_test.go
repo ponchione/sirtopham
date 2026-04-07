@@ -90,6 +90,9 @@ func TestRunWithDependenciesIndexesIncrementallyAndDeletesRemovedFiles(t *testin
 		newEmbedder: func(config.Embedding) codeintel.Embedder {
 			return fakeEmbedder{}
 		},
+		ensureIndexServices: func(context.Context, *config.Config) error {
+			return nil
+		},
 		now: func() time.Time {
 			now = now.Add(time.Second)
 			return now

@@ -31,7 +31,7 @@ routing:
 #     model: claude-sonnet-4-6
 #   local:
 #     type: openai-compatible
-#     base_url: http://localhost:8080/v1
+#     base_url: http://localhost:12434/v1
 #     model: qwen2.5-coder-7b
 #   openrouter:
 #     type: openai-compatible
@@ -40,6 +40,9 @@ routing:
 #     model: anthropic/claude-sonnet-4
 
 # --- Code Intelligence & RAG (doc 04) ---
+# Indexing expects local model services to be reachable:
+# - describer / qwen-coder at http://localhost:12434
+# - embeddings / nomic-embed-code at http://localhost:12435
 index:
   # include:                             # File globs to index
   #   - "**/*.go"
@@ -56,11 +59,34 @@ index:
   # max_total_file_size_bytes: 524288    # 512KB total context limit
 
 embedding:
-  # base_url: "http://localhost:8081"    # Local nomic-embed-code container
+  # base_url: "http://localhost:12435"   # Local nomic-embed-code container
   # model: "nomic-embed-code"
   # batch_size: 32
   # timeout_seconds: 30
   # query_prefix: "Represent this query for searching relevant code: "
+
+local_services:
+  # enabled: true
+  # mode: manual                         # off | manual | auto
+  # provider: docker-compose
+  # compose_file: ./ops/llm/docker-compose.yml
+  # project_dir: ./ops/llm
+  # required_networks:
+  #   - llm-net
+  # auto_create_networks: true
+  # startup_timeout_seconds: 180
+  # healthcheck_interval_seconds: 2
+  # services:
+  #   qwen-coder:
+  #     base_url: http://localhost:12434
+  #     health_path: /health
+  #     models_path: /v1/models
+  #     required: true
+  #   nomic-embed:
+  #     base_url: http://localhost:12435
+  #     health_path: /health
+  #     models_path: /v1/models
+  #     required: true
 
 # --- Agent Loop (doc 05) ---
 agent:
