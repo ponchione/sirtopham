@@ -7,13 +7,26 @@ import type {
 
 export type ConnectionStatus = "connecting" | "connected" | "disconnected";
 
+export type ServerEvent = ServerMessage<ServerEventData>;
+
 export interface UseWebSocketReturn {
   /** Current connection status. */
   status: ConnectionStatus;
-  /** Last event received from the server. Consumers should watch this via useEffect. */
-  lastEvent: ServerMessage<ServerEventData> | null;
+  /**
+   * Ref-backed append-only queue of every server event received, in arrival
+   * order. Consumers should drain the queue (track their own index) whenever
+   * `eventTick` changes. Using a ref + tick pattern instead of a single
+   * `lastEvent` state avoids losing events when React 18's automatic batching
+   * coalesces rapid-fire WebSocket frames into a single render — the prior
+   * design silently dropped all but the last frame in a batch (B1 fix).
+   */
+  eventQueue: React.MutableRefObject<ServerEvent[]>;
+  /** Increments once per received event. Use as a useEffect dependency. */
+  eventTick: number;
   /** Send a user message. Creates a new conversation if conversationId is omitted. */
   sendMessage: (content: string, conversationId?: string) => void;
+  /** Set the provider/model override for the next turn. */
+  sendModelOverride: (provider: string, model: string) => void;
   /** Cancel the in-progress turn. */
   cancel: () => void;
 }
@@ -30,7 +43,11 @@ export function useWebSocket(): UseWebSocketReturn {
   const reconnectDelay = useRef(1000);
 
   const [status, setStatus] = useState<ConnectionStatus>("disconnected");
-  const [lastEvent, setLastEvent] = useState<ServerMessage<ServerEventData> | null>(null);
+  // Ref-backed queue: ref writes are synchronous and never batched, so every
+  // WebSocket frame is preserved in arrival order. `eventTick` is a cheap
+  // counter that nudges React to re-render and fire consumer effects.
+  const eventQueue = useRef<ServerEvent[]>([]);
+  const [eventTick, setEventTick] = useState(0);
 
   const connect = useCallback(() => {
     // Build WS URL relative to the current page origin.
@@ -48,8 +65,9 @@ export function useWebSocket(): UseWebSocketReturn {
 
     ws.onmessage = (ev: MessageEvent) => {
       try {
-        const msg = JSON.parse(ev.data as string) as ServerMessage<ServerEventData>;
-        setLastEvent(msg);
+        const msg = JSON.parse(ev.data as string) as ServerEvent;
+        eventQueue.current.push(msg);
+        setEventTick((t) => t + 1);
       } catch {
         // Ignore malformed messages.
       }
@@ -96,9 +114,17 @@ export function useWebSocket(): UseWebSocketReturn {
     [send],
   );
 
+  const sendModelOverride = useCallback((provider: string, model: string) => {
+    send({
+      type: "model_override",
+      provider,
+      model,
+    });
+  }, [send]);
+
   const cancel = useCallback(() => {
     send({ type: "cancel" });
   }, [send]);
 
-  return { status, lastEvent, sendMessage, cancel };
+  return { status, eventQueue, eventTick, sendMessage, sendModelOverride, cancel };
 }

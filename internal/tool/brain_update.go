@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/ponchione/sirtopham/internal/brain"
 	"github.com/ponchione/sirtopham/internal/config"
@@ -160,6 +161,22 @@ func (b *BrainUpdate) Execute(ctx context.Context, projectRoot string, input jso
 			Content: fmt.Sprintf("Brain document updated, but failed to read back final content: %v", err),
 			Error:   err.Error(),
 		}, nil
+	}
+
+	if b.config.LogBrainOperations {
+		if err := appendBrainLog(ctx, b.client, BrainLogEntry{
+			Timestamp: time.Now().UTC(),
+			Operation: "update",
+			Target:    params.Path,
+			Summary:   fmt.Sprintf("Updated brain document via %s.", params.Operation),
+			Session:   sessionIDFromContext(ctx),
+		}); err != nil {
+			return &ToolResult{
+				Success: false,
+				Content: fmt.Sprintf("Brain document updated but failed to append operation log: %v", err),
+				Error:   err.Error(),
+			}, nil
+		}
 	}
 
 	return &ToolResult{

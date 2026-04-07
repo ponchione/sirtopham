@@ -4,13 +4,14 @@ import {
   useConversation,
   type ChatMessage,
   type ContentBlock,
+  type TurnUsage,
 } from "@/hooks/use-conversation";
 import { useContextReport } from "@/hooks/use-context-report";
 import { useProviders } from "@/hooks/use-providers";
 import { api } from "@/lib/api";
 import { messageViewsToChat } from "@/lib/history";
 import type { Conversation, MessageView } from "@/types/api";
-import type { AppConfig, ContextReport } from "@/types/metrics";
+import type { AppConfig, ContextReport, ConversationMetrics } from "@/types/metrics";
 import { Button } from "@/components/ui/button";
 import { ThinkingBlock } from "@/components/chat/thinking-block";
 import { ToolCallCard } from "@/components/chat/tool-call-card";
@@ -57,8 +58,17 @@ export function ConversationPage() {
   const [conversationMeta, setConversationMeta] = useState<Conversation | null>(null);
   const [selectedProvider, setSelectedProvider] = useState<string>("");
   const [selectedModel, setSelectedModel] = useState<string>("");
+  // B3 fix: hydrate the last-turn usage badge on page reload. The WS-driven
+  // lastTurnUsage only populates on live turn_complete events, so a page
+  // refresh leaves the badge blank. We fetch the aggregate metrics once per
+  // convId and use its last_turn field as a fallback.
+  const [hydratedLastTurn, setHydratedLastTurn] = useState<TurnUsage | null>(null);
   const ctxReport = useContextReport(convId);
   const { providers } = useProviders();
+
+  // Derived: prefer the live state value over hydrated, so ongoing turns
+  // override stale page-load data.
+  const displayLastTurnUsage: TurnUsage | null = lastTurnUsage ?? hydratedLastTurn;
 
   // Feed live context_debug events into the inspector.
   useEffect(() => {
@@ -70,6 +80,39 @@ export function ConversationPage() {
 
   useEffect(() => {
     historyLoaded.current = false;
+  }, [convId]);
+
+  // B3 fix: fetch aggregate metrics once per conversation, extract last_turn,
+  // and hydrate the usage badge so it's populated on reload even before a new
+  // live turn_complete event fires.
+  useEffect(() => {
+    if (!convId) {
+      setHydratedLastTurn(null);
+      return;
+    }
+    let cancelled = false;
+    api
+      .get<ConversationMetrics>(`/api/metrics/conversation/${convId}`)
+      .then((data) => {
+        if (cancelled) return;
+        if (data.last_turn) {
+          setHydratedLastTurn({
+            turnNumber: data.last_turn.turn_number,
+            iterationCount: data.last_turn.iteration_count,
+            inputTokens: data.last_turn.tokens_in,
+            outputTokens: data.last_turn.tokens_out,
+            duration: data.last_turn.latency_ms * 1_000_000, // ms -> ns
+          });
+        } else {
+          setHydratedLastTurn(null);
+        }
+      })
+      .catch((err) => {
+        console.error("Failed to hydrate last-turn usage:", err);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [convId]);
 
   useEffect(() => {
@@ -320,10 +363,10 @@ export function ConversationPage() {
                 streaming={isStreaming && i === messages.length - 1 && msg.role === "assistant"}
               />
               {/* Usage badge after last assistant message when turn is done */}
-              {i === lastAssistantIdx && !isStreaming && lastTurnUsage && (
+              {i === lastAssistantIdx && !isStreaming && displayLastTurnUsage && (
                 <div className="flex justify-start mt-0.5">
                   <div className="max-w-[85%]">
-                    <TurnUsageBadge usage={lastTurnUsage} />
+                    <TurnUsageBadge usage={displayLastTurnUsage} />
                   </div>
                 </div>
               )}

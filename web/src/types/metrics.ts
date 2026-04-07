@@ -9,6 +9,20 @@ export interface ConversationMetrics {
   cache_hit_rate_pct: number;
   tool_usage: ToolUsageMetrics[];
   context_quality: ContextQualityMetrics;
+  /**
+   * Latest completed turn's aggregated usage. Present only when the
+   * conversation has at least one chat turn with recorded sub_calls. Used by
+   * the frontend to hydrate the turn-usage badge on conversation reload.
+   */
+  last_turn?: LastTurnUsage;
+}
+
+export interface LastTurnUsage {
+  turn_number: number;
+  iteration_count: number;
+  tokens_in: number;
+  tokens_out: number;
+  latency_ms: number;
 }
 
 export interface TokenUsageMetrics {
@@ -48,7 +62,7 @@ export interface ContextReport {
   rag_results?: RAGResult[];
   brain_results?: BrainResult[];
   graph_results?: GraphResult[];
-  explicit_files?: unknown;
+  explicit_files?: ExplicitFileResult[];
   budget_breakdown?: BudgetCategory[];
   agent_read_files?: string[];
 
@@ -64,6 +78,15 @@ export interface ContextReport {
 
 export interface ContextNeeds {
   queries?: string[];
+  semantic_queries?: string[];
+  explicit_files?: string[];
+  explicit_symbols?: string[];
+  include_conventions?: boolean;
+  include_git_context?: boolean;
+  git_context_depth?: number;
+  momentum_files?: string[];
+  momentum_module?: string;
+  signals?: ContextSignal[];
   [key: string]: unknown;
 }
 
@@ -75,25 +98,61 @@ export interface ContextSignal {
 }
 
 export interface RAGResult {
+  chunk_id?: string;
   file_path: string;
   chunk_name?: string;
-  score: number;
+  name?: string;
+  signature?: string;
+  description?: string;
+  body?: string;
+  score?: number;
+  similarity_score?: number;
+  language?: string;
+  chunk_type?: string;
+  line_start?: number;
+  line_end?: number;
+  hit_count?: number;
+  from_hop?: boolean;
+  matched_by?: string;
+  sources?: string[];
   included: boolean;
   reason?: string;
+  exclusion_reason?: string;
 }
 
 export interface BrainResult {
-  vault_path: string;
+  vault_path?: string;
+  document_path?: string;
   title?: string;
-  score: number;
+  snippet?: string;
+  score?: number;
+  match_score?: number;
   match_mode?: string;
+  tags?: string[];
+  included?: boolean;
+  exclusion_reason?: string;
 }
 
 export interface GraphResult {
-  symbol: string;
-  relationship: string;
-  depth: number;
+  symbol?: string;
+  symbol_name?: string;
+  relationship?: string;
+  relationship_type?: string;
+  depth?: number;
   file_path: string;
+  line_start?: number;
+  line_end?: number;
+  included?: boolean;
+  exclusion_reason?: string;
+}
+
+export interface ExplicitFileResult {
+  file_path: string;
+  content?: string;
+  token_count?: number;
+  truncated?: boolean;
+  included?: boolean;
+  exclusion_reason?: string;
 }
 
 export interface BudgetCategory {
@@ -125,6 +184,8 @@ export interface ProviderModel {
 export interface AppConfig {
   default_provider: string;
   default_model: string;
+  fallback_provider?: string;
+  fallback_model?: string;
   agent: {
     max_iterations: number;
     extended_thinking: boolean;
@@ -147,4 +208,6 @@ export interface ProjectInfo {
   root_path: string;
   name: string;
   language?: string;
+  last_indexed_at?: string;
+  last_indexed_commit?: string;
 }

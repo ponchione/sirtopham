@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/ponchione/sirtopham/internal/brain"
 	"github.com/ponchione/sirtopham/internal/config"
@@ -28,9 +29,11 @@ type brainWriteInput struct {
 	Content string `json:"content"`
 }
 
-func (b *BrainWrite) Name() string        { return "brain_write" }
-func (b *BrainWrite) Description() string { return "Create or overwrite a brain document in the Obsidian vault" }
-func (b *BrainWrite) ToolPurity() Purity  { return Mutating }
+func (b *BrainWrite) Name() string { return "brain_write" }
+func (b *BrainWrite) Description() string {
+	return "Create or overwrite a brain document in the Obsidian vault"
+}
+func (b *BrainWrite) ToolPurity() Purity { return Mutating }
 
 func (b *BrainWrite) Schema() json.RawMessage {
 	return json.RawMessage(`{
@@ -96,6 +99,22 @@ func (b *BrainWrite) Execute(ctx context.Context, projectRoot string, input json
 			Content: fmt.Sprintf("Failed to write brain document: %v", err),
 			Error:   err.Error(),
 		}, nil
+	}
+
+	if b.config.LogBrainOperations {
+		if err := appendBrainLog(ctx, b.client, BrainLogEntry{
+			Timestamp: time.Now().UTC(),
+			Operation: "write",
+			Target:    params.Path,
+			Summary:   fmt.Sprintf("Wrote brain document: %s", params.Path),
+			Session:   sessionIDFromContext(ctx),
+		}); err != nil {
+			return &ToolResult{
+				Success: false,
+				Content: fmt.Sprintf("Brain document written but failed to append operation log: %v", err),
+				Error:   err.Error(),
+			}, nil
+		}
 	}
 
 	return &ToolResult{

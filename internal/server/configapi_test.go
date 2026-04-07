@@ -1,12 +1,14 @@
 package server_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/ponchione/sirtopham/internal/config"
@@ -23,6 +25,8 @@ func TestGetConfigIncludesToolOutputLimitAndStoreRoot(t *testing.T) {
 	cfg.Agent.ToolResultStoreRoot = filepath.Join(projectRoot, ".artifacts", "tool-results")
 	cfg.Agent.MaxIterationsPerTurn = 42
 	cfg.Agent.ExtendedThinking = false
+	cfg.Routing.Fallback.Provider = "openrouter"
+	cfg.Routing.Fallback.Model = cfg.Providers["openrouter"].Model
 
 	srv := server.New(server.Config{Host: "127.0.0.1", Port: 0}, newTestLogger())
 	server.NewConfigHandler(srv, cfg, nil, nil, newTestLogger())
@@ -35,7 +39,11 @@ func TestGetConfigIncludesToolOutputLimitAndStoreRoot(t *testing.T) {
 	defer resp.Body.Close()
 
 	var body struct {
-		Agent struct {
+		DefaultProvider  string `json:"default_provider"`
+		DefaultModel     string `json:"default_model"`
+		FallbackProvider string `json:"fallback_provider"`
+		FallbackModel    string `json:"fallback_model"`
+		Agent            struct {
 			MaxIterations            int    `json:"max_iterations"`
 			ExtendedThinking         bool   `json:"extended_thinking"`
 			ToolOutputMaxTokens      int    `json:"tool_output_max_tokens"`
@@ -49,6 +57,18 @@ func TestGetConfigIncludesToolOutputLimitAndStoreRoot(t *testing.T) {
 		t.Fatalf("decode response: %v", err)
 	}
 
+	if body.DefaultProvider != cfg.Routing.Default.Provider {
+		t.Fatalf("default_provider = %q, want %q", body.DefaultProvider, cfg.Routing.Default.Provider)
+	}
+	if body.DefaultModel != cfg.Routing.Default.Model {
+		t.Fatalf("default_model = %q, want %q", body.DefaultModel, cfg.Routing.Default.Model)
+	}
+	if body.FallbackProvider != cfg.Routing.Fallback.Provider {
+		t.Fatalf("fallback_provider = %q, want %q", body.FallbackProvider, cfg.Routing.Fallback.Provider)
+	}
+	if body.FallbackModel != cfg.Routing.Fallback.Model {
+		t.Fatalf("fallback_model = %q, want %q", body.FallbackModel, cfg.Routing.Fallback.Model)
+	}
 	if body.Agent.MaxIterations != 42 {
 		t.Fatalf("agent.max_iterations = %d, want 42", body.Agent.MaxIterations)
 	}
@@ -370,5 +390,51 @@ func TestConfigEndpointUsesAvailableRuntimeModelsEvenIfAuthStatusesFail(t *testi
 	}
 	if body.Providers[0].Auth != nil || body.Providers[1].Auth != nil {
 		t.Fatalf("expected auth payloads to be omitted when auth status lookup fails, got %+v", body.Providers)
+	}
+}
+
+func TestPutConfigRejectsModelNotAvailableOnProvider(t *testing.T) {
+	cfg := config.Default()
+	cfg.ProjectRoot = t.TempDir()
+	cfg.Brain.Enabled = false
+	cfg.Providers = map[string]config.ProviderConfig{
+		"anthropic": {Type: "anthropic", Model: "claude-sonnet-4-20250514"},
+		"openai":    {Type: "openai", Model: "gpt-4o"},
+	}
+
+	runtime := &stubRuntimeInspector{
+		models: []provider.Model{
+			{ID: "claude-sonnet-4-20250514", Provider: "anthropic"},
+			{ID: "gpt-4o", Provider: "openai"},
+		},
+	}
+
+	srv := server.New(server.Config{Host: "127.0.0.1", Port: 0}, newTestLogger())
+	server.NewConfigHandler(srv, cfg, runtime, nil, newTestLogger())
+	_, base := startServer(t, srv)
+
+	body := []byte(`{"default_provider":"anthropic","default_model":"gpt-4o"}`)
+	req, err := http.NewRequest(http.MethodPut, base+"/api/config", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("PUT /api/config status = %d, want 400", resp.StatusCode)
+	}
+	var payload struct {
+		Error string `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode error payload: %v", err)
+	}
+	if !strings.Contains(payload.Error, "model gpt-4o not available on provider anthropic") {
+		t.Fatalf("error = %q, want unavailable-model message", payload.Error)
 	}
 }

@@ -33,6 +33,18 @@ type conversationMetricsResponse struct {
 	CacheHitRate   float64            `json:"cache_hit_rate_pct"`
 	ToolUsage      []toolUsageView    `json:"tool_usage"`
 	ContextQuality contextQualityView `json:"context_quality"`
+	LastTurn       *lastTurnView      `json:"last_turn,omitempty"`
+}
+
+// lastTurnView carries the most recent turn's aggregated token + latency
+// usage. Used by the frontend to hydrate the turn-usage badge on conversation
+// reload (B3 fix — previously only populated from live `turn_complete` events).
+type lastTurnView struct {
+	TurnNumber     int64 `json:"turn_number"`
+	IterationCount int64 `json:"iteration_count"`
+	TokensIn       int64 `json:"tokens_in"`
+	TokensOut      int64 `json:"tokens_out"`
+	LatencyMs      int64 `json:"latency_ms"`
 }
 
 type tokenUsageView struct {
@@ -104,6 +116,25 @@ func (h *MetricsHandler) handleConversationMetrics(w http.ResponseWriter, r *htt
 		return
 	}
 
+	// Latest turn usage — best-effort (B3). Absent rows are not an error;
+	// conversations with zero completed turns simply omit the field.
+	var lastTurn *lastTurnView
+	lastTurnRow, err := h.queries.GetConversationLastTurnUsage(ctx, appdb.GetConversationLastTurnUsageParams{
+		ConversationID:   sql.NullString{String: convID, Valid: true},
+		ConversationID_2: sql.NullString{String: convID, Valid: true},
+	})
+	if err == nil && lastTurnRow.TurnNumber.Valid {
+		lastTurn = &lastTurnView{
+			TurnNumber:     lastTurnRow.TurnNumber.Int64,
+			IterationCount: lastTurnRow.IterationCount,
+			TokensIn:       lastTurnRow.TokensIn,
+			TokensOut:      lastTurnRow.TokensOut,
+			LatencyMs:      lastTurnRow.LatencyMs,
+		}
+	} else if err != nil && err != sql.ErrNoRows {
+		h.logger.Warn("get last turn usage", "error", err, "id", convID)
+	}
+
 	writeJSON(w, http.StatusOK, conversationMetricsResponse{
 		TokenUsage: tokenUsageView{
 			TokensIn:        tokenRow.TotalIn,
@@ -120,6 +151,7 @@ func (h *MetricsHandler) handleConversationMetrics(w http.ResponseWriter, r *htt
 			AvgHitRate:          nullFloat(ctxRow.AvgHitRate),
 			AvgBudgetUsedPct:    nullFloat(ctxRow.AvgBudgetUsed),
 		},
+		LastTurn: lastTurn,
 	})
 }
 

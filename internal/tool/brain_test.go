@@ -16,17 +16,22 @@ import (
 // ── helpers ──────────────────────────────────────────────────────────
 
 func brainConfig(enabled bool) config.BrainConfig {
-	return config.BrainConfig{Enabled: enabled}
+	return config.BrainConfig{
+		Enabled:            enabled,
+		LogBrainOperations: true,
+		LintStaleDays:      90,
+	}
 }
 
 type fakeBackend struct {
-	docs     map[string]string
-	searches map[string][]brain.SearchHit
-	listings map[string][]string
-	readErr  error
-	writeErr error
-	patchErr error
-	patchOps []string
+	docs      map[string]string
+	searches  map[string][]brain.SearchHit
+	listings  map[string][]string
+	readErr   error
+	searchErr error
+	writeErr  error
+	patchErr  error
+	patchOps  []string
 }
 
 func newFakeBackend(docs map[string]string) *fakeBackend {
@@ -107,6 +112,9 @@ func (f *fakeBackend) PatchDocument(ctx context.Context, path string, operation 
 }
 
 func (f *fakeBackend) SearchKeyword(ctx context.Context, query string) ([]brain.SearchHit, error) {
+	if f.searchErr != nil {
+		return nil, f.searchErr
+	}
 	lowerQuery := strings.ToLower(query)
 	var hits []brain.SearchHit
 	for path, content := range f.docs {
@@ -270,7 +278,7 @@ func TestBrainToolDefinitionsSteerVaultNotePathsToBrainTools(t *testing.T) {
 	if !ok {
 		t.Fatal("brain_read definition missing")
 	}
-	for _, want := range []string{"notes/...md", "file_read", "vault-relative"} {
+	for _, want := range []string{"notes/...md", "file_read", "vault-relative", ".brain paths"} {
 		if !strings.Contains(brainRead.Description, want) {
 			t.Fatalf("brain_read description = %q, want substring %q", brainRead.Description, want)
 		}
@@ -280,10 +288,28 @@ func TestBrainToolDefinitionsSteerVaultNotePathsToBrainTools(t *testing.T) {
 	if !ok {
 		t.Fatal("brain_search definition missing")
 	}
-	for _, want := range []string{"notes/...md", "search_text", "brain_read"} {
+	for _, want := range []string{"notes/...md", "search_text", "brain_read", ".brain paths", "do not double-check a successful brain hit"} {
 		if !strings.Contains(brainSearch.Description, want) {
 			t.Fatalf("brain_search description = %q, want substring %q", brainSearch.Description, want)
 		}
+	}
+}
+
+func TestRegistryToolDefinitionsPreferBrainToolsBeforeSearchTools(t *testing.T) {
+	reg := NewRegistry()
+	RegisterBrainTools(reg, newFakeBackend(map[string]string{}), brainConfig(true))
+	RegisterSearchTools(reg, nil)
+
+	defs := reg.ToolDefinitions()
+	index := map[string]int{}
+	for i, def := range defs {
+		index[def.Name] = i
+	}
+	if index["brain_search"] >= index["search_text"] {
+		t.Fatalf("tool order brain_search/search_text = %d/%d, want brain_search before search_text", index["brain_search"], index["search_text"])
+	}
+	if index["brain_read"] >= index["search_text"] {
+		t.Fatalf("tool order brain_read/search_text = %d/%d, want brain_read before search_text", index["brain_read"], index["search_text"])
 	}
 }
 
@@ -343,6 +369,88 @@ func TestBrainSearchMaxResults(t *testing.T) {
 	}
 	if got, want := result.Content, "Found 1 brain document for \"test\":\n- a.md — A\n  test content A"; got != want {
 		t.Fatalf("content = %q\nwant    %q", got, want)
+	}
+}
+
+func TestBrainSearchAppendsQueryLogWhenEnabled(t *testing.T) {
+	backend := newFakeBackend(map[string]string{
+		"notes/auth.md": "# Auth\nAuthentication architecture notes.",
+	})
+	cfg := brainConfig(true)
+	cfg.LogBrainQueries = true
+	tool := NewBrainSearch(backend, cfg)
+
+	ctx := ContextWithExecutionMeta(context.Background(), ExecutionMeta{
+		ConversationID: "conv-search",
+		TurnNumber:     1,
+		Iteration:      1,
+	})
+	result, err := tool.Execute(ctx, "/tmp", json.RawMessage(`{"query":"auth"}`))
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("Success = false, content = %q", result.Content)
+	}
+
+	logDoc := backend.docs["_log.md"]
+	if !strings.Contains(logDoc, "query | auth") {
+		t.Fatalf("expected query log entry, got:\n%s", logDoc)
+	}
+	if !strings.Contains(logDoc, "Returned 1 result via keyword search.") {
+		t.Fatalf("expected deterministic query summary, got:\n%s", logDoc)
+	}
+	if !strings.Contains(logDoc, "Session: conv-search") {
+		t.Fatalf("expected session log entry, got:\n%s", logDoc)
+	}
+}
+
+func TestBrainSearchDoesNotAppendQueryLogWhenDisabled(t *testing.T) {
+	backend := newFakeBackend(map[string]string{
+		"notes/auth.md": "# Auth\nAuthentication architecture notes.",
+	})
+	tool := NewBrainSearch(backend, brainConfig(true))
+
+	result, err := tool.Execute(context.Background(), "/tmp", json.RawMessage(`{"query":"auth"}`))
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("Success = false, content = %q", result.Content)
+	}
+	if _, ok := backend.docs["_log.md"]; ok {
+		t.Fatalf("expected no query log document when disabled, got:\n%s", backend.docs["_log.md"])
+	}
+}
+
+func TestBrainSearchDoesNotAppendQueryLogOnFailure(t *testing.T) {
+	backend := newFakeBackend(map[string]string{})
+	backend.searchErr = fmt.Errorf("search backend unavailable")
+	cfg := brainConfig(true)
+	cfg.LogBrainQueries = true
+	tool := NewBrainSearch(backend, cfg)
+
+	result, err := tool.Execute(context.Background(), "/tmp", json.RawMessage(`{"query":"auth"}`))
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if result.Success {
+		t.Fatalf("expected Success=false, content = %q", result.Content)
+	}
+	if _, ok := backend.docs["_log.md"]; ok {
+		t.Fatalf("expected no query log document on failure, got:\n%s", backend.docs["_log.md"])
+	}
+}
+
+func TestBrainSearchPurityDependsOnQueryLogging(t *testing.T) {
+	if got := NewBrainSearch(nil, brainConfig(true)).ToolPurity(); got != Pure {
+		t.Fatalf("ToolPurity() = %v, want %v when query logging disabled", got, Pure)
+	}
+
+	cfg := brainConfig(true)
+	cfg.LogBrainQueries = true
+	if got := NewBrainSearch(nil, cfg).ToolPurity(); got != Mutating {
+		t.Fatalf("ToolPurity() = %v, want %v when query logging enabled", got, Mutating)
 	}
 }
 
@@ -422,9 +530,9 @@ func TestBrainReadNoFrontmatter(t *testing.T) {
 
 func TestBrainReadWithBacklinks(t *testing.T) {
 	docs := map[string]string{
-		"arch/design.md":    "# Design\nCore design document.",
-		"notes/session.md":  "Working on [[design]] today.",
-		"notes/review.md":   "Reviewed the design changes.",
+		"arch/design.md":   "# Design\nCore design document.",
+		"notes/session.md": "Working on [[design]] today.",
+		"notes/review.md":  "Reviewed the design changes.",
 	}
 	backend := newFakeBackend(docs)
 	tool := NewBrainRead(backend, brainConfig(true))
@@ -473,6 +581,49 @@ func TestBrainWriteSuccess(t *testing.T) {
 	// Verify the doc was actually stored.
 	if docs["notes/new.md"] != content {
 		t.Fatalf("stored content = %q, want original", docs["notes/new.md"])
+	}
+}
+
+func TestBrainWriteAppendsOperationLogWithSession(t *testing.T) {
+	backend := newFakeBackend(map[string]string{})
+	tool := NewBrainWrite(backend, brainConfig(true))
+
+	ctx := ContextWithExecutionMeta(context.Background(), ExecutionMeta{
+		ConversationID: "conv-write",
+		TurnNumber:     1,
+		Iteration:      1,
+	})
+	input := json.RawMessage(`{"path":"notes/design.md","content":"---\ntags: [architecture]\n---\n# Design\nPipeline notes"}`)
+	result, err := tool.Execute(ctx, "/tmp", input)
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("Success = false, content = %q", result.Content)
+	}
+
+	logDoc := backend.docs["_log.md"]
+	if !strings.Contains(logDoc, "Session: conv-write") {
+		t.Fatalf("expected session log entry, got:\n%s", logDoc)
+	}
+}
+
+func TestBrainWriteAppendsOperationLog(t *testing.T) {
+	backend := newFakeBackend(map[string]string{})
+	tool := NewBrainWrite(backend, brainConfig(true))
+
+	input := json.RawMessage(`{"path":"notes/design.md","content":"---\ntags: [architecture]\n---\n# Design\nPipeline notes"}`)
+	result, err := tool.Execute(context.Background(), "/tmp", input)
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("Success = false, content = %q", result.Content)
+	}
+
+	logDoc := backend.docs["_log.md"]
+	if !strings.Contains(logDoc, "write | notes/design.md") {
+		t.Fatalf("expected write log entry, got:\n%s", logDoc)
 	}
 }
 
@@ -531,6 +682,53 @@ func TestBrainUpdateUsesBackendPatchDocument(t *testing.T) {
 	}
 	if len(backend.patchOps) != 1 || backend.patchOps[0] != "append" {
 		t.Fatalf("patchOps = %#v, want [append]", backend.patchOps)
+	}
+}
+
+func TestBrainUpdateAppendsOperationLogWithSession(t *testing.T) {
+	backend := newFakeBackend(map[string]string{
+		"notes/design.md": "---\ntags: [architecture]\n---\n# Design\nInitial content",
+	})
+	tool := NewBrainUpdate(backend, brainConfig(true))
+
+	ctx := ContextWithExecutionMeta(context.Background(), ExecutionMeta{
+		ConversationID: "conv-update",
+		TurnNumber:     1,
+		Iteration:      1,
+	})
+	input := json.RawMessage(`{"path":"notes/design.md","operation":"append","content":"More notes"}`)
+	result, err := tool.Execute(ctx, "/tmp", input)
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("Success = false, content = %q", result.Content)
+	}
+
+	logDoc := backend.docs["_log.md"]
+	if !strings.Contains(logDoc, "Session: conv-update") {
+		t.Fatalf("expected session log entry, got:\n%s", logDoc)
+	}
+}
+
+func TestBrainUpdateAppendsOperationLog(t *testing.T) {
+	backend := newFakeBackend(map[string]string{
+		"notes/design.md": "---\ntags: [architecture]\n---\n# Design\nInitial content",
+	})
+	tool := NewBrainUpdate(backend, brainConfig(true))
+
+	input := json.RawMessage(`{"path":"notes/design.md","operation":"append","content":"More notes"}`)
+	result, err := tool.Execute(context.Background(), "/tmp", input)
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("Success = false, content = %q", result.Content)
+	}
+
+	logDoc := backend.docs["_log.md"]
+	if !strings.Contains(logDoc, "update | notes/design.md") {
+		t.Fatalf("expected update log entry, got:\n%s", logDoc)
 	}
 }
 
@@ -761,6 +959,7 @@ func TestBrainToolSchemas(t *testing.T) {
 		NewBrainRead(nil, cfg),
 		NewBrainWrite(nil, cfg),
 		NewBrainUpdate(nil, cfg),
+		NewBrainLint(nil, cfg),
 	}
 
 	for _, tool := range tools {
@@ -789,7 +988,7 @@ func TestRegisterBrainTools(t *testing.T) {
 	for _, tool := range reg.All() {
 		names[tool.Name()] = true
 	}
-	for _, expected := range []string{"brain_search", "brain_read", "brain_write", "brain_update"} {
+	for _, expected := range []string{"brain_search", "brain_read", "brain_write", "brain_update", "brain_lint"} {
 		if !names[expected] {
 			t.Fatalf("missing tool %q in registry", expected)
 		}
@@ -800,8 +999,8 @@ func TestRegisterBrainToolsNilClient(t *testing.T) {
 	// Should not panic even with nil client.
 	reg := NewRegistry()
 	RegisterBrainTools(reg, nil, brainConfig(true))
-	if len(reg.All()) != 4 {
-		t.Fatalf("tool count = %d, want 4", len(reg.All()))
+	if len(reg.All()) != 5 {
+		t.Fatalf("tool count = %d, want 5", len(reg.All()))
 	}
 }
 
@@ -897,6 +1096,35 @@ func TestBrainToolsIntegrationLifecycle(t *testing.T) {
 }
 
 // ── wikilink extraction unit tests ──────────────────────────────────
+
+func TestBrainWriteUpdateAndLintProduceLogHistory(t *testing.T) {
+	backend := newFakeBackend(map[string]string{})
+
+	writeTool := NewBrainWrite(backend, brainConfig(true))
+	_, err := writeTool.Execute(context.Background(), "/tmp", json.RawMessage(`{"path":"notes/design.md","content":"---\nupdated_at: 2026-04-01T10:00:00Z\ntags: [architecture]\n---\n# Design\n[[notes/missing]]"}`))
+	if err != nil {
+		t.Fatalf("write Execute returned error: %v", err)
+	}
+
+	updateTool := NewBrainUpdate(backend, brainConfig(true))
+	_, err = updateTool.Execute(context.Background(), "/tmp", json.RawMessage(`{"path":"notes/design.md","operation":"append","content":"More details"}`))
+	if err != nil {
+		t.Fatalf("update Execute returned error: %v", err)
+	}
+
+	lintTool := NewBrainLint(backend, brainConfig(true))
+	_, err = lintTool.Execute(context.Background(), "/tmp", json.RawMessage(`{"scope":"full"}`))
+	if err != nil {
+		t.Fatalf("lint Execute returned error: %v", err)
+	}
+
+	logDoc := backend.docs["_log.md"]
+	for _, needle := range []string{"write | notes/design.md", "update | notes/design.md", "lint | full"} {
+		if !strings.Contains(logDoc, needle) {
+			t.Fatalf("expected %q in log doc:\n%s", needle, logDoc)
+		}
+	}
+}
 
 func TestExtractWikilinks(t *testing.T) {
 	tests := []struct {

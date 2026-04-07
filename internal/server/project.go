@@ -1,6 +1,8 @@
 package server
 
 import (
+	"context"
+	"database/sql"
 	"log/slog"
 	"net/http"
 	"os"
@@ -10,6 +12,7 @@ import (
 	"sync"
 
 	"github.com/ponchione/sirtopham/internal/config"
+	appdb "github.com/ponchione/sirtopham/internal/db"
 	"github.com/ponchione/sirtopham/internal/langutil"
 	"github.com/ponchione/sirtopham/internal/pathglob"
 )
@@ -37,9 +40,11 @@ func NewProjectHandler(s *Server, cfg *config.Config, logger *slog.Logger) *Proj
 // ── GET /api/project ─────────────────────────────────────────────────
 
 type projectInfoResponse struct {
-	RootPath string `json:"root_path"`
-	Language string `json:"language,omitempty"`
-	Name     string `json:"name"`
+	RootPath          string `json:"root_path"`
+	Language          string `json:"language,omitempty"`
+	Name              string `json:"name"`
+	LastIndexedAt     string `json:"last_indexed_at,omitempty"`
+	LastIndexedCommit string `json:"last_indexed_commit,omitempty"`
 }
 
 func (h *ProjectHandler) handleProject(w http.ResponseWriter, _ *http.Request) {
@@ -50,10 +55,14 @@ func (h *ProjectHandler) handleProject(w http.ResponseWriter, _ *http.Request) {
 		h.logger.Info("cached primary language", "language", h.langVal)
 	})
 
+	lastIndexedAt, lastIndexedCommit := h.loadProjectIndexMetadata(context.Background())
+
 	writeJSON(w, http.StatusOK, projectInfoResponse{
-		RootPath: h.cfg.ProjectRoot,
-		Language: h.langVal,
-		Name:     name,
+		RootPath:          h.cfg.ProjectRoot,
+		Language:          h.langVal,
+		Name:              name,
+		LastIndexedAt:     lastIndexedAt,
+		LastIndexedCommit: lastIndexedCommit,
 	})
 }
 
@@ -149,6 +158,42 @@ func (h *ProjectHandler) handleFile(w http.ResponseWriter, r *http.Request) {
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
+
+func (h *ProjectHandler) loadProjectIndexMetadata(ctx context.Context) (lastIndexedAt string, lastIndexedCommit string) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	databasePath := h.cfg.DatabasePath()
+	if strings.TrimSpace(databasePath) == "" {
+		return "", ""
+	}
+	if _, err := os.Stat(databasePath); err != nil {
+		return "", ""
+	}
+	database, err := appdb.OpenDB(ctx, databasePath)
+	if err != nil {
+		h.logger.Debug("open project metadata db", "error", err, "path", databasePath)
+		return "", ""
+	}
+	defer database.Close()
+
+	var commit sql.NullString
+	var indexedAt sql.NullString
+	err = database.QueryRowContext(ctx, `SELECT last_indexed_commit, last_indexed_at FROM projects WHERE id = ?`, h.cfg.ProjectRoot).Scan(&commit, &indexedAt)
+	if err != nil {
+		if err != sql.ErrNoRows {
+			h.logger.Debug("load project index metadata", "error", err, "project_id", h.cfg.ProjectRoot)
+		}
+		return "", ""
+	}
+	if indexedAt.Valid {
+		lastIndexedAt = indexedAt.String
+	}
+	if commit.Valid {
+		lastIndexedCommit = commit.String
+	}
+	return lastIndexedAt, lastIndexedCommit
+}
 
 func buildTree(root, dir string, excludes []string, depth, maxDepth int) treeNode {
 	name := filepath.Base(dir)

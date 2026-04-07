@@ -125,6 +125,10 @@ func runServe(cmd *cobra.Command, configPath string, portOverride int, hostOverr
 			Provider: cfg.Routing.Default.Provider,
 			Model:    cfg.Routing.Default.Model,
 		},
+		Fallback: router.RouteTarget{
+			Provider: cfg.Routing.Fallback.Provider,
+			Model:    cfg.Routing.Fallback.Model,
+		},
 	}
 
 	subCallStore := tracking.NewSQLiteSubCallStore(queries)
@@ -166,14 +170,14 @@ func runServe(cmd *cobra.Command, configPath string, portOverride int, hostOverr
 		TimeoutSeconds: cfg.Agent.ShellTimeoutSeconds,
 		Denylist:       cfg.Agent.ShellDenylist,
 	})
-	tool.RegisterSearchTools(registry, semanticSearcher)
 
 	brainBackend, closeBrainBackend, err := buildBrainBackend(cmd.Context(), cfg.Brain, logger)
 	if err != nil {
 		return fmt.Errorf("build brain backend: %w", err)
 	}
 	defer closeBrainBackend()
-	tool.RegisterBrainTools(registry, brainBackend, cfg.Brain)
+	tool.RegisterBrainToolsWithProvider(registry, brainBackend, cfg.Brain, provRouter)
+	tool.RegisterSearchTools(registry, semanticSearcher)
 
 	executor := tool.NewExecutor(registry, tool.ExecutorConfig{
 		MaxOutputTokens: cfg.Agent.ToolOutputMaxTokens,

@@ -40,7 +40,7 @@ func (b *BrainRead) ToolPurity() Purity { return Pure }
 func (b *BrainRead) Schema() json.RawMessage {
 	return json.RawMessage(`{
 		"name": "brain_read",
-		"description": "Read a specific brain document from the Obsidian vault by its vault-relative path. Use this for brain notes like 'notes/...md' or '.brain/notes/...md', not repo-root files. Prefer brain_read instead of file_read for vault-relative note paths. Returns the markdown content, extracted YAML frontmatter, and outgoing wikilinks.",
+		"description": "Read a specific brain document from the Obsidian vault by its vault-relative path. Use this for brain notes like 'notes/...md' or '.brain/notes/...md', not repo-root files. Prefer brain_read instead of file_read for vault-relative note paths, and never use file_read for .brain paths. Returns the markdown content, extracted YAML frontmatter, and outgoing wikilinks.",
 		"input_schema": {
 			"type": "object",
 			"properties": {

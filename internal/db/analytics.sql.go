@@ -53,6 +53,55 @@ func (q *Queries) GetConversationContextQuality(ctx context.Context, conversatio
 	return i, err
 }
 
+const getConversationLastTurnUsage = `-- name: GetConversationLastTurnUsage :one
+WITH latest_turn AS (
+    SELECT MAX(sc.turn_number) AS n
+    FROM sub_calls sc
+    WHERE sc.conversation_id = ?
+      AND sc.purpose = 'chat'
+      AND sc.turn_number IS NOT NULL
+)
+SELECT
+    sc.turn_number,
+    CAST(COALESCE(MAX(sc.iteration), 1) AS INTEGER) AS iteration_count,
+    CAST(COALESCE(SUM(sc.tokens_in), 0) AS INTEGER) AS tokens_in,
+    CAST(COALESCE(SUM(sc.tokens_out), 0) AS INTEGER) AS tokens_out,
+    CAST(COALESCE(SUM(sc.latency_ms), 0) AS INTEGER) AS latency_ms
+FROM sub_calls sc, latest_turn lt
+WHERE sc.conversation_id = ?
+  AND sc.purpose = 'chat'
+  AND sc.turn_number = lt.n
+GROUP BY sc.turn_number
+`
+
+type GetConversationLastTurnUsageParams struct {
+	ConversationID   sql.NullString `json:"conversation_id"`
+	ConversationID_2 sql.NullString `json:"conversation_id_2"`
+}
+
+type GetConversationLastTurnUsageRow struct {
+	TurnNumber     sql.NullInt64 `json:"turn_number"`
+	IterationCount int64         `json:"iteration_count"`
+	TokensIn       int64         `json:"tokens_in"`
+	TokensOut      int64         `json:"tokens_out"`
+	LatencyMs      int64         `json:"latency_ms"`
+}
+
+// Returns the latest chat turn's aggregated sub_calls usage. Used to populate
+// the per-conversation turn-usage chip on page reload (B3).
+func (q *Queries) GetConversationLastTurnUsage(ctx context.Context, arg GetConversationLastTurnUsageParams) (GetConversationLastTurnUsageRow, error) {
+	row := q.db.QueryRowContext(ctx, getConversationLastTurnUsage, arg.ConversationID, arg.ConversationID_2)
+	var i GetConversationLastTurnUsageRow
+	err := row.Scan(
+		&i.TurnNumber,
+		&i.IterationCount,
+		&i.TokensIn,
+		&i.TokensOut,
+		&i.LatencyMs,
+	)
+	return i, err
+}
+
 const getConversationTokenUsage = `-- name: GetConversationTokenUsage :one
 SELECT
     CAST(COALESCE(SUM(tokens_in), 0) AS INTEGER) AS total_in,

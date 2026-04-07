@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -25,6 +25,18 @@ export function Sidebar({ open, onClose }: SidebarProps) {
   const navigate = useNavigate();
   const { conversations, loading, error, refresh, deleteConversation } =
     useConversationList();
+
+  // B2 fix: when the user navigates to a conversation that isn't in the
+  // current list (e.g. a brand-new one created from the landing page), refresh
+  // the list once. Guarded so we don't loop on a truly missing id.
+  const refreshedIdsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!activeId || loading) return;
+    if (conversations.some((c) => c.id === activeId)) return;
+    if (refreshedIdsRef.current.has(activeId)) return;
+    refreshedIdsRef.current.add(activeId);
+    refresh();
+  }, [activeId, conversations, loading, refresh]);
 
   const handleNewConversation = useCallback(() => {
     navigate("/");

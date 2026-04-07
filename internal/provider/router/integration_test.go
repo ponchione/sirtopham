@@ -346,6 +346,48 @@ func TestIntegration_ModelsAggregation(t *testing.T) {
 	}
 }
 
+func TestIntegration_FallbackProviderHandlesRetriableDefaultFailure(t *testing.T) {
+	cfg := RouterConfig{
+		Default:  RouteTarget{Provider: "anthropic", Model: "claude-sonnet-4-6"},
+		Fallback: RouteTarget{Provider: "local", Model: "qwen2.5-coder-7b"},
+	}
+	r, _ := NewRouter(cfg, nil, nil)
+
+	anthropicMock := &mockProvider{
+		name: "anthropic",
+		completeErr: &provider.ProviderError{
+			Provider:   "anthropic",
+			StatusCode: 503,
+			Message:    "service unavailable",
+			Retriable:  true,
+		},
+	}
+	localResp := &provider.Response{Model: "qwen2.5-coder-7b"}
+	localMock := &mockProvider{
+		name:         "local",
+		completeResp: localResp,
+	}
+
+	_ = r.RegisterProvider(anthropicMock)
+	_ = r.RegisterProvider(localMock)
+
+	resp, err := r.Complete(context.Background(), &provider.Request{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp != localResp {
+		t.Fatal("expected fallback response")
+	}
+
+	health := r.ProviderHealthMap()
+	if health["anthropic"].Healthy {
+		t.Fatal("expected anthropic unhealthy after primary failure")
+	}
+	if !health["local"].Healthy {
+		t.Fatal("expected local healthy after successful fallback")
+	}
+}
+
 func TestIntegration_ConcurrentRequests(t *testing.T) {
 	cfg := RouterConfig{
 		Default: RouteTarget{Provider: "anthropic", Model: "claude-sonnet-4-6"},
