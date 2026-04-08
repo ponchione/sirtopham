@@ -11,7 +11,7 @@ import (
 func RegisterFileTools(r *Registry) {
 	store := newMemoryReadStateStore()
 	r.Register(NewFileRead(store))
-	r.Register(FileWrite{})
+	r.Register(NewFileWrite(store))
 	r.Register(NewFileEdit(store))
 }
 

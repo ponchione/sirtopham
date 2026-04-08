@@ -27,6 +27,7 @@ SELECT
     budget_total,
     budget_used,
     budget_breakdown_json,
+    token_budget_json,
     included_count,
     excluded_count,
     agent_used_search_tool,
@@ -62,6 +63,7 @@ func (q *Queries) GetContextReportByTurn(ctx context.Context, arg GetContextRepo
 		&i.BudgetTotal,
 		&i.BudgetUsed,
 		&i.BudgetBreakdownJson,
+		&i.TokenBudgetJson,
 		&i.IncludedCount,
 		&i.ExcludedCount,
 		&i.AgentUsedSearchTool,
@@ -88,6 +90,7 @@ INSERT INTO context_reports (
     budget_total,
     budget_used,
     budget_breakdown_json,
+    token_budget_json,
     included_count,
     excluded_count,
     agent_used_search_tool,
@@ -95,7 +98,7 @@ INSERT INTO context_reports (
     context_hit_rate,
     created_at
 ) VALUES (
-    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 )
 `
 
@@ -114,6 +117,7 @@ type InsertContextReportParams struct {
 	BudgetTotal         sql.NullInt64   `json:"budget_total"`
 	BudgetUsed          sql.NullInt64   `json:"budget_used"`
 	BudgetBreakdownJson sql.NullString  `json:"budget_breakdown_json"`
+	TokenBudgetJson     sql.NullString  `json:"token_budget_json"`
 	IncludedCount       sql.NullInt64   `json:"included_count"`
 	ExcludedCount       sql.NullInt64   `json:"excluded_count"`
 	AgentUsedSearchTool sql.NullInt64   `json:"agent_used_search_tool"`
@@ -138,6 +142,7 @@ func (q *Queries) InsertContextReport(ctx context.Context, arg InsertContextRepo
 		arg.BudgetTotal,
 		arg.BudgetUsed,
 		arg.BudgetBreakdownJson,
+		arg.TokenBudgetJson,
 		arg.IncludedCount,
 		arg.ExcludedCount,
 		arg.AgentUsedSearchTool,

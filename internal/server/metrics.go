@@ -3,6 +3,7 @@ package server
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -51,11 +52,11 @@ type lastTurnView struct {
 }
 
 type tokenUsageView struct {
-	TokensIn       int64 `json:"tokens_in"`
-	TokensOut      int64 `json:"tokens_out"`
+	TokensIn        int64 `json:"tokens_in"`
+	TokensOut       int64 `json:"tokens_out"`
 	CacheReadTokens int64 `json:"cache_read_tokens"`
-	TotalCalls     int64 `json:"total_calls"`
-	TotalLatencyMs int64 `json:"total_latency_ms"`
+	TotalCalls      int64 `json:"total_calls"`
+	TotalLatencyMs  int64 `json:"total_latency_ms"`
 }
 
 type toolUsageView struct {
@@ -66,10 +67,10 @@ type toolUsageView struct {
 }
 
 type contextQualityView struct {
-	TotalTurns           int64   `json:"total_turns"`
-	ReactiveSearchCount  int64   `json:"reactive_search_count"`
-	AvgHitRate           float64 `json:"avg_hit_rate"`
-	AvgBudgetUsedPct     float64 `json:"avg_budget_used_pct"`
+	TotalTurns          int64   `json:"total_turns"`
+	ReactiveSearchCount int64   `json:"reactive_search_count"`
+	AvgHitRate          float64 `json:"avg_hit_rate"`
+	AvgBudgetUsedPct    float64 `json:"avg_budget_used_pct"`
 }
 
 func (h *MetricsHandler) handleConversationMetrics(w http.ResponseWriter, r *http.Request) {
@@ -170,14 +171,15 @@ type contextReportResponse struct {
 	TotalLatencyMs     *int64 `json:"total_latency_ms,omitempty"`
 
 	// JSON blobs — passed through as raw JSON, not double-encoded.
-	Needs           json.RawMessage `json:"needs,omitempty"`
-	Signals         json.RawMessage `json:"signals,omitempty"`
-	RAGResults      json.RawMessage `json:"rag_results,omitempty"`
-	BrainResults    json.RawMessage `json:"brain_results,omitempty"`
-	GraphResults    json.RawMessage `json:"graph_results,omitempty"`
-	ExplicitFiles   json.RawMessage `json:"explicit_files,omitempty"`
-	BudgetBreakdown json.RawMessage `json:"budget_breakdown,omitempty"`
-	AgentReadFiles  json.RawMessage `json:"agent_read_files,omitempty"`
+	Needs           json.RawMessage               `json:"needs,omitempty"`
+	Signals         json.RawMessage               `json:"signals,omitempty"`
+	RAGResults      json.RawMessage               `json:"rag_results,omitempty"`
+	BrainResults    json.RawMessage               `json:"brain_results,omitempty"`
+	GraphResults    json.RawMessage               `json:"graph_results,omitempty"`
+	ExplicitFiles   json.RawMessage               `json:"explicit_files,omitempty"`
+	BudgetBreakdown json.RawMessage               `json:"budget_breakdown,omitempty"`
+	AgentReadFiles  json.RawMessage               `json:"agent_read_files,omitempty"`
+	TokenBudget     *contextpkg.TokenBudgetReport `json:"token_budget,omitempty"`
 
 	// Scalars.
 	BudgetTotal     *int64   `json:"budget_total,omitempty"`
@@ -244,6 +246,11 @@ func (h *MetricsHandler) handleContextReport(w http.ResponseWriter, r *http.Requ
 	resp.ExcludedCount = nullInt64Ptr(report.ExcludedCount)
 	resp.AgentUsedSearch = nullInt64Ptr(report.AgentUsedSearchTool)
 	resp.ContextHitRate = nullFloat64Ptr(report.ContextHitRate)
+	if tokenBudget, usageErr := h.buildTokenBudgetReport(r, report); usageErr == nil {
+		resp.TokenBudget = tokenBudget
+	} else {
+		h.logger.Warn("get turn token budget", "error", usageErr, "id", convID, "turn", turn)
+	}
 
 	// JSON columns — pass through as raw JSON.
 	resp.Needs = nullStringToJSON(report.NeedsJson)
@@ -294,6 +301,42 @@ func (h *MetricsHandler) handleContextSignalStream(w http.ResponseWriter, r *htt
 		TurnNumber:     row.TurnNumber,
 		Stream:         buildContextSignalStream(needs),
 	})
+}
+
+func (h *MetricsHandler) buildTokenBudgetReport(r *http.Request, report appdb.ContextReport) (*contextpkg.TokenBudgetReport, error) {
+	budget := &contextpkg.TokenBudgetReport{}
+	if report.TokenBudgetJson.Valid && strings.TrimSpace(report.TokenBudgetJson.String) != "" {
+		if err := json.Unmarshal([]byte(report.TokenBudgetJson.String), budget); err != nil {
+			return nil, fmt.Errorf("decode token budget: %w", err)
+		}
+	} else {
+		budget.ReservedSystemPromptTokens = 3000
+		budget.ReservedToolSchemaTokens = 3000
+		budget.ReservedOutputTokens = 16000
+		if report.BudgetUsed.Valid {
+			budget.EstimatedContextTokens = int(report.BudgetUsed.Int64)
+		}
+		if report.BudgetTotal.Valid {
+			budget.EstimatedRequestTokens = int(report.BudgetUsed.Int64) + budget.ReservedSystemPromptTokens + budget.ReservedToolSchemaTokens + budget.ReservedOutputTokens
+		}
+	}
+	usage, err := h.queries.GetTurnTokenUsage(r.Context(), appdb.GetTurnTokenUsageParams{
+		ConversationID: report.ConversationID,
+		TurnNumber:     report.TurnNumber,
+	})
+	if err != nil {
+		return budget, err
+	}
+	budget.ActualInputTokens = usage.TokensIn
+	budget.ActualOutputTokens = usage.TokensOut
+	budget.ActualCacheReadTokens = usage.CacheReadTokens
+	budget.ActualCacheCreationTokens = usage.CacheCreationTokens
+	budget.ActualLatencyMs = usage.LatencyMs
+	budget.IterationCount = usage.IterationCount
+	budget.InputDeltaTokens = usage.TokensIn - int64(budget.EstimatedRequestTokens)
+	budget.OutputHeadroomDeltaTokens = int64(budget.ReservedOutputTokens) - usage.TokensOut
+	budget.OutputHeadroomExceeded = usage.TokensOut > int64(budget.ReservedOutputTokens)
+	return budget, nil
 }
 
 func decodeContextNeeds(needsJSON sql.NullString, signalsJSON sql.NullString) (contextpkg.ContextNeeds, error) {

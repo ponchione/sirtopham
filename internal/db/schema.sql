@@ -88,6 +88,7 @@ CREATE TABLE context_reports (
     budget_total           INTEGER,
     budget_used            INTEGER,
     budget_breakdown_json  TEXT,
+    token_budget_json      TEXT,
     included_count         INTEGER,
     excluded_count         INTEGER,
     agent_used_search_tool INTEGER,

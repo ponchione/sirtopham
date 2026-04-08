@@ -233,6 +233,12 @@ func TestLoadProvidesEmbeddingDefaults(t *testing.T) {
 	if got := cfg.LocalServices.Services["qwen-coder"].BaseURL; got != "http://localhost:12434" {
 		t.Fatalf("LocalServices.Services[qwen-coder].BaseURL = %q, want http://localhost:12434", got)
 	}
+	if cfg.LocalServices.Services["qwen-coder"].Required {
+		t.Fatal("LocalServices.Services[qwen-coder].Required = true, want false")
+	}
+	if !cfg.LocalServices.Services["nomic-embed"].Required {
+		t.Fatal("LocalServices.Services[nomic-embed].Required = false, want true")
+	}
 	if cfg.Embedding.Model != "nomic-embed-code" {
 		t.Fatalf("Embedding.Model = %q, want nomic-embed-code", cfg.Embedding.Model)
 	}

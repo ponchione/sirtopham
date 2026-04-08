@@ -236,6 +236,43 @@ func TestGitDiffInvalidRef(t *testing.T) {
 	}
 }
 
+func TestGitDiffRejectsRef2WithoutRef1(t *testing.T) {
+	requireGit(t)
+	dir := setupGitRepo(t)
+
+	result, err := GitDiff{}.Execute(context.Background(), dir,
+		json.RawMessage(`{"ref2":"HEAD"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Success {
+		t.Fatal("expected failure when ref2 is provided without ref1")
+	}
+	if result.Error != "invalid_ref_args" {
+		t.Fatalf("expected invalid_ref_args, got %q", result.Error)
+	}
+}
+
+func TestGitDiffRejectsUnsafeRefSyntax(t *testing.T) {
+	requireGit(t)
+	dir := setupGitRepo(t)
+
+	result, err := GitDiff{}.Execute(context.Background(), dir,
+		json.RawMessage(`{"ref1":"bad ref"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Success {
+		t.Fatal("expected failure for invalid ref syntax")
+	}
+	if result.Error != "invalid_ref" {
+		t.Fatalf("expected invalid_ref, got %q", result.Error)
+	}
+	if !strings.Contains(result.Content, "whitespace") {
+		t.Fatalf("expected whitespace validation message, got: %s", result.Content)
+	}
+}
+
 func TestGitDiffPathScope(t *testing.T) {
 	requireGit(t)
 	dir := setupGitRepo(t)

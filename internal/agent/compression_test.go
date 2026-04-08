@@ -137,6 +137,19 @@ func TestAnalyzeToolCallsDetectsSearchRegex(t *testing.T) {
 	}
 }
 
+func TestAnalyzeToolCallsDetectsBrainSearch(t *testing.T) {
+	calls := []completedToolCall{
+		{ToolName: "brain_search", Arguments: json.RawMessage(`{"query":"runtime proof"}`)},
+	}
+	usedSearch, readFiles := analyzeToolCalls(calls)
+	if !usedSearch {
+		t.Fatal("expected usedSearch=true for brain_search")
+	}
+	if len(readFiles) != 0 {
+		t.Fatal("expected no readFiles for brain_search")
+	}
+}
+
 func TestAnalyzeToolCallsExtractsFileReadPaths(t *testing.T) {
 	calls := []completedToolCall{
 		{ToolName: "file_read", Arguments: json.RawMessage(`{"path":"internal/auth/service.go"}`)},
@@ -161,6 +174,7 @@ func TestAnalyzeToolCallsMixedTools(t *testing.T) {
 	calls := []completedToolCall{
 		{ToolName: "file_read", Arguments: json.RawMessage(`{"path":"README.md"}`)},
 		{ToolName: "search_semantic", Arguments: json.RawMessage(`{"query":"auth"}`)},
+		{ToolName: "brain_read", Arguments: json.RawMessage(`{"path":"notes/runtime.md"}`)},
 		{ToolName: "shell", Arguments: json.RawMessage(`{"command":"ls"}`)},
 		{ToolName: "file_read", Arguments: json.RawMessage(`{"path":"go.mod"}`)},
 	}
@@ -168,8 +182,11 @@ func TestAnalyzeToolCallsMixedTools(t *testing.T) {
 	if !usedSearch {
 		t.Fatal("expected usedSearch=true")
 	}
-	if len(readFiles) != 2 {
-		t.Fatalf("expected 2 readFiles, got %d", len(readFiles))
+	if len(readFiles) != 3 {
+		t.Fatalf("expected 3 readFiles, got %d", len(readFiles))
+	}
+	if readFiles[1] != "notes/runtime.md" {
+		t.Fatalf("expected brain_read path to be captured, got %v", readFiles)
 	}
 }
 

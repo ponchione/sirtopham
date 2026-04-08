@@ -9,6 +9,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode"
 )
 
 const (
@@ -88,7 +89,7 @@ func (s *Shell) Execute(ctx context.Context, projectRoot string, input json.RawM
 
 	// Denylist check.
 	for _, pattern := range s.config.Denylist {
-		if strings.Contains(params.Command, pattern) {
+		if shellCommandMatchesPattern(params.Command, pattern) {
 			return &ToolResult{
 				Success: false,
 				Content: fmt.Sprintf("Command rejected by safety denylist: matches pattern '%s'. This is a safeguard against catastrophic mistakes.", pattern),
@@ -213,4 +214,109 @@ func formatShellOutput(exitCode int, stdout, stderr string, timedOut, cancelled 
 	}
 
 	return sb.String()
+}
+
+func shellCommandMatchesPattern(command, pattern string) bool {
+	pattern = strings.TrimSpace(pattern)
+	command = strings.TrimSpace(command)
+	if pattern == "" || command == "" {
+		return false
+	}
+	patternTokens := shellTokenize(pattern)
+	if len(patternTokens) == 0 {
+		return false
+	}
+	return shellTokensContainPattern(shellTokenize(command), patternTokens)
+}
+
+func shellTokensContainPattern(commandTokens, patternTokens []string) bool {
+	if len(commandTokens) == 0 || len(patternTokens) == 0 {
+		return false
+	}
+	if shellTokenSequencePresent(commandTokens, patternTokens) {
+		return true
+	}
+	for i, token := range commandTokens {
+		if i == 0 || commandTokens[i-1] != "-c" {
+			continue
+		}
+		nested := shellTokenize(token)
+		if len(nested) > 1 && shellTokensContainPattern(nested, patternTokens) {
+			return true
+		}
+	}
+	return false
+}
+
+func shellTokenSequencePresent(commandTokens, patternTokens []string) bool {
+	if len(patternTokens) > len(commandTokens) {
+		return false
+	}
+	for start := 0; start <= len(commandTokens)-len(patternTokens); start++ {
+		if !shellPatternStartsAtCommandBoundary(commandTokens, start) {
+			continue
+		}
+		matched := true
+		for i := range patternTokens {
+			if commandTokens[start+i] != patternTokens[i] {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return true
+		}
+	}
+	return false
+}
+
+func shellPatternStartsAtCommandBoundary(commandTokens []string, start int) bool {
+	if start <= 0 {
+		return true
+	}
+	prev := strings.TrimSpace(commandTokens[start-1])
+	if prev == "" {
+		return false
+	}
+	if prev == "&&" || prev == "||" || prev == ";" || prev == "|" || prev == "&" {
+		return true
+	}
+	return strings.HasSuffix(prev, ";") || strings.HasSuffix(prev, "&&") || strings.HasSuffix(prev, "||") || strings.HasSuffix(prev, "|") || strings.HasSuffix(prev, "&")
+}
+
+func shellTokenize(command string) []string {
+	var tokens []string
+	var current strings.Builder
+	inSingle := false
+	inDouble := false
+	escaped := false
+	flush := func() {
+		if current.Len() == 0 {
+			return
+		}
+		tokens = append(tokens, current.String())
+		current.Reset()
+	}
+	for _, r := range command {
+		switch {
+		case escaped:
+			current.WriteRune(r)
+			escaped = false
+		case r == '\\' && !inSingle:
+			escaped = true
+		case r == '\'' && !inDouble:
+			inSingle = !inSingle
+		case r == '"' && !inSingle:
+			inDouble = !inDouble
+		case unicode.IsSpace(r) && !inSingle && !inDouble:
+			flush()
+		default:
+			current.WriteRune(r)
+		}
+	}
+	if escaped {
+		current.WriteRune('\\')
+	}
+	flush()
+	return tokens
 }

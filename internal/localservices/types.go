@@ -104,3 +104,11 @@ func RequiredServiceNames(cfg appconfig.LocalServicesConfig) []string {
 	}
 	return names
 }
+
+func ConfiguredServiceNames(cfg appconfig.LocalServicesConfig) []string {
+	names := make([]string, 0, len(cfg.Services))
+	for name := range cfg.Services {
+		names = append(names, name)
+	}
+	return names
+}

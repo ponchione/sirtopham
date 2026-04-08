@@ -299,7 +299,7 @@ func buildFilterString(filter codeintel.Filter) string {
 		parts = append(parts, fmt.Sprintf("chunk_type = '%s'", escapeLanceFilter(string(filter.ChunkType))))
 	}
 	if filter.FilePathPrefix != "" {
-		parts = append(parts, fmt.Sprintf("file_path LIKE '%s%%'", escapeLanceFilter(filter.FilePathPrefix)))
+		parts = append(parts, fmt.Sprintf("file_path LIKE '%s%%' ESCAPE '\\'", escapeLanceLikePatternPrefix(filter.FilePathPrefix)))
 	}
 
 	if len(parts) == 0 {
@@ -389,6 +389,14 @@ func mapInt(m map[string]any, key string) int {
 
 func escapeLanceFilter(s string) string {
 	return strings.ReplaceAll(s, "'", "''")
+}
+
+func escapeLanceLikePatternPrefix(s string) string {
+	escaped := escapeLanceFilter(s)
+	escaped = strings.ReplaceAll(escaped, `\`, `\\`)
+	escaped = strings.ReplaceAll(escaped, `%`, `\%`)
+	escaped = strings.ReplaceAll(escaped, `_`, `\_`)
+	return escaped
 }
 
 func marshalJSON(v any) string {

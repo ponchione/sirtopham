@@ -1,7 +1,6 @@
 services:
   qwen-coder:
     image: ghcr.io/ggml-org/llama.cpp:server-cuda
-    container_name: qwen-coder-server
     restart: "no"
     networks:
       - llm-net
@@ -32,7 +31,6 @@ services:
 
   nomic-embed:
     image: ghcr.io/ggml-org/llama.cpp:server-cuda
-    container_name: nomic-embed-server
     restart: "no"
     networks:
       - llm-net

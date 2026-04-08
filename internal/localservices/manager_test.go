@@ -153,7 +153,7 @@ func TestManagerEnsureUpReturnsImmediatelyWhenServicesAlreadyHealthy(t *testing.
 		"docker version --format {{.Client.Version}}": {stdout: "1"},
 		"docker info":                    {stdout: "ok"},
 		"docker compose version":         {stdout: "v2"},
-		"docker network inspect llm-net": {err: errors.New("missing")},
+		"docker network inspect llm-net": {stdout: "[]"},
 	}}
 	manager := NewManagerWithDeps(runner, qwen.Client(), func(_ time.Duration) {})
 	status, err := manager.EnsureUp(context.Background(), cfg)
@@ -162,6 +162,9 @@ func TestManagerEnsureUpReturnsImmediatelyWhenServicesAlreadyHealthy(t *testing.
 	}
 	if !status.AllRequiredHealthy() {
 		t.Fatalf("status = %+v, want healthy", status)
+	}
+	if len(status.Remediation) != 0 {
+		t.Fatalf("status.Remediation = %v, want none for healthy stack", status.Remediation)
 	}
 	joined := strings.Join(runner.calls, "\n")
 	if strings.Contains(joined, "docker compose -f") {
@@ -183,5 +186,16 @@ func TestManagerLogsUsesComposeLogs(t *testing.T) {
 	}
 	if logs != "log output" {
 		t.Fatalf("logs = %q, want log output", logs)
+	}
+}
+
+func TestNormalizeComposeUpErrorForContainerConflict(t *testing.T) {
+	errText := "Error response from daemon: Conflict. The container name \"/qwen-coder-server\" is already in use by container abc123"
+	normalized := normalizeComposeUpError(errText)
+	if !strings.Contains(normalized, "docker rm -f <name>") {
+		t.Fatalf("normalized error missing remediation, got: %s", normalized)
+	}
+	if !strings.Contains(normalized, "container_name") {
+		t.Fatalf("normalized error missing container_name guidance, got: %s", normalized)
 	}
 }

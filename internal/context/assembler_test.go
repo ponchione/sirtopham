@@ -261,6 +261,37 @@ func TestContextAssemblerUpdateQualityPersistsHitRate(t *testing.T) {
 	}
 }
 
+func TestContextAssemblerUpdateQualityCountsBrainReadsAndHits(t *testing.T) {
+	db := newCompressionTestDB(t)
+	conversationID := seedCompressionConversation(t, db)
+	assembler := seedAssemblerReportForQuality(t, db, conversationID)
+
+	queries := dbpkg.New(db)
+	row, err := queries.GetContextReportByTurn(stdctx.Background(), dbpkg.GetContextReportByTurnParams{ConversationID: conversationID, TurnNumber: 2})
+	if err != nil {
+		t.Fatalf("GetContextReportByTurn before patch returned error: %v", err)
+	}
+	row.BrainResultsJson = sql.NullString{String: `[{"document_path":"notes/runtime.md","included":true}]`, Valid: true}
+	if _, err := db.Exec(`UPDATE context_reports SET brain_results_json = ? WHERE conversation_id = ? AND turn_number = ?`, row.BrainResultsJson.String, conversationID, 2); err != nil {
+		t.Fatalf("update brain_results_json: %v", err)
+	}
+
+	if err := assembler.UpdateQuality(stdctx.Background(), conversationID, 2, true, []string{"notes/runtime.md"}); err != nil {
+		t.Fatalf("UpdateQuality returned error: %v", err)
+	}
+
+	updated, err := queries.GetContextReportByTurn(stdctx.Background(), dbpkg.GetContextReportByTurnParams{ConversationID: conversationID, TurnNumber: 2})
+	if err != nil {
+		t.Fatalf("GetContextReportByTurn after patch returned error: %v", err)
+	}
+	if !updated.ContextHitRate.Valid || updated.ContextHitRate.Float64 != 1.0 {
+		t.Fatalf("ContextHitRate = %+v, want 1.0", updated.ContextHitRate)
+	}
+	if !updated.AgentReadFilesJson.Valid || updated.AgentReadFilesJson.String != `["notes/runtime.md"]` {
+		t.Fatalf("AgentReadFilesJson = %+v, want brain read path", updated.AgentReadFilesJson)
+	}
+}
+
 type assemblerRetrieverErrorStub struct {
 	err error
 }

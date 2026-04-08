@@ -20,12 +20,35 @@ func TestEscapeLanceFilter(t *testing.T) {
 		{"multiple single quotes", "a'b'c", "a''b''c"},
 		{"empty string", "", ""},
 		{"injection attempt", "'; DROP TABLE chunks; --", "''; DROP TABLE chunks; --"},
+		{"percent unchanged in equality escaping", "100%", "100%"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := escapeLanceFilter(tt.in)
 			if got != tt.want {
 				t.Errorf("escapeLanceFilter(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestEscapeLanceLikePatternPrefix(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"clean prefix", "internal/", "internal/"},
+		{"single quote", "it's/", "it''s/"},
+		{"percent escaped", "100%/", "100\\%/"},
+		{"underscore escaped", "foo_bar/", "foo\\_bar/"},
+		{"backslash escaped", `foo\\bar/`, `foo\\\\bar/`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := escapeLanceLikePatternPrefix(tt.in)
+			if got != tt.want {
+				t.Fatalf("escapeLanceLikePatternPrefix(%q) = %q, want %q", tt.in, got, tt.want)
 			}
 		})
 	}
@@ -40,11 +63,16 @@ func TestBuildFilterString(t *testing.T) {
 		{"empty filter", codeintel.Filter{}, ""},
 		{"language only", codeintel.Filter{Language: "go"}, "language = 'go'"},
 		{"chunk type only", codeintel.Filter{ChunkType: codeintel.ChunkTypeFunction}, "chunk_type = 'function'"},
-		{"file path prefix", codeintel.Filter{FilePathPrefix: "internal/"}, "file_path LIKE 'internal/%'"},
+		{"file path prefix", codeintel.Filter{FilePathPrefix: "internal/"}, "file_path LIKE 'internal/%' ESCAPE '\\'"},
 		{
 			"all fields",
 			codeintel.Filter{Language: "go", ChunkType: codeintel.ChunkTypeMethod, FilePathPrefix: "cmd/"},
-			"language = 'go' AND chunk_type = 'method' AND file_path LIKE 'cmd/%'",
+			"language = 'go' AND chunk_type = 'method' AND file_path LIKE 'cmd/%' ESCAPE '\\'",
+		},
+		{
+			"prefix escapes like wildcards",
+			codeintel.Filter{FilePathPrefix: "internal/%tmp_/"},
+			"file_path LIKE 'internal/\\%tmp\\_/%' ESCAPE '\\'",
 		},
 	}
 	for _, tt := range tests {

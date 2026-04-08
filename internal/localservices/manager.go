@@ -119,12 +119,15 @@ func (m *Manager) Down(ctx context.Context, cfg *appconfig.Config) error {
 }
 
 func (m *Manager) Logs(ctx context.Context, cfg *appconfig.Config, tail int) (string, error) {
-	services := RequiredServiceNames(cfg.LocalServices)
+	services := ConfiguredServiceNames(cfg.LocalServices)
 	sort.Strings(services)
 	return composeLogs(ctx, m.runner, cfg.LocalServices.ProjectDir, cfg.LocalServices.ComposeFile, tail, services)
 }
 
 func remediationLines(cfg *appconfig.Config, status StackStatus) []string {
+	if len(status.Problems) == 0 {
+		return nil
+	}
 	lines := []string{}
 	if !status.ComposeFileExists {
 		lines = append(lines, fmt.Sprintf("verify compose file exists: %s", cfg.LocalServices.ComposeFile))

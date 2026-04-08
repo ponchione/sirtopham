@@ -52,18 +52,19 @@ func estimateRequestChars(req *provider.Request) int {
 }
 
 // analyzeToolCalls scans the tool calls from all completed iterations in the
-// turn and reports (a) whether a semantic search tool was invoked and (b) the
-// list of files read via file_read.
+// turn and reports (a) whether a reactive search/read detour was invoked and
+// (b) the list of concrete repo or brain paths read during the turn.
 //
 // These are the two signals ContextAssembler.UpdateQuality needs for post-turn
 // quality metric persistence.
 func analyzeToolCalls(calls []completedToolCall) (usedSearchTool bool, readFiles []string) {
 	for _, c := range calls {
 		switch c.ToolName {
-		case "search_semantic", "search_text", "search_regex":
+		case "search_semantic", "search_text", "search_regex", "brain_search", "brain_read":
 			usedSearchTool = true
-		case "file_read":
-			// Extract the "path" argument from the tool call input.
+		}
+		switch c.ToolName {
+		case "file_read", "brain_read":
 			if path := extractStringArg(c.Arguments, "path"); path != "" {
 				readFiles = append(readFiles, path)
 			}

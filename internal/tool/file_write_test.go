@@ -61,10 +61,18 @@ func TestFileWriteOverwriteWithDiff(t *testing.T) {
 	oldContent := "line one\nline two\nline three\n"
 	os.WriteFile(filepath.Join(dir, "existing.txt"), []byte(oldContent), 0o644)
 
+	store := newMemoryReadStateStore()
+	reader := NewFileRead(store)
+	writer := NewFileWrite(store)
+	_, err := reader.Execute(context.Background(), dir, json.RawMessage(`{"path":"existing.txt"}`))
+	if err != nil {
+		t.Fatalf("unexpected read error: %v", err)
+	}
+
 	newContent := "line one\nline TWO modified\nline three\n"
 	input, _ := json.Marshal(fileWriteInput{Path: "existing.txt", Content: newContent})
 
-	result, err := FileWrite{}.Execute(context.Background(), dir, input)
+	result, err := writer.Execute(context.Background(), dir, input)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -101,8 +109,16 @@ func TestFileWriteDiffTruncation(t *testing.T) {
 	}
 	os.WriteFile(filepath.Join(dir, "big.txt"), []byte(old.String()), 0o644)
 
+	store := newMemoryReadStateStore()
+	reader := NewFileRead(store)
+	writer := NewFileWrite(store)
+	_, err := reader.Execute(context.Background(), dir, json.RawMessage(`{"path":"big.txt"}`))
+	if err != nil {
+		t.Fatalf("unexpected read error: %v", err)
+	}
+
 	input, _ := json.Marshal(fileWriteInput{Path: "big.txt", Content: new_.String()})
-	result, err := FileWrite{}.Execute(context.Background(), dir, input)
+	result, err := writer.Execute(context.Background(), dir, input)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -140,6 +156,155 @@ func TestFileWriteAbsolutePath(t *testing.T) {
 	}
 	if result.Success {
 		t.Fatal("expected failure for absolute path")
+	}
+}
+
+func TestFileWriteOverwriteRequiresFullReadFirst(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "existing.txt")
+	if err := os.WriteFile(path, []byte("hello world\n"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	store := newMemoryReadStateStore()
+	writer := NewFileWrite(store)
+	input, _ := json.Marshal(fileWriteInput{Path: "existing.txt", Content: "updated\n"})
+
+	result, err := writer.Execute(context.Background(), dir, input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Success {
+		t.Fatal("expected failure without prior full read")
+	}
+	if result.Error != "not_read_first" {
+		t.Fatalf("expected not_read_first, got %q", result.Error)
+	}
+	if !strings.Contains(result.Content, "prior full file_read") {
+		t.Fatalf("expected full read guidance, got: %s", result.Content)
+	}
+}
+
+func TestFileWriteRejectsPartialReadAsPrecondition(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "existing.txt")
+	if err := os.WriteFile(path, []byte("line1\nline2\nline3\n"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	store := newMemoryReadStateStore()
+	reader := NewFileRead(store)
+	writer := NewFileWrite(store)
+	_, err := reader.Execute(context.Background(), dir, json.RawMessage(`{"path":"existing.txt","line_start":1,"line_end":2}`))
+	if err != nil {
+		t.Fatalf("unexpected read error: %v", err)
+	}
+
+	input, _ := json.Marshal(fileWriteInput{Path: "existing.txt", Content: "updated\n"})
+	result, err := writer.Execute(context.Background(), dir, input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Success {
+		t.Fatal("expected failure after partial read")
+	}
+	if result.Error != "not_read_first" {
+		t.Fatalf("expected not_read_first, got %q", result.Error)
+	}
+}
+
+func TestFileWriteRejectsStaleReadSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "existing.txt")
+	if err := os.WriteFile(path, []byte("hello world\n"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	store := newMemoryReadStateStore()
+	reader := NewFileRead(store)
+	writer := NewFileWrite(store)
+	_, err := reader.Execute(context.Background(), dir, json.RawMessage(`{"path":"existing.txt"}`))
+	if err != nil {
+		t.Fatalf("unexpected read error: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("hello changed world\n"), 0o644); err != nil {
+		t.Fatalf("mutate file: %v", err)
+	}
+
+	input, _ := json.Marshal(fileWriteInput{Path: "existing.txt", Content: "updated\n"})
+	result, err := writer.Execute(context.Background(), dir, input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Success {
+		t.Fatal("expected stale snapshot failure")
+	}
+	if result.Error != "stale_write" {
+		t.Fatalf("expected stale_write, got %q", result.Error)
+	}
+	if !strings.Contains(result.Content, "Re-run file_read") {
+		t.Fatalf("expected recovery guidance, got: %s", result.Content)
+	}
+}
+
+func TestFileWriteAllowsOverwriteOfExistingEmptyFileWithoutRead(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "empty.txt")
+	if err := os.WriteFile(path, nil, 0o644); err != nil {
+		t.Fatalf("write empty file: %v", err)
+	}
+
+	input, _ := json.Marshal(fileWriteInput{Path: "empty.txt", Content: "now populated\n"})
+	result, err := FileWrite{}.Execute(context.Background(), dir, input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("expected success, got: %s", result.Content)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read file: %v", err)
+	}
+	if string(data) != "now populated\n" {
+		t.Fatalf("file content = %q", string(data))
+	}
+}
+
+func TestFileWriteRequiresFreshReadAfterSuccessfulOverwrite(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "existing.txt")
+	if err := os.WriteFile(path, []byte("alpha\n"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	store := newMemoryReadStateStore()
+	reader := NewFileRead(store)
+	writer := NewFileWrite(store)
+	_, err := reader.Execute(context.Background(), dir, json.RawMessage(`{"path":"existing.txt"}`))
+	if err != nil {
+		t.Fatalf("unexpected read error: %v", err)
+	}
+
+	firstInput, _ := json.Marshal(fileWriteInput{Path: "existing.txt", Content: "beta\n"})
+	firstResult, err := writer.Execute(context.Background(), dir, firstInput)
+	if err != nil {
+		t.Fatalf("unexpected first write error: %v", err)
+	}
+	if !firstResult.Success {
+		t.Fatalf("expected first write success, got: %s", firstResult.Content)
+	}
+
+	secondInput, _ := json.Marshal(fileWriteInput{Path: "existing.txt", Content: "gamma\n"})
+	secondResult, err := writer.Execute(context.Background(), dir, secondInput)
+	if err != nil {
+		t.Fatalf("unexpected second write error: %v", err)
+	}
+	if secondResult.Success {
+		t.Fatal("expected second write to require a fresh read")
+	}
+	if secondResult.Error != "not_read_first" {
+		t.Fatalf("expected not_read_first after successful overwrite, got %q", secondResult.Error)
 	}
 }
 

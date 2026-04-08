@@ -47,6 +47,7 @@ type ContextReport struct {
 	BudgetTotal         sql.NullInt64   `json:"budget_total"`
 	BudgetUsed          sql.NullInt64   `json:"budget_used"`
 	BudgetBreakdownJson sql.NullString  `json:"budget_breakdown_json"`
+	TokenBudgetJson     sql.NullString  `json:"token_budget_json"`
 	IncludedCount       sql.NullInt64   `json:"included_count"`
 	ExcludedCount       sql.NullInt64   `json:"excluded_count"`
 	AgentUsedSearchTool sql.NullInt64   `json:"agent_used_search_tool"`

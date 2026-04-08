@@ -38,6 +38,13 @@ func (PriorityBudgetManager) Fit(results *RetrievalResults, modelContextLimit in
 		ExcludedChunks:    []string{},
 		ExclusionReasons:  map[string]string{},
 		CompressionNeeded: compressionNeeded,
+		TokenBudget: TokenBudgetReport{
+			ModelContextLimit:          modelContextLimit,
+			HistoryTokens:              historyTokenCount,
+			ReservedSystemPromptTokens: defaultSystemPromptReserve,
+			ReservedToolSchemaTokens:   defaultToolSchemaReserve,
+			ReservedOutputTokens:       defaultResponseHeadroom,
+		},
 	}
 	remaining := budgetTotal
 
@@ -72,6 +79,8 @@ func (PriorityBudgetManager) Fit(results *RetrievalResults, modelContextLimit in
 	}
 
 	budget.BudgetUsed = budget.BudgetTotal - remaining
+	budget.TokenBudget.EstimatedContextTokens = budget.BudgetUsed
+	budget.TokenBudget.EstimatedRequestTokens = budget.TokenBudget.ReservedSystemPromptTokens + budget.TokenBudget.ReservedToolSchemaTokens + budget.TokenBudget.ReservedOutputTokens + budget.TokenBudget.HistoryTokens + budget.TokenBudget.EstimatedContextTokens
 	return budget, nil
 }
 
