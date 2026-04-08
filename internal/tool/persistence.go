@@ -52,7 +52,18 @@ func (r *ToolExecutionRecorder) Record(ctx context.Context, call ToolCall, resul
 		success = 1
 	}
 
-	outputSize := sql.NullInt64{Int64: int64(len(result.Content)), Valid: true}
+	outputSize := sql.NullInt64{Int64: int64(result.OutputSize), Valid: result.OutputSize > 0 || result.Content != ""}
+	normalizedSize := sql.NullInt64{Int64: int64(result.NormalizedSize), Valid: result.NormalizedSize > 0 || result.Content != ""}
+	if !outputSize.Valid {
+		outputSize = sql.NullInt64{Int64: int64(len(result.Content)), Valid: true}
+	}
+	if !normalizedSize.Valid {
+		normalized := len(result.Content)
+		if result.Success {
+			normalized = len(NormalizeToolResult(call.Name, result.Content))
+		}
+		normalizedSize = sql.NullInt64{Int64: int64(normalized), Valid: true}
+	}
 
 	return r.queries.InsertToolExecution(ctx, db.InsertToolExecutionParams{
 		ConversationID: meta.ConversationID,
@@ -62,7 +73,7 @@ func (r *ToolExecutionRecorder) Record(ctx context.Context, call ToolCall, resul
 		ToolName:       call.Name,
 		Input:          inputStr,
 		OutputSize:     outputSize,
-		NormalizedSize: outputSize, // Post-Phase-1 normalization; same as OutputSize until raw tracking is added.
+		NormalizedSize: normalizedSize,
 		Error:          errStr,
 		Success:        success,
 		DurationMs:     result.DurationMs,

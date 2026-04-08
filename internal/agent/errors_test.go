@@ -242,6 +242,86 @@ func TestValidateToolCallJSON_EmptyObject(t *testing.T) {
 	}
 }
 
+func TestValidateToolCallAgainstSchema_MissingRequiredField(t *testing.T) {
+	tc := provider.ToolCall{
+		ID:    "tc_6",
+		Name:  "file_read",
+		Input: json.RawMessage(`{}`),
+	}
+	defs := []provider.ToolDefinition{{
+		Name: "file_read",
+		InputSchema: json.RawMessage(`{
+			"type": "object",
+			"properties": {
+				"path": {"type": "string"}
+			},
+			"required": ["path"]
+		}`),
+	}}
+	v := validateToolCallAgainstSchema(tc, defs)
+	if v.Valid {
+		t.Fatal("Valid = true, want false for missing required field")
+	}
+	if !strings.Contains(v.ErrorMessage, "missing required field") {
+		t.Fatalf("ErrorMessage = %q, want missing-required guidance", v.ErrorMessage)
+	}
+	if !strings.Contains(v.ErrorMessage, "path") {
+		t.Fatalf("ErrorMessage = %q, want field name", v.ErrorMessage)
+	}
+}
+
+func TestValidateToolCallAgainstSchema_WrongType(t *testing.T) {
+	tc := provider.ToolCall{
+		ID:    "tc_7",
+		Name:  "file_read",
+		Input: json.RawMessage(`{"path": 123}`),
+	}
+	defs := []provider.ToolDefinition{{
+		Name: "file_read",
+		InputSchema: json.RawMessage(`{
+			"type": "object",
+			"properties": {
+				"path": {"type": "string"}
+			},
+			"required": ["path"]
+		}`),
+	}}
+	v := validateToolCallAgainstSchema(tc, defs)
+	if v.Valid {
+		t.Fatal("Valid = true, want false for wrong field type")
+	}
+	if !strings.Contains(v.ErrorMessage, "expected string") {
+		t.Fatalf("ErrorMessage = %q, want type guidance", v.ErrorMessage)
+	}
+}
+
+func TestValidateToolCallAgainstSchema_InvalidEnumValue(t *testing.T) {
+	tc := provider.ToolCall{
+		ID:    "tc_8",
+		Name:  "brain_update",
+		Input: json.RawMessage(`{"path":"notes/x.md","operation":"rewrite","content":"hi"}`),
+	}
+	defs := []provider.ToolDefinition{{
+		Name: "brain_update",
+		InputSchema: json.RawMessage(`{
+			"type": "object",
+			"properties": {
+				"path": {"type": "string"},
+				"operation": {"type": "string", "enum": ["append", "prepend", "replace_section"]},
+				"content": {"type": "string"}
+			},
+			"required": ["path", "operation", "content"]
+		}`),
+	}}
+	v := validateToolCallAgainstSchema(tc, defs)
+	if v.Valid {
+		t.Fatal("Valid = true, want false for invalid enum value")
+	}
+	if !strings.Contains(v.ErrorMessage, "allowed values") {
+		t.Fatalf("ErrorMessage = %q, want enum guidance", v.ErrorMessage)
+	}
+}
+
 // --- enrichToolError tests ---
 
 func TestEnrichToolError_FileReadNotFound(t *testing.T) {

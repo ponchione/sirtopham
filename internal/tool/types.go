@@ -76,11 +76,13 @@ func ToolCallFromProvider(pc provider.ToolCall) ToolCall {
 
 // ToolResult is the outcome of a tool execution.
 type ToolResult struct {
-	CallID     string `json:"call_id"`
-	Content    string `json:"content"`
-	Success    bool   `json:"success"`
-	Error      string `json:"error,omitempty"`
-	DurationMs int64  `json:"duration_ms"`
+	CallID         string `json:"call_id"`
+	Content        string `json:"content"`
+	Success        bool   `json:"success"`
+	Error          string `json:"error,omitempty"`
+	DurationMs     int64  `json:"duration_ms"`
+	OutputSize     int    `json:"output_size,omitempty"`
+	NormalizedSize int    `json:"normalized_size,omitempty"`
 }
 
 // ToProvider converts a tool.ToolResult to a provider.ToolResult for the

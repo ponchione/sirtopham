@@ -76,6 +76,16 @@ INSERT INTO messages (
     ?
 );
 
+-- name: LatestAssistantMessageIDForIteration :one
+SELECT id
+FROM messages
+WHERE conversation_id = ?
+  AND turn_number = ?
+  AND iteration = ?
+  AND role = 'assistant'
+ORDER BY sequence DESC
+LIMIT 1;
+
 -- name: DeleteIterationMessages :exec
 DELETE FROM messages
 WHERE conversation_id = ? AND turn_number = ? AND iteration = ? AND role != 'user';

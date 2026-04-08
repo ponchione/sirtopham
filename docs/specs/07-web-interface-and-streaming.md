@@ -53,37 +53,50 @@ The UI needs to handle: WebSocket streaming, collapsible tool call blocks, synta
 
 This is the critical design piece. Every layer pushes events through this pipe.
 
-### Event Types (Current v0.1 contract)
+### Event Types (Current shipped contract)
+
+All server events are wrapped in a `ServerMessage` envelope:
+
+```typescript
+type ServerMessage = {
+  type: string;
+  timestamp: string;
+  data: unknown;
+};
+```
+
+Current event payloads follow the live backend/frontend contract:
 
 ```typescript
 // Server → Client events
 type ServerEvent =
-  | { type: "conversation_id"; data: { id: string } }
-  | { type: "token"; data: { text: string } }
+  | { type: "conversation_created"; data: { conversation_id: string } }
+  | { type: "token"; data: { token: string } }
   | { type: "thinking_start"; data: {} }
   | { type: "thinking_delta"; data: { text: string } }
   | { type: "thinking_end"; data: {} }
-  | { type: "tool_call_start"; data: { id: string; name: string; args: object } }
-  | { type: "tool_call_output"; data: { id: string; output: string } }
-  | { type: "tool_call_end"; data: { id: string; result: string; duration_ms: number; success: boolean } }
-  | { type: "turn_complete"; data: { usage: Usage; iteration_count: number } }
+  | { type: "tool_call_start"; data: { tool_call_id: string; tool_name: string; arguments: object } }
+  | { type: "tool_call_output"; data: { tool_call_id: string; output: string } }
+  | { type: "tool_call_end"; data: { tool_call_id: string; result: string; duration: number; success: boolean } }
+  | { type: "turn_complete"; data: { turn_number: number; iteration_count: number; total_input_tokens: number; total_output_tokens: number; duration: number } }
   | { type: "turn_cancelled"; data: {} }
-  | { type: "error"; data: { message: string; recoverable: boolean } }
-  | { type: "context_debug"; data: ContextDebugInfo }  // always emitted once per turn; frontend may ignore unless the debug panel is open
-  | { type: "status"; data: { state: AgentState } }     // idle, thinking, executing_tools, etc.
+  | { type: "error"; data: { message: string; recoverable?: boolean; error_code?: string } }
+  | { type: "context_debug"; data: ContextDebugInfo }
+  | { type: "status"; data: { state: AgentState } };
 
 // Client → Server events
 type ClientEvent =
-  | { type: "message"; data: { text: string; conversation_id?: string } }
-  | { type: "cancel"; data: {} }
-  | { type: "model_override"; data: { provider: string; model: string } }
+  | { type: "message"; content: string; conversation_id?: string; provider?: string; model?: string }
+  | { type: "cancel" }
+  | { type: "model_override"; provider?: string; model?: string };
 ```
 
 ### Protocol Notes
 - Tool outputs stream incrementally via `tool_call_output` events.
-- Multiple concurrent tool calls are represented as interleaved event streams keyed by tool call `id`.
-- `context_debug` is always emitted by the backend after context assembly; the frontend decides whether to render it.
-- `conversation_id` is sent when a new conversation is created over WebSocket so the frontend can update routing and subsequent REST calls.
+- Multiple concurrent tool calls are represented as interleaved event streams keyed by `tool_call_id`.
+- `context_debug` is emitted by the backend after context assembly; the frontend decides whether to render it.
+- `conversation_created` is sent when a new conversation is created over WebSocket so the frontend can update routing and subsequent REST calls.
+- Closing the WebSocket cancels any in-flight turn via shared context cancellation. This is distinct from an explicit client `cancel` message.
 
 ---
 
@@ -114,15 +127,17 @@ WS     /api/ws                         WebSocket for streaming
 
 ---
 
-## UI Components (From Spec)
+## UI Components (Current shipped scope)
 
 - **Conversation view:** Chat-style message thread with streaming token display
 - **Tool call visualization:** Inline syntax-highlighted diffs, command output, search results
-- **File browser / code viewer:** Navigate project tree, view files with syntax highlighting
 - **Context inspector (debug):** RAG chunks retrieved, conventions included, token budget allocation
-- **Conversation sidebar:** Past conversations with search
-- **Settings panel:** Model selection, provider config, tool permissions
+- **Conversation sidebar:** Past conversations with search and delete controls
+- **Settings page:** Model selection, provider config, tool permissions
 - **Metrics/stats:** Token usage, cost per conversation, model breakdown
+
+Notes:
+- `/api/project/tree` and `/api/project/file` are exposed backend/operator endpoints today, but a dedicated file-browser/code-viewer route is not part of the current shipped UI.
 
 ### Compelling Visualizations (Web-Only)
 - Live streaming diffs as the agent edits files

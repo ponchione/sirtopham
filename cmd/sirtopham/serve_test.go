@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
+	_ "github.com/mattn/go-sqlite3"
 	appconfig "github.com/ponchione/sirtopham/internal/config"
 	appdb "github.com/ponchione/sirtopham/internal/db"
-	_ "github.com/mattn/go-sqlite3"
 )
 
 func TestEnsureProjectRecordCreatesProjectRow(t *testing.T) {
@@ -111,6 +111,42 @@ func TestBuildBrainBackendUsesMCPClient(t *testing.T) {
 	defer cleanup()
 	if backend == nil {
 		t.Fatal("expected non-nil backend")
+	}
+}
+
+func TestBuildGraphStoreUsesProjectStatePath(t *testing.T) {
+	projectRoot := t.TempDir()
+	cfg := &appconfig.Config{ProjectRoot: projectRoot}
+	store, cleanup, err := buildGraphStore(cfg)
+	if err != nil {
+		t.Fatalf("buildGraphStore error: %v", err)
+	}
+	defer cleanup()
+	if store == nil {
+		t.Fatal("expected non-nil graph store")
+	}
+	if _, err := os.Stat(cfg.GraphDBPath()); err != nil {
+		t.Fatalf("expected graph db at %s: %v", cfg.GraphDBPath(), err)
+	}
+}
+
+func TestBuildConventionSourceUsesBrainVaultPath(t *testing.T) {
+	projectRoot := t.TempDir()
+	vaultPath := filepath.Join(projectRoot, ".brain")
+	if err := os.MkdirAll(filepath.Join(vaultPath, "conventions"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(conventions): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(vaultPath, "conventions", "testing.md"), []byte("- Prefer table-driven tests\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(convention): %v", err)
+	}
+	cfg := &appconfig.Config{ProjectRoot: projectRoot, Brain: appconfig.BrainConfig{VaultPath: ".brain"}}
+	source := buildConventionSource(cfg)
+	text, err := source.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load conventions: %v", err)
+	}
+	if text != "Prefer table-driven tests" {
+		t.Fatalf("convention text = %q, want extracted bullet", text)
 	}
 }
 

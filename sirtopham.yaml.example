@@ -54,7 +54,7 @@ index:
   #   - "**/node_modules/**"
   # max_rag_results: 30                  # Maximum RAG search results
   # max_tree_lines: 200                  # Maximum file tree lines in context
-  # auto_reindex: true                   # Re-index on file changes
+  # auto_reindex: false                  # Reserved for future runtime indexing; current indexing runs only via `sirtopham index`
   # max_file_size_bytes: 51200           # 50KB per file limit
   # max_total_file_size_bytes: 524288    # 512KB total context limit
 
@@ -128,7 +128,7 @@ brain:
   # v0.2+ indexing / retrieval configuration retained for future use
   # embedding_model: nomic-embed-code
   # chunk_at_headings: true
-  # reindex_on_startup: true
+  # reindex_on_startup: false            # Reserved for future brain indexing; current brain runtime does not index on startup
   # max_brain_tokens: 8000
   # brain_relevance_threshold: 0.30
   # include_graph_hops: true

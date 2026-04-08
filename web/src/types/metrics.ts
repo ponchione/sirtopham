@@ -221,6 +221,7 @@ export interface AppConfig {
 // ── GET /api/project ─────────────────────────────────────────────────
 
 export interface ProjectInfo {
+  id: string;
   root_path: string;
   name: string;
   language?: string;

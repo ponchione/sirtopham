@@ -3,7 +3,7 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useConversationList } from "@/hooks/use-conversation-list";
-import type { ConversationSummary } from "@/types/api";
+import type { ConversationSummary, SearchResult } from "@/types/api";
 
 interface SidebarProps {
   open: boolean;
@@ -23,8 +23,19 @@ function useActiveConversationId(): string | undefined {
 export function Sidebar({ open, onClose }: SidebarProps) {
   const activeId = useActiveConversationId();
   const navigate = useNavigate();
-  const { conversations, loading, error, refresh, deleteConversation } =
-    useConversationList();
+  const {
+    conversations,
+    searchQuery,
+    setSearchQuery,
+    searchResults,
+    searching,
+    searchError,
+    showingSearchResults,
+    loading,
+    error,
+    refresh,
+    deleteConversation,
+  } = useConversationList();
 
   // B2 fix: when the user navigates to a conversation that isn't in the
   // current list (e.g. a brand-new one created from the landing page), refresh
@@ -55,6 +66,11 @@ export function Sidebar({ open, onClose }: SidebarProps) {
     async (e: React.MouseEvent, id: string) => {
       e.stopPropagation();
       e.preventDefault();
+      const conversation = conversations.find((c) => c.id === id);
+      const title = conversation?.title?.trim() || "Untitled";
+      if (!window.confirm(`Delete conversation \"${title}\"?`)) {
+        return;
+      }
       try {
         await deleteConversation(id);
         // If we deleted the active conversation, navigate home.
@@ -65,7 +81,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
         console.error("Failed to delete conversation:", err);
       }
     },
-    [deleteConversation, activeId, navigate],
+    [conversations, deleteConversation, activeId, navigate],
   );
 
   return (
@@ -130,6 +146,33 @@ export function Sidebar({ open, onClose }: SidebarProps) {
 
         <Separator />
 
+        <div className="p-2">
+          <label htmlFor="conversation-search" className="sr-only">
+            Search conversations
+          </label>
+          <div className="relative">
+            <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground/70" />
+            <input
+              id="conversation-search"
+              type="search"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search conversations"
+              className="w-full border border-border bg-background px-8 py-2 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground/60 focus:border-primary"
+            />
+            {showingSearchResults && (
+              <button
+                type="button"
+                onClick={() => setSearchQuery("")}
+                className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-muted-foreground hover:text-foreground"
+                aria-label="Clear search"
+              >
+                <CloseSmallIcon />
+              </button>
+            )}
+          </div>
+        </div>
+
         {/* Conversation list */}
         <ScrollArea className="flex-1 px-2 py-1">
           {loading && conversations.length === 0 && (
@@ -151,22 +194,47 @@ export function Sidebar({ open, onClose }: SidebarProps) {
             </div>
           )}
 
-          {!loading && !error && conversations.length === 0 && (
+          {showingSearchResults && searching && (
+            <p className="px-2 py-3 text-xs text-muted-foreground">Searching…</p>
+          )}
+
+          {showingSearchResults && searchError && (
+            <div className="px-2 py-4 text-center text-xs text-destructive">
+              {searchError}
+            </div>
+          )}
+
+          {!showingSearchResults && !loading && !error && conversations.length === 0 && (
             <p className="px-2 py-8 text-center text-xs text-muted-foreground">
               No conversations yet
             </p>
           )}
 
+          {showingSearchResults && !searching && !searchError && searchResults.length === 0 && (
+            <p className="px-2 py-8 text-center text-xs text-muted-foreground">
+              No matches for “{searchQuery.trim()}”
+            </p>
+          )}
+
           <div className="space-y-0.5">
-            {conversations.map((conv) => (
-              <ConversationItem
-                key={conv.id}
-                conversation={conv}
-                active={activeId === conv.id}
-                onSelect={handleSelectConversation}
-                onDelete={handleDelete}
-              />
-            ))}
+            {showingSearchResults
+              ? searchResults.map((result) => (
+                  <SearchResultItem
+                    key={result.id}
+                    result={result}
+                    active={activeId === result.id}
+                    onSelect={handleSelectConversation}
+                  />
+                ))
+              : conversations.map((conv) => (
+                  <ConversationItem
+                    key={conv.id}
+                    conversation={conv}
+                    active={activeId === conv.id}
+                    onSelect={handleSelectConversation}
+                    onDelete={handleDelete}
+                  />
+                ))}
           </div>
         </ScrollArea>
 
@@ -235,6 +303,42 @@ function ConversationItem({
   );
 }
 
+function SearchResultItem({
+  result,
+  active,
+  onSelect,
+}: {
+  result: SearchResult;
+  active: boolean;
+  onSelect: (id: string) => void;
+}) {
+  const title = result.title || "Untitled";
+  const time = formatRelativeTime(result.updated_at);
+
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(result.id)}
+      className={`group flex w-full flex-col gap-1 px-2.5 py-2 text-left text-sm transition-colors ${
+        active
+          ? "border-l-2 border-l-primary bg-muted font-medium text-foreground"
+          : "border-l-2 border-l-transparent text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+      }`}
+      style={
+        active
+          ? ({ boxShadow: "inset 4px 0 8px -4px #00e5ff40" } as React.CSSProperties)
+          : undefined
+      }
+    >
+      <div className="flex min-w-0 items-center gap-2">
+        <div className="min-w-0 flex-1 truncate">{title}</div>
+        <div className="shrink-0 text-[10px] text-muted-foreground/60">{time}</div>
+      </div>
+      <div className="line-clamp-2 text-xs text-muted-foreground/80">{result.snippet}</div>
+    </button>
+  );
+}
+
 // ── Time formatting ──────────────────────────────────────────────────
 
 function formatRelativeTime(isoString: string): string {
@@ -289,6 +393,45 @@ function CloseIcon() {
     >
       <path d="M18 6 6 18" />
       <path d="m6 6 12 12" />
+    </svg>
+  );
+}
+
+function CloseSmallIcon() {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M18 6 6 18" />
+      <path d="m6 6 12 12" />
+    </svg>
+  );
+}
+
+function SearchIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <circle cx="11" cy="11" r="8" />
+      <path d="m21 21-4.3-4.3" />
     </svg>
   );
 }

@@ -182,7 +182,7 @@ Project registration. Multi-project from day one.
 
 ```sql
 CREATE TABLE projects (
-    id                  TEXT PRIMARY KEY,  -- UUIDv7
+    id                  TEXT PRIMARY KEY,  -- current shipped runtime uses root_path as the project ID
     name                TEXT NOT NULL,
     root_path           TEXT NOT NULL UNIQUE,
     language            TEXT,              -- primary language
@@ -193,7 +193,7 @@ CREATE TABLE projects (
 );
 ```
 
-`root_path` is unique — the same directory cannot be registered as two projects.
+Current shipped contract: project identity is path-keyed. `projects.id` is the project root path, and `root_path` remains unique so the same directory cannot be registered as two projects.
 
 ### conversations
 

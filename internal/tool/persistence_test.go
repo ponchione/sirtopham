@@ -94,6 +94,51 @@ func TestExecuteWithMetaNilRecorder(t *testing.T) {
 	}
 }
 
+func TestExecuteWithMetaPersistsRawAndNormalizedSizes(t *testing.T) {
+	sqlDB, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer sqlDB.Close()
+	if err := db.Init(context.Background(), sqlDB); err != nil {
+		t.Fatalf("init schema: %v", err)
+	}
+	if _, err := sqlDB.Exec(`INSERT INTO projects(id, name, root_path, created_at, updated_at)
+		VALUES ('proj-1', 'test', '/tmp/test', datetime('now'), datetime('now'))`); err != nil {
+		t.Fatalf("insert project: %v", err)
+	}
+	if _, err := sqlDB.Exec(`INSERT INTO conversations(id, project_id, title, model, provider, created_at, updated_at)
+		VALUES ('conv-1', 'proj-1', 'test', 'test-model', 'test-provider', datetime('now'), datetime('now'))`); err != nil {
+		t.Fatalf("insert conversation: %v", err)
+	}
+
+	queries := db.New(sqlDB)
+	reg := NewRegistry()
+	shellTool := newMockTool("shell", Pure)
+	shellTool.executeFn = func(ctx context.Context, projectRoot string, input json.RawMessage) (*ToolResult, error) {
+		return &ToolResult{Success: true, Content: "\x1b[31mCompiling foo\x1b[0m\nCompiling bar\nDONE\n"}, nil
+	}
+	reg.Register(shellTool)
+
+	exec := NewExecutor(reg, ExecutorConfig{}, nil)
+	exec.SetRecorder(NewToolExecutionRecorder(queries))
+
+	calls := []ToolCall{{ID: "tc-1", Name: "shell", Arguments: json.RawMessage(`{"cmd":"build"}`)}}
+	meta := ExecutionMeta{ConversationID: "conv-1", TurnNumber: 1, Iteration: 1}
+	results := exec.ExecuteWithMeta(context.Background(), calls, meta)
+	if len(results) != 1 || !results[0].Success {
+		t.Fatalf("unexpected result: %+v", results)
+	}
+
+	var outputSize, normalizedSize int64
+	if err := sqlDB.QueryRow(`SELECT output_size, normalized_size FROM tool_executions WHERE conversation_id = 'conv-1' AND tool_use_id = 'tc-1'`).Scan(&outputSize, &normalizedSize); err != nil {
+		t.Fatalf("query persisted sizes: %v", err)
+	}
+	if outputSize <= normalizedSize {
+		t.Fatalf("output_size = %d, normalized_size = %d, want output_size > normalized_size after shell normalization", outputSize, normalizedSize)
+	}
+}
+
 func TestToolExecutionRecorderNilSafety(t *testing.T) {
 	var recorder *ToolExecutionRecorder
 

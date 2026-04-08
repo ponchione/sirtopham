@@ -101,6 +101,8 @@ type AgentLoopConfig struct {
 
 	// Phase 2 history compression (spec 11).
 	CompressHistoricalResults  bool `json:"compress_historical_results,omitempty"`
+	StripHistoricalLineNumbers bool `json:"strip_historical_line_numbers,omitempty"`
+	ElideDuplicateReads        bool `json:"elide_duplicate_reads,omitempty"`
 	HistorySummarizeAfterTurns int  `json:"history_summarize_after_turns,omitempty"`
 }
 
@@ -579,8 +581,8 @@ func (l *AgentLoop) RunTurn(ctx stdctx.Context, req RunTurnRequest) (*TurnResult
 				Arguments: tc.Input,
 			})
 
-			// Validate tool call JSON before execution.
-			validation := validateToolCallJSON(tc)
+			// Validate tool call JSON and declared schema before execution.
+			validation := validateToolCallAgainstSchema(tc, l.toolDefinitions)
 			if !validation.Valid {
 				// Malformed tool call — do not execute, feed error back to LLM.
 				l.logger.Warn("malformed tool call",
@@ -1168,6 +1170,8 @@ func (l *AgentLoop) buildPromptConfig(contextPackage *contextpkg.FullContextPack
 		TurnNumber:                 turnNumber,
 		Iteration:                  iteration,
 		CompressHistoricalResults:  l.cfg.CompressHistoricalResults,
+		StripHistoricalLineNumbers: l.cfg.StripHistoricalLineNumbers,
+		ElideDuplicateReads:        l.cfg.ElideDuplicateReads,
 		HistorySummarizeAfterTurns: l.cfg.HistorySummarizeAfterTurns,
 		ExtendedThinking:           l.cfg.ExtendedThinking,
 		CacheSystemPrompt:          l.cfg.CacheSystemPrompt,

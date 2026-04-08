@@ -124,9 +124,10 @@ type IterationMessage struct {
 // message data is left in the database.
 //
 // Tool execution analytics (`tool_executions`) and provider analytics
-// (`sub_calls`) are persisted on separate paths today. They are best-effort and
-// intentionally non-atomic with message persistence until a future slice unifies
-// those writes.
+// (`sub_calls`) are persisted on separate paths today. They remain best-effort
+// and intentionally non-atomic with message insertion, but PersistIteration
+// backfills `sub_calls.message_id` within its transaction when the assistant row
+// for that iteration is known.
 func (m *HistoryManager) PersistIteration(ctx context.Context, conversationID string, turnNumber, iteration int, messages []IterationMessage) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -146,6 +147,7 @@ func (m *HistoryManager) PersistIteration(ctx context.Context, conversationID st
 
 	q := m.queries.WithTx(tx)
 	timestamp := m.now().UTC().Format(time.RFC3339)
+	var assistantMessageID int64
 
 	for _, msg := range messages {
 		sequence, err := nextSequence(ctx, q, conversationID)
@@ -171,6 +173,27 @@ func (m *HistoryManager) PersistIteration(ctx context.Context, conversationID st
 
 		if err := q.InsertIterationMessage(ctx, params); err != nil {
 			return fmt.Errorf("conversation history: persist iteration: insert %s message: %w", msg.Role, err)
+		}
+		if msg.Role == "assistant" {
+			assistantMessageID, err = q.LatestAssistantMessageIDForIteration(ctx, db.LatestAssistantMessageIDForIterationParams{
+				ConversationID: conversationID,
+				TurnNumber:     int64(turnNumber),
+				Iteration:      int64(iteration),
+			})
+			if err != nil {
+				return fmt.Errorf("conversation history: persist iteration: lookup assistant message id: %w", err)
+			}
+		}
+	}
+
+	if assistantMessageID != 0 {
+		if err := q.LinkIterationSubCallsToMessage(ctx, db.LinkIterationSubCallsToMessageParams{
+			MessageID:      sql.NullInt64{Int64: assistantMessageID, Valid: true},
+			ConversationID: sql.NullString{String: conversationID, Valid: true},
+			TurnNumber:     sql.NullInt64{Int64: int64(turnNumber), Valid: true},
+			Iteration:      sql.NullInt64{Int64: int64(iteration), Valid: true},
+		}); err != nil {
+			return fmt.Errorf("conversation history: persist iteration: link sub calls to assistant message: %w", err)
 		}
 	}
 

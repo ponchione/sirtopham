@@ -56,7 +56,6 @@ index:
 brain:
   enabled: true
   vault_path: .brain
-  reindex_on_startup: true
   log_brain_queries: true
 
 local_services:

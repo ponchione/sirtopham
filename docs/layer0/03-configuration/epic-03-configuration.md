@@ -53,7 +53,7 @@ index:
   exclude: ["**/.git/**", "**/vendor/**"]
   max_rag_results: 30
   max_tree_lines: 200
-  auto_reindex: true
+  auto_reindex: false   # Reserved for future runtime auto-indexing; current indexing is explicit via `sirtopham index`
   max_file_size_bytes: 51200
   max_total_file_size_bytes: 524288
 ```
@@ -102,7 +102,7 @@ brain:
   # v0.2+ smart-retrieval fields (keyword-only reactive tools are the v0.1 scope)
   embedding_model: "nomic-embed-code"
   chunk_at_headings: true
-  reindex_on_startup: true
+  reindex_on_startup: false  # Reserved for future brain indexing; current brain runtime does not index on startup
   max_brain_tokens: 8000
   brain_relevance_threshold: 0.30
   include_graph_hops: true

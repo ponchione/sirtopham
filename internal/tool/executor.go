@@ -128,7 +128,9 @@ func (e *Executor) Execute(ctx context.Context, calls []ToolCall) []ToolResult {
 	// Apply Phase 1 normalization then output truncation to successful results.
 	for i := range results {
 		if results[i].Success {
+			results[i].OutputSize = len(results[i].Content)
 			results[i].Content = NormalizeToolResult(calls[i].Name, results[i].Content)
+			results[i].NormalizedSize = len(results[i].Content)
 			limit := e.config.MaxOutputTokens
 			if t, ok := e.registry.Get(calls[i].Name); ok {
 				if ol, ok := t.(OutputLimiter); ok {

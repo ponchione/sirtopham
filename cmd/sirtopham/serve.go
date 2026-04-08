@@ -19,6 +19,7 @@ import (
 	"github.com/ponchione/sirtopham/internal/brain"
 	"github.com/ponchione/sirtopham/internal/brain/mcpclient"
 	"github.com/ponchione/sirtopham/internal/codeintel/embedder"
+	codegraph "github.com/ponchione/sirtopham/internal/codeintel/graph"
 	codesearcher "github.com/ponchione/sirtopham/internal/codeintel/searcher"
 	"github.com/ponchione/sirtopham/internal/codestore"
 	appconfig "github.com/ponchione/sirtopham/internal/config"
@@ -69,6 +70,21 @@ func buildBrainBackend(ctx context.Context, cfg appconfig.BrainConfig, logger *s
 	}
 	logger.Info("brain backend: MCP (in-process)", "vault", cfg.VaultPath)
 	return client, func() { _ = client.Close() }, nil
+}
+
+func buildGraphStore(cfg *appconfig.Config) (*codegraph.Store, func(), error) {
+	if err := os.MkdirAll(filepath.Dir(cfg.GraphDBPath()), 0o755); err != nil {
+		return nil, func() {}, err
+	}
+	store, err := codegraph.NewStore(cfg.GraphDBPath())
+	if err != nil {
+		return nil, func() {}, err
+	}
+	return store, func() { _ = store.Close() }, nil
+}
+
+func buildConventionSource(cfg *appconfig.Config) contextpkg.ConventionSource {
+	return contextpkg.NewBrainConventionSource(cfg.BrainVaultPath())
 }
 
 func runServe(cmd *cobra.Command, configPath string, portOverride int, hostOverride string, devMode bool) error {
@@ -170,7 +186,14 @@ func runServe(cmd *cobra.Command, configPath string, portOverride int, hostOverr
 	}
 	defer closeBrainBackend()
 
-	retrievalOrchestrator := contextpkg.NewRetrievalOrchestrator(semanticSearcher, nil, nil, brainBackend, cfg.ProjectRoot)
+	graphStore, closeGraphStore, err := buildGraphStore(cfg)
+	if err != nil {
+		return fmt.Errorf("build graph store: %w", err)
+	}
+	defer closeGraphStore()
+
+	conventionSource := buildConventionSource(cfg)
+	retrievalOrchestrator := contextpkg.NewRetrievalOrchestrator(semanticSearcher, graphStore, conventionSource, brainBackend, cfg.ProjectRoot)
 	retrievalOrchestrator.SetLogBrainQueries(cfg.Brain.LogBrainQueries)
 
 	// ── 6. Build tool registry + executor ──────────────────────────────
@@ -239,6 +262,8 @@ func runServe(cmd *cobra.Command, configPath string, portOverride int, hostOverr
 			CacheAssembledContext:      cfg.Agent.CacheAssembledContext,
 			CacheConversationHistory:   cfg.Agent.CacheConversationHistory,
 			CompressHistoricalResults:  cfg.Agent.CompressHistoricalResults,
+			StripHistoricalLineNumbers: cfg.Agent.StripHistoricalLineNumbers,
+			ElideDuplicateReads:        cfg.Agent.ElideDuplicateReads,
 			HistorySummarizeAfterTurns: cfg.Agent.HistorySummarizeAfterTurns,
 		},
 		Logger: logger,

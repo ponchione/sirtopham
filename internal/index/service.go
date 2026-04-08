@@ -15,6 +15,7 @@ import (
 	"github.com/ponchione/sirtopham/internal/codeintel"
 	"github.com/ponchione/sirtopham/internal/codeintel/embedder"
 	"github.com/ponchione/sirtopham/internal/codeintel/goparser"
+	codegraph "github.com/ponchione/sirtopham/internal/codeintel/graph"
 	"github.com/ponchione/sirtopham/internal/codeintel/indexer"
 	"github.com/ponchione/sirtopham/internal/codeintel/treesitter"
 	"github.com/ponchione/sirtopham/internal/codestore"
@@ -37,6 +38,7 @@ type dependencies struct {
 	newEmbedder         func(config.Embedding) codeintel.Embedder
 	newDescriber        func(*config.Config) codeintel.Describer
 	ensureIndexServices func(context.Context, *config.Config) error
+	rebuildGraphIndex   func(context.Context, *config.Config) error
 	now                 func() time.Time
 }
 
@@ -56,6 +58,7 @@ func defaultDependencies() dependencies {
 		},
 		newDescriber:        newRuntimeDescriber,
 		ensureIndexServices: runIndexPrecheck,
+		rebuildGraphIndex:   rebuildGraphIndex,
 		now:                 time.Now,
 	}
 }
@@ -198,6 +201,12 @@ func runWithDependencies(ctx context.Context, opts Options, deps dependencies) (
 				FileHash:   indexed.FileHash,
 				ChunkCount: indexed.ChunkCount,
 			})
+		}
+	}
+
+	if shouldRebuildGraphIndex(cfg, changedFiles, deletedFiles, opts.Full) && deps.rebuildGraphIndex != nil {
+		if err := deps.rebuildGraphIndex(ctx, cfg); err != nil {
+			return nil, fmt.Errorf("index: rebuild graph index: %w", err)
 		}
 	}
 
@@ -352,6 +361,43 @@ func modeFromFull(full bool) string {
 		return "full"
 	}
 	return "incremental"
+}
+
+func shouldRebuildGraphIndex(cfg *config.Config, changedFiles []string, deletedFiles []string, full bool) bool {
+	if full || len(changedFiles) > 0 || len(deletedFiles) > 0 {
+		return true
+	}
+	_, err := os.Stat(cfg.GraphDBPath())
+	return err != nil
+}
+
+func rebuildGraphIndex(ctx context.Context, cfg *config.Config) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := os.MkdirAll(filepath.Dir(cfg.GraphDBPath()), 0o755); err != nil {
+		return fmt.Errorf("ensure graph state dir: %w", err)
+	}
+	store, err := codegraph.NewStore(cfg.GraphDBPath())
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	if err := store.DropAndRecreate(); err != nil {
+		return err
+	}
+	analyzerCfg := codegraph.DefaultAnalyzerConfig()
+	analyzerCfg.Python.Include = append([]string(nil), cfg.Index.Include...)
+	analyzerCfg.Python.Exclude = append([]string(nil), cfg.Index.Exclude...)
+	resolver := codegraph.NewResolver(cfg.ProjectRoot, &analyzerCfg)
+	result, err := resolver.Analyze()
+	if err != nil {
+		return err
+	}
+	if err := store.StoreAnalysisResult(result); err != nil {
+		return err
+	}
+	return store.SetMeta("project_root", cfg.ProjectRoot)
 }
 
 type noopDescriber struct{}

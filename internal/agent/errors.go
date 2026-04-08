@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/ponchione/sirtopham/internal/provider"
@@ -138,6 +139,18 @@ type toolCallValidationResult struct {
 	ErrorMessage string
 }
 
+type inputSchemaSpec struct {
+	Type       string                      `json:"type"`
+	Properties map[string]inputSchemaField `json:"properties"`
+	Required   []string                    `json:"required"`
+}
+
+type inputSchemaField struct {
+	Type  string            `json:"type"`
+	Enum  []json.RawMessage `json:"enum"`
+	Items *inputSchemaField `json:"items"`
+}
+
 // validateToolCallJSON checks whether a tool call's Input field is valid JSON.
 // If invalid, it returns a descriptive error message suitable for feeding back
 // to the LLM as a tool result (so it can self-correct).
@@ -162,6 +175,158 @@ func validateToolCallJSON(tc provider.ToolCall) toolCallValidationResult {
 	}
 
 	return toolCallValidationResult{Valid: true}
+}
+
+func validateToolCallAgainstSchema(tc provider.ToolCall, defs []provider.ToolDefinition) toolCallValidationResult {
+	jsonValidation := validateToolCallJSON(tc)
+	if !jsonValidation.Valid {
+		return jsonValidation
+	}
+	if len(defs) == 0 {
+		return jsonValidation
+	}
+	def, ok := findToolDefinition(tc.Name, defs)
+	if !ok || len(def.InputSchema) == 0 {
+		return jsonValidation
+	}
+	var schema inputSchemaSpec
+	if err := json.Unmarshal(def.InputSchema, &schema); err != nil {
+		return toolCallValidationResult{
+			Valid:        false,
+			ErrorMessage: fmt.Sprintf("Error: internal schema for tool '%s' is invalid: %s.", tc.Name, err.Error()),
+		}
+	}
+	if schema.Type != "" && schema.Type != "object" {
+		return jsonValidation
+	}
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(tc.Input, &payload); err != nil {
+		return jsonValidation
+	}
+	for _, field := range schema.Required {
+		value, ok := payload[field]
+		if !ok || isJSONNull(value) {
+			return toolCallValidationResult{
+				Valid:        false,
+				ErrorMessage: fmt.Sprintf("Error: tool '%s' is missing required field '%s'. Provide valid JSON arguments matching the declared schema.", tc.Name, field),
+			}
+		}
+	}
+	for field, spec := range schema.Properties {
+		value, ok := payload[field]
+		if !ok {
+			continue
+		}
+		if msg := validateSchemaField(tc.Name, field, value, spec); msg != "" {
+			return toolCallValidationResult{Valid: false, ErrorMessage: msg}
+		}
+	}
+	return toolCallValidationResult{Valid: true}
+}
+
+func findToolDefinition(name string, defs []provider.ToolDefinition) (provider.ToolDefinition, bool) {
+	for _, def := range defs {
+		if def.Name == name {
+			return def, true
+		}
+	}
+	return provider.ToolDefinition{}, false
+}
+
+func validateSchemaField(toolName string, field string, raw json.RawMessage, spec inputSchemaField) string {
+	if isJSONNull(raw) {
+		return ""
+	}
+	if spec.Type != "" {
+		if ok, expected := matchesSchemaType(raw, spec); !ok {
+			return fmt.Sprintf("Error: tool '%s' field '%s' has invalid type; expected %s.", toolName, field, expected)
+		}
+	}
+	if len(spec.Enum) > 0 {
+		matched := false
+		for _, allowed := range spec.Enum {
+			if jsonEqual(raw, allowed) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return fmt.Sprintf("Error: tool '%s' field '%s' has invalid value. Use one of the allowed values: %s.", toolName, field, formatEnumValues(spec.Enum))
+		}
+	}
+	if spec.Type == "array" && spec.Items != nil {
+		var values []json.RawMessage
+		if err := json.Unmarshal(raw, &values); err == nil {
+			for i, item := range values {
+				if msg := validateSchemaField(toolName, fmt.Sprintf("%s[%d]", field, i), item, *spec.Items); msg != "" {
+					return msg
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func matchesSchemaType(raw json.RawMessage, spec inputSchemaField) (bool, string) {
+	expected := spec.Type
+	switch spec.Type {
+	case "string":
+		var s string
+		return json.Unmarshal(raw, &s) == nil, "string"
+	case "integer":
+		var n float64
+		if err := json.Unmarshal(raw, &n); err != nil {
+			return false, "integer"
+		}
+		return n == float64(int64(n)), "integer"
+	case "number":
+		var n float64
+		return json.Unmarshal(raw, &n) == nil, "number"
+	case "boolean":
+		var b bool
+		return json.Unmarshal(raw, &b) == nil, "boolean"
+	case "object":
+		var obj map[string]json.RawMessage
+		return json.Unmarshal(raw, &obj) == nil, "object"
+	case "array":
+		var arr []json.RawMessage
+		return json.Unmarshal(raw, &arr) == nil, "array"
+	default:
+		return true, expected
+	}
+}
+
+func isJSONNull(raw json.RawMessage) bool {
+	return strings.TrimSpace(string(raw)) == "null"
+}
+
+func jsonEqual(a, b json.RawMessage) bool {
+	var left any
+	var right any
+	if err := json.Unmarshal(a, &left); err != nil {
+		return false
+	}
+	if err := json.Unmarshal(b, &right); err != nil {
+		return false
+	}
+	leftJSON, err := json.Marshal(left)
+	if err != nil {
+		return false
+	}
+	rightJSON, err := json.Marshal(right)
+	if err != nil {
+		return false
+	}
+	return string(leftJSON) == string(rightJSON)
+}
+
+func formatEnumValues(values []json.RawMessage) string {
+	parts := make([]string, 0, len(values))
+	for _, value := range values {
+		parts = append(parts, strings.TrimSpace(string(value)))
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, ", ")
 }
 
 // enrichToolError adds helpful context to a tool execution error message
