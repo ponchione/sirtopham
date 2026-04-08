@@ -326,7 +326,7 @@ func TestBrainSearchSemanticFallback(t *testing.T) {
 	if !result.Success {
 		t.Fatalf("Success = false, content = %q", result.Content)
 	}
-	if !strings.Contains(result.Content, "Semantic search is not yet available") {
+	if !strings.Contains(result.Content, "Semantic/index-backed brain search is not a landed runtime path yet") {
 		t.Fatalf("content missing semantic notice: %q", result.Content)
 	}
 	// Should still return results via keyword fallback.

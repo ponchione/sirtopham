@@ -229,6 +229,7 @@ func buildContextAssemblyReport(
 		BudgetTotal:         budget.BudgetTotal,
 		BudgetUsed:          budget.BudgetUsed,
 		BudgetBreakdown:     cloneIntMap(budget.BudgetBreakdown),
+		TokenBudget:         budget.TokenBudget,
 		AgentReadFiles:      []string{},
 	}
 	if report.BudgetBreakdown == nil {
@@ -350,6 +351,11 @@ func includedFilePathSet(report *ContextAssemblyReport) map[string]struct{} {
 	for _, hit := range report.GraphResults {
 		if hit.Included && strings.TrimSpace(hit.FilePath) != "" {
 			included[hit.FilePath] = struct{}{}
+		}
+	}
+	for _, hit := range report.BrainResults {
+		if hit.Included && strings.TrimSpace(hit.DocumentPath) != "" {
+			included[hit.DocumentPath] = struct{}{}
 		}
 	}
 	return included

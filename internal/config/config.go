@@ -173,7 +173,7 @@ func defaultManagedServices() map[string]ManagedService {
 			BaseURL:    defaultQwenCoderBaseURL,
 			HealthPath: "/health",
 			ModelsPath: "/v1/models",
-			Required:   true,
+			Required:   false,
 		},
 		"nomic-embed": {
 			BaseURL:    defaultNomicEmbedBaseURL,

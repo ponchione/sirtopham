@@ -86,11 +86,20 @@ func composeUp(ctx context.Context, runner CommandRunner, projectDir, composeFil
 	_, stderr, err := runner.Run(ctx, "docker", args, projectDir)
 	if err != nil {
 		if strings.TrimSpace(stderr) != "" {
-			return fmt.Errorf("docker compose up failed: %s", strings.TrimSpace(stderr))
+			return fmt.Errorf("docker compose up failed: %s", normalizeComposeUpError(strings.TrimSpace(stderr)))
 		}
 		return fmt.Errorf("docker compose up failed: %w", err)
 	}
 	return nil
+}
+
+func normalizeComposeUpError(stderr string) string {
+	trimmed := strings.TrimSpace(stderr)
+	lower := strings.ToLower(trimmed)
+	if strings.Contains(lower, "container name") && strings.Contains(lower, "already in use") {
+		return trimmed + " | remediation: remove the conflicting container (for example `docker rm -f <name>`) or run `sirtopham llm down` if it belongs to this repo-owned stack. If this happens across multiple repo-owned stacks, remove explicit container_name entries or rely on compose project scoping instead."
+	}
+	return trimmed
 }
 
 func composeDown(ctx context.Context, runner CommandRunner, projectDir, composeFile string) error {

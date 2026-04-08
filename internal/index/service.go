@@ -110,6 +110,9 @@ func runWithDependencies(ctx context.Context, opts Options, deps dependencies) (
 	if _, err := appdb.InitIfNeeded(ctx, database); err != nil {
 		return nil, fmt.Errorf("index: init database schema: %w", err)
 	}
+	if err := appdb.EnsureContextReportsIncludeTokenBudget(ctx, database); err != nil {
+		return nil, fmt.Errorf("index: upgrade context report token budget storage: %w", err)
+	}
 	if err := ensureProjectRecord(ctx, database, cfg); err != nil {
 		return nil, err
 	}

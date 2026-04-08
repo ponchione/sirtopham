@@ -15,6 +15,7 @@ import (
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
+	contextpkg "github.com/ponchione/sirtopham/internal/context"
 	appdb "github.com/ponchione/sirtopham/internal/db"
 	sid "github.com/ponchione/sirtopham/internal/id"
 )
@@ -69,6 +70,86 @@ func TestContextSignalStreamEndpointReturnsOrderedSignalFlow(t *testing.T) {
 	assertSignalStreamEntry(t, resp.Stream[7], 7, "flag", "prefer_brain_context", "", "true")
 	assertSignalStreamEntry(t, resp.Stream[8], 8, "flag", "include_conventions", "", "true")
 	assertSignalStreamEntry(t, resp.Stream[9], 9, "flag", "include_git_context", "", "depth=3")
+}
+
+func TestContextReportEndpointReturnsPersistedTokenBudgetAndUsageDeltas(t *testing.T) {
+	database := newMetricsTestDB(t)
+	queries := appdb.New(database)
+	conversationID := seedMetricsTestConversation(t, database)
+	createdAt := time.Now().UTC().Format(time.RFC3339)
+	tokenBudgetJSON := `{"model_context_limit":200000,"history_tokens":4096,"reserved_system_prompt_tokens":3000,"reserved_tool_schema_tokens":3000,"reserved_output_tokens":16000,"estimated_context_tokens":250,"estimated_request_tokens":26346}`
+
+	mustExecMetrics(t, database, `INSERT INTO context_reports(conversation_id, turn_number, analysis_latency_ms, retrieval_latency_ms, total_latency_ms,
+		needs_json, signals_json, rag_results_json, brain_results_json, graph_results_json, explicit_files_json,
+		budget_total, budget_used, budget_breakdown_json, token_budget_json, included_count, excluded_count,
+		agent_used_search_tool, agent_read_files_json, context_hit_rate, created_at)
+		VALUES (?, 1, 1, 2, 3, '{}', '[]', '[]', '[]', '[]', '[]', 1000, 250, '{"brain":125}', ?, 2, 0, 0, '[]', 1.0, ?)`, conversationID, tokenBudgetJSON, createdAt)
+	mustExecMetrics(t, database, `INSERT INTO sub_calls(conversation_id, turn_number, iteration, provider, model, purpose, tokens_in, tokens_out, cache_read_tokens, cache_creation_tokens, latency_ms, success, error_message, created_at)
+		VALUES (?, 1, 1, 'anthropic', 'claude-sonnet-4-6-20250514', 'chat', 27000, 1200, 300, 400, 987, 1, NULL, ?)`, conversationID, createdAt)
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	srv := New(Config{}, logger)
+	NewMetricsHandler(srv, queries, logger)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/metrics/conversation/"+conversationID+"/context/1", nil)
+	rec := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+
+	var resp contextReportResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.TokenBudget == nil {
+		t.Fatal("expected token_budget in response")
+	}
+	if resp.TokenBudget.HistoryTokens != 4096 {
+		t.Fatalf("history_tokens = %d, want 4096", resp.TokenBudget.HistoryTokens)
+	}
+	if resp.TokenBudget.EstimatedRequestTokens != 26346 {
+		t.Fatalf("estimated_request_tokens = %d, want 26346", resp.TokenBudget.EstimatedRequestTokens)
+	}
+	if resp.TokenBudget.ActualInputTokens != 27000 {
+		t.Fatalf("actual_input_tokens = %d, want 27000", resp.TokenBudget.ActualInputTokens)
+	}
+	if resp.TokenBudget.InputDeltaTokens != 654 {
+		t.Fatalf("input_delta_tokens = %d, want 654", resp.TokenBudget.InputDeltaTokens)
+	}
+}
+
+func TestContextReportStoreRoundTripsPersistedTokenBudget(t *testing.T) {
+	database := newMetricsTestDB(t)
+	store := contextpkg.NewSQLiteReportStore(database)
+	report := &contextpkg.ContextAssemblyReport{
+		TurnNumber: 1,
+		TokenBudget: contextpkg.TokenBudgetReport{
+			ModelContextLimit:          200000,
+			HistoryTokens:              4096,
+			ReservedSystemPromptTokens: 3000,
+			ReservedToolSchemaTokens:   3000,
+			ReservedOutputTokens:       16000,
+			EstimatedContextTokens:     250,
+			EstimatedRequestTokens:     26346,
+		},
+	}
+	conversationID := seedMetricsTestConversation(t, database)
+
+	if err := store.Insert(context.Background(), conversationID, report); err != nil {
+		t.Fatalf("Insert returned error: %v", err)
+	}
+	got, err := store.Get(context.Background(), conversationID, 1)
+	if err != nil {
+		t.Fatalf("Get returned error: %v", err)
+	}
+	if got.TokenBudget.HistoryTokens != 4096 {
+		t.Fatalf("HistoryTokens = %d, want 4096", got.TokenBudget.HistoryTokens)
+	}
+	if got.TokenBudget.EstimatedRequestTokens != 26346 {
+		t.Fatalf("EstimatedRequestTokens = %d, want 26346", got.TokenBudget.EstimatedRequestTokens)
+	}
 }
 
 func assertSignalStreamEntry(t *testing.T, got contextSignalStreamEntry, wantIndex int, wantKind string, wantType string, wantSource string, wantValue string) {

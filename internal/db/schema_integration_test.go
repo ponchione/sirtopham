@@ -257,6 +257,59 @@ END;`)
 	}
 }
 
+func TestEnsureContextReportsIncludeTokenBudgetUpgradesOlderSchema(t *testing.T) {
+	ctx := context.Background()
+	db := newTestDB(t)
+
+	mustExec(t, db, `ALTER TABLE context_reports RENAME TO context_reports_new`)
+	mustExec(t, db, `CREATE TABLE context_reports (
+	    id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+	    conversation_id        TEXT    NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+	    turn_number            INTEGER NOT NULL,
+	    analysis_latency_ms    INTEGER,
+	    retrieval_latency_ms   INTEGER,
+	    total_latency_ms       INTEGER,
+	    needs_json             TEXT,
+	    signals_json           TEXT,
+	    rag_results_json       TEXT,
+	    brain_results_json     TEXT,
+	    graph_results_json     TEXT,
+	    explicit_files_json    TEXT,
+	    budget_total           INTEGER,
+	    budget_used            INTEGER,
+	    budget_breakdown_json  TEXT,
+	    included_count         INTEGER,
+	    excluded_count         INTEGER,
+	    agent_used_search_tool INTEGER,
+	    agent_read_files_json  TEXT,
+	    context_hit_rate       REAL,
+	    created_at             TEXT    NOT NULL,
+	    UNIQUE(conversation_id, turn_number)
+	)`)
+	mustExec(t, db, `DROP TABLE context_reports_new`)
+
+	exists, err := tableHasColumn(ctx, db, "context_reports", "token_budget_json")
+	if err != nil {
+		t.Fatalf("tableHasColumn before upgrade returned error: %v", err)
+	}
+	if exists {
+		t.Fatal("expected token_budget_json to be absent before upgrade")
+	}
+	if err := EnsureContextReportsIncludeTokenBudget(ctx, db); err != nil {
+		t.Fatalf("EnsureContextReportsIncludeTokenBudget returned error: %v", err)
+	}
+	exists, err = tableHasColumn(ctx, db, "context_reports", "token_budget_json")
+	if err != nil {
+		t.Fatalf("tableHasColumn after upgrade returned error: %v", err)
+	}
+	if !exists {
+		t.Fatal("expected token_budget_json to exist after upgrade")
+	}
+	if err := EnsureContextReportsIncludeTokenBudget(ctx, db); err != nil {
+		t.Fatalf("EnsureContextReportsIncludeTokenBudget second call returned error: %v", err)
+	}
+}
+
 func TestSequenceSortingAndUUIDv7ForeignKeys(t *testing.T) {
 	ctx := context.Background()
 	db := newTestDB(t)

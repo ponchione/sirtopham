@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"unicode"
 )
 
 // GitDiff implements the git_diff tool — returns unified diff output for
@@ -79,11 +80,27 @@ func (GitDiff) Execute(ctx context.Context, projectRoot string, input json.RawMe
 	if params.Staged && params.Ref1 == "" {
 		args = append(args, "--cached")
 	}
+	if params.Ref2 != "" && params.Ref1 == "" {
+		return &ToolResult{
+			Success: false,
+			Content: "ref2 requires ref1. Provide ref1 for ref-to-ref comparisons, or omit both refs for a working tree diff.",
+			Error:   "invalid_ref_args",
+		}, nil
+	}
+	if result := validateGitDiffRefParams(params); result != nil {
+		return result, nil
+	}
 
 	if params.Ref1 != "" {
+		if result := verifyGitRef(ctx, gitPath, projectRoot, params.Ref1); result != nil {
+			return result, nil
+		}
 		args = append(args, params.Ref1)
 	}
 	if params.Ref2 != "" {
+		if result := verifyGitRef(ctx, gitPath, projectRoot, params.Ref2); result != nil {
+			return result, nil
+		}
 		args = append(args, params.Ref2)
 	}
 
@@ -131,4 +148,62 @@ func (GitDiff) Execute(ctx context.Context, projectRoot string, input json.RawMe
 		Success: true,
 		Content: strings.TrimRight(output, "\n"),
 	}, nil
+}
+
+func validateGitDiffRefParams(params gitDiffInput) *ToolResult {
+	for _, candidate := range []struct {
+		label string
+		ref   string
+	}{
+		{label: "ref1", ref: params.Ref1},
+		{label: "ref2", ref: params.Ref2},
+	} {
+		ref := strings.TrimSpace(candidate.ref)
+		if ref == "" {
+			continue
+		}
+		if strings.HasPrefix(ref, "-") {
+			return invalidGitRefResult(candidate.label, ref, "git refs cannot start with '-'")
+		}
+		if strings.Contains(ref, "..") {
+			return invalidGitRefResult(candidate.label, ref, "git refs cannot contain '..'")
+		}
+		if strings.Contains(ref, " ") || strings.Contains(ref, "\t") || strings.Contains(ref, "\n") {
+			return invalidGitRefResult(candidate.label, ref, "git refs cannot contain whitespace")
+		}
+		for _, r := range ref {
+			if unicode.IsControl(r) {
+				return invalidGitRefResult(candidate.label, ref, "git refs cannot contain control characters")
+			}
+		}
+	}
+	return nil
+}
+
+func invalidGitRefResult(label, ref, reason string) *ToolResult {
+	return &ToolResult{
+		Success: false,
+		Content: fmt.Sprintf("Invalid %s %q: %s.", label, ref, reason),
+		Error:   "invalid_ref",
+	}
+}
+
+func verifyGitRef(ctx context.Context, gitPath, projectRoot, ref string) *ToolResult {
+	_, err := runGitCommand(ctx, gitPath, projectRoot, "rev-parse", "--verify", "--quiet", ref+"^{object}")
+	if err == nil {
+		return nil
+	}
+	errMsg := err.Error()
+	if strings.Contains(errMsg, "not a git repository") {
+		return &ToolResult{
+			Success: false,
+			Content: "Not a git repository (or any parent up to filesystem root)",
+			Error:   "not a git repo",
+		}
+	}
+	return &ToolResult{
+		Success: false,
+		Content: fmt.Sprintf("Ref '%s' not found. Use git_status to see available branches and recent commits.", ref),
+		Error:   "unknown ref",
+	}
 }

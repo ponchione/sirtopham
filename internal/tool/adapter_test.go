@@ -142,3 +142,14 @@ func TestEnrichToolResultForAgent_FileEditOldEqualsNew(t *testing.T) {
 		t.Fatalf("Content = %q, want old_equals_new recovery hint", result.Content)
 	}
 }
+
+func TestEnrichToolResultForAgent_FileWriteNotReadFirst(t *testing.T) {
+	result := enrichToolResultForAgent("file_write", ToolResult{
+		Success: false,
+		Content: "file_write requires a prior full file_read of file.txt before overwriting existing non-empty content. Read the entire file first, then retry the write.",
+		Error:   "not_read_first",
+	})
+	if !strings.Contains(result.Content, "overwriting an existing non-empty file now requires a fresh full file_read first") {
+		t.Fatalf("Content = %q, want file_write not_read_first recovery hint", result.Content)
+	}
+}

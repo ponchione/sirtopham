@@ -108,3 +108,19 @@ func notReadFirstError(path string) *ToolResult {
 		Error:   "not_read_first",
 	}
 }
+
+func staleWriteReadError(toolName, path string) *ToolResult {
+	return &ToolResult{
+		Success: false,
+		Content: fmt.Sprintf("File changed since the last full read: %s. Re-run file_read on the full file, then retry %s.", path, toolName),
+		Error:   "stale_write",
+	}
+}
+
+func notReadFirstForToolError(toolName, path string) *ToolResult {
+	return &ToolResult{
+		Success: false,
+		Content: fmt.Sprintf("%s requires a prior full file_read of %s before overwriting existing non-empty content. Read the entire file first, then retry the write.", toolName, path),
+		Error:   "not_read_first",
+	}
+}

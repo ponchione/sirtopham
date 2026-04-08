@@ -164,3 +164,49 @@ func EnsureMessageSearchIndexesIncludeTools(ctx context.Context, db *sql.DB) err
 	}
 	return nil
 }
+
+// EnsureContextReportsIncludeTokenBudget upgrades older databases whose
+// context_reports table predates token_budget_json persistence. It is safe to
+// call repeatedly.
+func EnsureContextReportsIncludeTokenBudget(ctx context.Context, db *sql.DB) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	exists, err := tableHasColumn(ctx, db, "context_reports", "token_budget_json")
+	if err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
+	if _, err := db.ExecContext(ctx, `ALTER TABLE context_reports ADD COLUMN token_budget_json TEXT`); err != nil {
+		return fmt.Errorf("add context_reports.token_budget_json: %w", err)
+	}
+	return nil
+}
+
+func tableHasColumn(ctx context.Context, db *sql.DB, table string, column string) (bool, error) {
+	rows, err := db.QueryContext(ctx, `PRAGMA table_info(`+table+`)`)
+	if err != nil {
+		return false, fmt.Errorf("inspect table %s: %w", table, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name string
+		var dataType string
+		var notNull int
+		var defaultValue sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &dataType, &notNull, &defaultValue, &pk); err != nil {
+			return false, fmt.Errorf("scan table_info(%s): %w", table, err)
+		}
+		if strings.EqualFold(name, column) {
+			return true, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, fmt.Errorf("iterate table_info(%s): %w", table, err)
+	}
+	return false, nil
+}

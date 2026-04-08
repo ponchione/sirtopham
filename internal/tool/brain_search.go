@@ -47,7 +47,7 @@ func (b *BrainSearch) ToolPurity() Purity {
 func (b *BrainSearch) Schema() json.RawMessage {
 	return json.RawMessage(`{
 		"name": "brain_search",
-		"description": "Search the project brain (Obsidian knowledge vault) for documents by keyword. Use this when the prompt refers to brain notes like 'notes/...md' or '.brain/notes/...md', or when search_text found nothing but the content may live in the brain. Prefer brain_search/brain_read over search_text/file_read for vault-relative note paths, never use search_text for .brain paths, and do not double-check a successful brain hit with repo search tools. Returns matching document paths, titles, and relevant snippets. Use this to find architectural decisions, debugging journals, conventions, and other project knowledge.",
+		"description": "Search the project brain (Obsidian knowledge vault) for documents by keyword. Use this when the prompt refers to brain notes like 'notes/...md' or '.brain/notes/...md', or when search_text found nothing but the content may live in the brain. Prefer brain_search/brain_read over search_text/file_read for vault-relative note paths, never use search_text for .brain paths, and do not double-check a successful brain hit with repo search tools. Returns matching document paths, titles, and relevant snippets. Use this to find architectural decisions, debugging journals, conventions, and other project knowledge. Keyword mode is the live runtime contract today; semantic/index-backed brain search is reserved future work unless explicitly landed.",
 		"input_schema": {
 			"type": "object",
 			"properties": {
@@ -57,7 +57,7 @@ func (b *BrainSearch) Schema() json.RawMessage {
 				},
 				"mode": {
 					"type": "string",
-					"description": "Search mode: 'keyword' (default). 'semantic' and 'auto' are coming in v0.2.",
+					"description": "Search mode: 'keyword' (default). 'semantic' and 'auto' are accepted for compatibility but currently fall back to keyword search because semantic/index-backed brain search is not a landed runtime path.",
 					"enum": ["keyword", "semantic", "auto"],
 					"default": "keyword"
 				},
@@ -107,7 +107,7 @@ func (b *BrainSearch) Execute(ctx context.Context, projectRoot string, input jso
 	semanticNotice := ""
 	mode := strings.ToLower(params.Mode)
 	if mode == "semantic" || mode == "auto" {
-		semanticNotice = "Semantic search is not yet available (coming in v0.2). Using keyword search instead.\n\n"
+		semanticNotice = "Semantic/index-backed brain search is not a landed runtime path yet. Using keyword search instead.\n\n"
 	}
 
 	hits, err := b.searchHits(ctx, params.Query)

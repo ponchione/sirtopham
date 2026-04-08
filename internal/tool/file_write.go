@@ -13,7 +13,13 @@ const diffTruncateLines = 50
 
 // FileWrite implements the file_write tool — writes or overwrites a file
 // with provided content, creating parent directories as needed.
-type FileWrite struct{}
+type FileWrite struct {
+	store readStateStore
+}
+
+func NewFileWrite(store readStateStore) FileWrite {
+	return FileWrite{store: store}
+}
 
 type fileWriteInput struct {
 	Path    string `json:"path"`
@@ -45,7 +51,7 @@ func (FileWrite) Schema() json.RawMessage {
 	}`)
 }
 
-func (FileWrite) Execute(ctx context.Context, projectRoot string, input json.RawMessage) (*ToolResult, error) {
+func (f FileWrite) Execute(ctx context.Context, projectRoot string, input json.RawMessage) (*ToolResult, error) {
 	var params fileWriteInput
 	if err := json.Unmarshal(input, &params); err != nil {
 		return &ToolResult{
@@ -64,6 +70,12 @@ func (FileWrite) Execute(ctx context.Context, projectRoot string, input json.Raw
 		}, nil
 	}
 
+	store := f.store
+	if store == nil {
+		store = defaultReadStateStore
+	}
+	scopeKey := readScopeKey(ctx)
+
 	// Create parent directories.
 	dir := filepath.Dir(absPath)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -74,12 +86,26 @@ func (FileWrite) Execute(ctx context.Context, projectRoot string, input json.Raw
 		}, nil
 	}
 
-	// Check if file exists for diff generation.
+	// Check if file exists for diff generation and stale-write protection.
 	var oldContent string
 	isNew := true
+	requiresFreshRead := false
 	if existing, err := os.ReadFile(absPath); err == nil {
 		oldContent = string(existing)
 		isNew = false
+		requiresFreshRead = len(existing) > 0
+	} else if !os.IsNotExist(err) {
+		return &ToolResult{
+			Success: false,
+			Content: fmt.Sprintf("Error reading file: %v", err),
+			Error:   err.Error(),
+		}, nil
+	}
+
+	if requiresFreshRead {
+		if result := ensureFreshFullRead(ctx, store, scopeKey, absPath, params.Path, "file_write", []byte(oldContent)); result != nil {
+			return result, nil
+		}
 	}
 
 	// Write atomically: write to temp file in same dir, then rename.
@@ -125,6 +151,13 @@ func (FileWrite) Execute(ctx context.Context, projectRoot string, input json.Raw
 		}
 	}
 
+	if requiresFreshRead {
+		if result := ensureFreshFullRead(ctx, store, scopeKey, absPath, params.Path, "file_write", nil); result != nil {
+			os.Remove(tmpPath)
+			return result, nil
+		}
+	}
+
 	if err := os.Rename(tmpPath, absPath); err != nil {
 		os.Remove(tmpPath)
 		return &ToolResult{
@@ -132,6 +165,9 @@ func (FileWrite) Execute(ctx context.Context, projectRoot string, input json.Raw
 			Content: fmt.Sprintf("Failed to write file: %v", err),
 			Error:   err.Error(),
 		}, nil
+	}
+	if !isNew {
+		_ = store.Clear(ctx, scopeKey, absPath)
 	}
 
 	// Generate response.
@@ -165,4 +201,48 @@ func (FileWrite) Execute(ctx context.Context, projectRoot string, input json.Raw
 		Success: true,
 		Content: diff,
 	}, nil
+}
+
+func ensureFreshFullRead(ctx context.Context, store readStateStore, scopeKey, absPath, displayPath, toolName string, currentData []byte) *ToolResult {
+	snapshot, ok, err := store.Get(ctx, scopeKey, absPath)
+	if err != nil {
+		return &ToolResult{
+			Success: false,
+			Content: fmt.Sprintf("Failed to load read state: %v", err),
+			Error:   err.Error(),
+		}
+	}
+	if !ok || snapshot.Kind != readKindFull {
+		return notReadFirstForToolError(toolName, displayPath)
+	}
+	info, err := os.Stat(absPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return &ToolResult{Success: false, Content: fmt.Sprintf("File not found: %s", displayPath), Error: "file not found"}
+		}
+		return &ToolResult{
+			Success: false,
+			Content: fmt.Sprintf("Error stating file: %v", err),
+			Error:   err.Error(),
+		}
+	}
+	data := currentData
+	if data == nil {
+		data, err = os.ReadFile(absPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return &ToolResult{Success: false, Content: fmt.Sprintf("File not found: %s", displayPath), Error: "file not found"}
+			}
+			return &ToolResult{
+				Success: false,
+				Content: fmt.Sprintf("Error reading file: %v", err),
+				Error:   err.Error(),
+			}
+		}
+	}
+	if snapshot.Fingerprint != fileFingerprint(data) || snapshot.SizeBytes != info.Size() || !snapshot.MTime.Equal(info.ModTime()) {
+		_ = store.Clear(ctx, scopeKey, absPath)
+		return staleWriteReadError(toolName, displayPath)
+	}
+	return nil
 }

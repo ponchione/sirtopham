@@ -40,6 +40,7 @@ type WebSocketHandler struct {
 	projectID string
 	providers map[string]config.ProviderConfig
 	defaults  *RuntimeDefaults
+	devMode   bool
 	logger    *slog.Logger
 }
 
@@ -54,6 +55,7 @@ func NewWebSocketHandler(s *Server, agentSvc AgentService, convSvc ConversationS
 		projectID: cfg.ProjectRoot,
 		providers: cfg.Providers,
 		defaults:  defaults,
+		devMode:   cfg.Server.DevMode,
 		logger:    logger,
 	}
 	s.HandleFunc("/api/ws", h.handleWS)
@@ -94,10 +96,12 @@ func (h *WebSocketHandler) defaultProviderName() string {
 }
 
 func (h *WebSocketHandler) handleWS(w http.ResponseWriter, r *http.Request) {
-	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
+	acceptOptions := &websocket.AcceptOptions{}
+	if h.devMode {
 		// In dev mode, Vite dev server connects from a different origin.
-		InsecureSkipVerify: true,
-	})
+		acceptOptions.InsecureSkipVerify = true
+	}
+	conn, err := websocket.Accept(w, r, acceptOptions)
 	if err != nil {
 		h.logger.Error("websocket accept failed", "error", err)
 		return

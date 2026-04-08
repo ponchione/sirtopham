@@ -71,8 +71,14 @@ func TestShellDenylist(t *testing.T) {
 	}{
 		{"rm -rf /", true},
 		{"git push --force origin main", true},
+		{"sh -c 'git push --force origin main'", true},
+		{"echo safe && git push --force origin main", true},
+		{"true; git push --force origin main", true},
+		{"false || git push --force origin main", true},
 		{"echo hello", false},
 		{"rm file.txt", false},
+		{"printf 'git push --force'", false},
+		{"echo rm -rf /", false},
 	}
 
 	for _, tt := range tests {
@@ -90,6 +96,14 @@ func TestShellDenylist(t *testing.T) {
 		if !tt.blocked && !result.Success {
 			t.Fatalf("expected success for %q, got: %s", tt.cmd, result.Content)
 		}
+	}
+}
+
+func TestShellTokenize(t *testing.T) {
+	tokens := shellTokenize(`sh -c 'git push --force origin main'`)
+	joined := strings.Join(tokens, "|")
+	if joined != "sh|-c|git push --force origin main" {
+		t.Fatalf("tokens = %q", joined)
 	}
 }
 

@@ -74,6 +74,10 @@ func (s *SQLiteReportStore) Insert(ctx stdctx.Context, conversationID string, re
 	if err != nil {
 		return fmt.Errorf("insert context report: marshal budget breakdown: %w", err)
 	}
+	tokenBudgetJSON, err := marshalJSON(report.TokenBudget)
+	if err != nil {
+		return fmt.Errorf("insert context report: marshal token budget: %w", err)
+	}
 	readFilesJSON, err := marshalJSON([]string{})
 	if err != nil {
 		return fmt.Errorf("insert context report: marshal default read files: %w", err)
@@ -95,6 +99,7 @@ func (s *SQLiteReportStore) Insert(ctx stdctx.Context, conversationID string, re
 		BudgetTotal:         sql.NullInt64{Int64: int64(report.BudgetTotal), Valid: true},
 		BudgetUsed:          sql.NullInt64{Int64: int64(report.BudgetUsed), Valid: true},
 		BudgetBreakdownJson: sql.NullString{String: budgetBreakdownJSON, Valid: true},
+		TokenBudgetJson:     sql.NullString{String: tokenBudgetJSON, Valid: true},
 		IncludedCount:       sql.NullInt64{Int64: int64(len(report.IncludedChunks)), Valid: true},
 		ExcludedCount:       sql.NullInt64{Int64: int64(len(report.ExcludedChunks)), Valid: true},
 		AgentUsedSearchTool: sql.NullInt64{Int64: 0, Valid: true},
@@ -206,6 +211,11 @@ func decodeContextReportRow(row dbpkg.ContextReport) (*ContextAssemblyReport, er
 			return nil, fmt.Errorf("decode budget_breakdown_json: %w", err)
 		}
 	}
+	if row.TokenBudgetJson.Valid {
+		if err := unmarshalJSONString(row.TokenBudgetJson.String, &report.TokenBudget); err != nil {
+			return nil, fmt.Errorf("decode token_budget_json: %w", err)
+		}
+	}
 	if row.AgentReadFilesJson.Valid {
 		if err := unmarshalJSONString(row.AgentReadFilesJson.String, &report.AgentReadFiles); err != nil {
 			return nil, fmt.Errorf("decode agent_read_files_json: %w", err)
@@ -260,6 +270,20 @@ func collectIncludedChunkKeys(report *ContextAssemblyReport) []string {
 		seen[key] = struct{}{}
 		keys = append(keys, key)
 	}
+	for _, hit := range report.BrainResults {
+		if !hit.Included {
+			continue
+		}
+		key := strings.TrimSpace(hit.DocumentPath)
+		if key == "" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		keys = append(keys, key)
+	}
 	for _, file := range report.ExplicitFileResults {
 		if !file.Included {
 			continue
@@ -296,6 +320,9 @@ func collectExcludedChunkKeys(report *ContextAssemblyReport) ([]string, map[stri
 	}
 	for _, hit := range report.GraphResults {
 		appendKey(graphChunkKey(hit), hit.ExclusionReason)
+	}
+	for _, hit := range report.BrainResults {
+		appendKey(hit.DocumentPath, hit.ExclusionReason)
 	}
 	for _, file := range report.ExplicitFileResults {
 		appendKey(file.FilePath, file.ExclusionReason)

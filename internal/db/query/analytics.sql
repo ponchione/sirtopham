@@ -62,3 +62,16 @@ WHERE sc.conversation_id = ?
   AND sc.purpose = 'chat'
   AND sc.turn_number = lt.n
 GROUP BY sc.turn_number;
+
+-- name: GetTurnTokenUsage :one
+SELECT
+    CAST(COALESCE(SUM(tokens_in), 0) AS INTEGER) AS tokens_in,
+    CAST(COALESCE(SUM(tokens_out), 0) AS INTEGER) AS tokens_out,
+    CAST(COALESCE(SUM(cache_read_tokens), 0) AS INTEGER) AS cache_read_tokens,
+    CAST(COALESCE(SUM(cache_creation_tokens), 0) AS INTEGER) AS cache_creation_tokens,
+    CAST(COALESCE(SUM(latency_ms), 0) AS INTEGER) AS latency_ms,
+    CAST(COALESCE(MAX(iteration), 1) AS INTEGER) AS iteration_count
+FROM sub_calls
+WHERE conversation_id = ?
+  AND purpose = 'chat'
+  AND turn_number = ?;

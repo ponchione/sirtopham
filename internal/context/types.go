@@ -16,16 +16,16 @@ type Signal struct {
 // ContextNeeds describes the codebase context that should be retrieved for a
 // single turn.
 type ContextNeeds struct {
-	SemanticQueries     []string `json:"semantic_queries,omitempty"`
-	ExplicitFiles       []string `json:"explicit_files,omitempty"`
-	ExplicitSymbols     []string `json:"explicit_symbols,omitempty"`
-	IncludeConventions  bool     `json:"include_conventions,omitempty"`
-	IncludeGitContext   bool     `json:"include_git_context,omitempty"`
-	GitContextDepth     int      `json:"git_context_depth,omitempty"`
-	MomentumFiles       []string `json:"momentum_files,omitempty"`
-	MomentumModule      string   `json:"momentum_module,omitempty"`
-	PreferBrainContext  bool     `json:"prefer_brain_context,omitempty"`
-	Signals             []Signal `json:"signals,omitempty"`
+	SemanticQueries    []string `json:"semantic_queries,omitempty"`
+	ExplicitFiles      []string `json:"explicit_files,omitempty"`
+	ExplicitSymbols    []string `json:"explicit_symbols,omitempty"`
+	IncludeConventions bool     `json:"include_conventions,omitempty"`
+	IncludeGitContext  bool     `json:"include_git_context,omitempty"`
+	GitContextDepth    int      `json:"git_context_depth,omitempty"`
+	MomentumFiles      []string `json:"momentum_files,omitempty"`
+	MomentumModule     string   `json:"momentum_module,omitempty"`
+	PreferBrainContext bool     `json:"prefer_brain_context,omitempty"`
+	Signals            []Signal `json:"signals,omitempty"`
 }
 
 // RAGHit represents one semantic-search code result adapted into Layer 3's
@@ -52,8 +52,8 @@ type RAGHit struct {
 
 // BrainHit represents one project-brain retrieval result.
 //
-// These fields are retained in v0.1 for report/schema continuity, but proactive
-// brain retrieval remains out of scope until v0.2.
+// In the shipped v0.2 runtime, proactive project-brain retrieval is part of the
+// live context-assembly contract and these fields are persisted for auditability.
 type BrainHit struct {
 	DocumentPath    string   `json:"document_path"`
 	Title           string   `json:"title,omitempty"`
@@ -117,6 +117,26 @@ type BudgetResult struct {
 	ExcludedChunks      []string          `json:"excluded_chunks,omitempty"`
 	ExclusionReasons    map[string]string `json:"exclusion_reasons,omitempty"`
 	CompressionNeeded   bool              `json:"compression_needed,omitempty"`
+	TokenBudget         TokenBudgetReport `json:"token_budget,omitempty"`
+}
+
+type TokenBudgetReport struct {
+	ModelContextLimit          int   `json:"model_context_limit,omitempty"`
+	HistoryTokens              int   `json:"history_tokens,omitempty"`
+	ReservedSystemPromptTokens int   `json:"reserved_system_prompt_tokens,omitempty"`
+	ReservedToolSchemaTokens   int   `json:"reserved_tool_schema_tokens,omitempty"`
+	ReservedOutputTokens       int   `json:"reserved_output_tokens,omitempty"`
+	EstimatedContextTokens     int   `json:"estimated_context_tokens,omitempty"`
+	EstimatedRequestTokens     int   `json:"estimated_request_tokens,omitempty"`
+	ActualInputTokens          int64 `json:"actual_input_tokens,omitempty"`
+	ActualOutputTokens         int64 `json:"actual_output_tokens,omitempty"`
+	ActualCacheReadTokens      int64 `json:"actual_cache_read_tokens,omitempty"`
+	ActualCacheCreationTokens  int64 `json:"actual_cache_creation_tokens,omitempty"`
+	ActualLatencyMs            int64 `json:"actual_latency_ms,omitempty"`
+	IterationCount             int64 `json:"iteration_count,omitempty"`
+	InputDeltaTokens           int64 `json:"input_delta_tokens,omitempty"`
+	OutputHeadroomDeltaTokens  int64 `json:"output_headroom_delta_tokens,omitempty"`
+	OutputHeadroomExceeded     bool  `json:"output_headroom_exceeded,omitempty"`
 }
 
 // ContextAssemblyReport captures one turn's full context-assembly decision
@@ -141,6 +161,7 @@ type ContextAssemblyReport struct {
 	BudgetTotal         int               `json:"budget_total,omitempty"`
 	BudgetUsed          int               `json:"budget_used,omitempty"`
 	BudgetBreakdown     map[string]int    `json:"budget_breakdown,omitempty"`
+	TokenBudget         TokenBudgetReport `json:"token_budget,omitempty"`
 	AgentUsedSearchTool bool              `json:"agent_used_search_tool,omitempty"`
 	AgentReadFiles      []string          `json:"agent_read_files,omitempty"`
 	ContextHitRate      float64           `json:"context_hit_rate,omitempty"`
