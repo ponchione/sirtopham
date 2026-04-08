@@ -28,6 +28,14 @@ type HistoryCompressor struct {
 	// this turn are NOT compressed (they're actively in use).
 	CurrentTurn int64
 
+	// StripLineNumbers controls whether historical file_read results have
+	// line-number prefixes removed.
+	StripLineNumbers bool
+
+	// ElideDuplicateReads controls whether older duplicate file reads are
+	// replaced by a pointer to the latest read.
+	ElideDuplicateReads bool
+
 	// SummarizeAfterTurns controls stale result summarization. Tool results
 	// older than (CurrentTurn - SummarizeAfterTurns) are replaced with a
 	// one-line summary. Set to 0 to disable.
@@ -68,9 +76,11 @@ func (c *HistoryCompressor) CompressHistory(messages []HistoryMessage) []History
 		}
 
 		// Transform 1: Duplicate result elision.
-		if elided, ok := c.tryElide(msg, toolName, latestReads); ok {
-			result[i].Content = sql.NullString{String: elided, Valid: true}
-			continue // Skip further transforms on elided results.
+		if c.ElideDuplicateReads {
+			if elided, ok := c.tryElide(msg, toolName, latestReads); ok {
+				result[i].Content = sql.NullString{String: elided, Valid: true}
+				continue // Skip further transforms on elided results.
+			}
 		}
 
 		// Transform 2: Stale result summarization.
@@ -80,7 +90,7 @@ func (c *HistoryCompressor) CompressHistory(messages []HistoryMessage) []History
 		}
 
 		// Transform 3: Line-number stripping (file_read only).
-		if toolName == "file_read" {
+		if c.StripLineNumbers && toolName == "file_read" {
 			content = StripLineNumbers(content)
 		}
 

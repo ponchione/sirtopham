@@ -41,6 +41,7 @@ func TestProjectEndpoint(t *testing.T) {
 	}
 
 	var body struct {
+		ID       string `json:"id"`
 		RootPath string `json:"root_path"`
 		Language string `json:"language"`
 		Name     string `json:"name"`
@@ -49,6 +50,9 @@ func TestProjectEndpoint(t *testing.T) {
 		t.Fatalf("decode: %v", err)
 	}
 
+	if body.ID != dir {
+		t.Fatalf("expected id=%q, got %q", dir, body.ID)
+	}
 	if body.Language != "go" {
 		t.Fatalf("expected language=go, got %q", body.Language)
 	}

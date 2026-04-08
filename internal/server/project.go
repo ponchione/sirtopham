@@ -40,6 +40,7 @@ func NewProjectHandler(s *Server, cfg *config.Config, logger *slog.Logger) *Proj
 // ── GET /api/project ─────────────────────────────────────────────────
 
 type projectInfoResponse struct {
+	ID                string `json:"id"`
 	RootPath          string `json:"root_path"`
 	Language          string `json:"language,omitempty"`
 	Name              string `json:"name"`
@@ -58,6 +59,7 @@ func (h *ProjectHandler) handleProject(w http.ResponseWriter, _ *http.Request) {
 	lastIndexedAt, lastIndexedCommit := h.loadProjectIndexMetadata(context.Background())
 
 	writeJSON(w, http.StatusOK, projectInfoResponse{
+		ID:                h.cfg.ProjectRoot,
 		RootPath:          h.cfg.ProjectRoot,
 		Language:          h.langVal,
 		Name:              name,

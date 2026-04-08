@@ -1205,7 +1205,7 @@ func (b *blockingToolExecutor) Execute(ctx stdctx.Context, call provider.ToolCal
 }
 
 type cancelOnEventSink struct {
-	match func(Event) bool
+	match  func(Event) bool
 	cancel func()
 	once   bool
 }
@@ -2174,6 +2174,72 @@ func TestRunTurnEmptyToolCallArgsFeedsBackError(t *testing.T) {
 	toolMsg := iter1.messages[1]
 	if !strings.Contains(toolMsg.Content, "empty arguments") {
 		t.Fatalf("tool error content = %q, want containing 'empty arguments'", toolMsg.Content)
+	}
+}
+
+func TestRunTurnSchemaInvalidToolCallFeedsBackError(t *testing.T) {
+	assembler := &loopContextAssemblerStub{
+		pkg: &contextpkg.FullContextPackage{Content: "context", Frozen: true},
+	}
+	conversations := &loopConversationManagerStub{
+		history: []db.Message{},
+		seen:    loopSeenFilesStub{},
+	}
+
+	routerStub := &providerRouterStub{
+		streamEvents: [][]provider.StreamEvent{
+			{
+				provider.ToolCallStart{ID: "tool_missing_path", Name: "file_read"},
+				provider.ToolCallEnd{ID: "tool_missing_path", Input: json.RawMessage(`{}`)},
+				provider.StreamDone{
+					StopReason: provider.StopReasonToolUse,
+					Usage:      provider.Usage{InputTokens: 20, OutputTokens: 10},
+				},
+			},
+			{
+				provider.TokenDelta{Text: "Done."},
+				provider.StreamDone{
+					StopReason: provider.StopReasonEndTurn,
+					Usage:      provider.Usage{InputTokens: 40, OutputTokens: 5},
+				},
+			},
+		},
+	}
+
+	executor := &toolExecutorStub{}
+	loop := NewAgentLoop(AgentLoopDeps{
+		ContextAssembler:    assembler,
+		ConversationManager: conversations,
+		ProviderRouter:      routerStub,
+		ToolExecutor:        executor,
+		ToolDefinitions: []provider.ToolDefinition{{
+			Name:        "file_read",
+			Description: "Read file contents",
+			InputSchema: json.RawMessage(`{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}`),
+		}},
+		PromptBuilder: NewPromptBuilder(nil),
+	})
+	loop.now = func() time.Time { return time.Unix(1700000950, 0).UTC() }
+
+	result, err := loop.RunTurn(stdctx.Background(), RunTurnRequest{
+		ConversationID:    "conv-schema-invalid",
+		TurnNumber:        1,
+		Message:           "read a file",
+		ModelContextLimit: 200000,
+	})
+	if err != nil {
+		t.Fatalf("RunTurn error: %v", err)
+	}
+	if result.FinalText != "Done." {
+		t.Fatalf("FinalText = %q, want %q", result.FinalText, "Done.")
+	}
+	if len(executor.calls) != 0 {
+		t.Fatalf("executor.calls = %d, want 0 for schema-invalid tool call", len(executor.calls))
+	}
+	iter1 := conversations.persistIterCalls[0]
+	toolMsg := iter1.messages[1]
+	if !strings.Contains(toolMsg.Content, "missing required field") || !strings.Contains(toolMsg.Content, "path") {
+		t.Fatalf("tool error content = %q, want missing required field guidance", toolMsg.Content)
 	}
 }
 

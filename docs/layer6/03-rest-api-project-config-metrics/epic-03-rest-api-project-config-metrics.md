@@ -14,7 +14,7 @@ Implement the REST API endpoints for project information, configuration manageme
 
 ## Definition of Done
 
-- [ ] `GET /api/project` — Returns project info: `{id, name, root_path, language, last_indexed_at, last_indexed_commit}`
+- [ ] `GET /api/project` — Returns project info: `{id, name, root_path, language, last_indexed_at, last_indexed_commit}` where current shipped runtime uses the project root path as `id`
 - [ ] `GET /api/project/tree` — Returns the project file tree as a nested JSON structure. Respects the same include/exclude globs from config that the indexer uses. Depth-limited (default 3 levels) to keep response size manageable
 - [ ] `GET /api/project/file?path=<relative_path>` — Returns file contents as plain text with metadata (path, language detected from extension, line count). Rejects paths outside the project root (path traversal protection). Does NOT do server-side syntax highlighting — that's the frontend's job
 - [ ] `GET /api/config` — Returns the current runtime config relevant to the UI: default provider/model, fallback provider/model, configured providers with their available models (from provider router), agent settings (max_iterations, extended_thinking)

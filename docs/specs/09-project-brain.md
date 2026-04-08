@@ -56,23 +56,17 @@ Obsidian runs alongside sirtopham as the human-facing vault UI, but the implemen
 │    ├─ brain_read ──────────────────→  │    ├─ architecture/      │
 │    ├─ brain_write ─────────────────→  │    ├─ debugging/         │
 │    ├─ brain_update ────────────────→  │    ├─ conventions/       │
-│    ├─ brain_search (keyword) ──────→  │    ├─ sessions/          │
-│    │                            │     │    └─ notes/             │
-│    └─ brain_search (semantic) ──┐│    │                          │
-│                                 ││    │  Local REST API Plugin   │
-│  Context Assembly               ││    │    (localhost:27124)     │
-│    ├─ brain keyword query ─────────→  │                          │
-│    └─ brain semantic query ─────┘│    │  Graph View, Canvas,     │
+│    └─ brain_search (keyword) ─────→  │    ├─ sessions/          │
+│                                 │     │    └─ notes/             │
+│  Context Assembly               │     │                          │
+│    └─ brain keyword query ───────→   │  Graph View, Canvas,     │
 │                                 │     │  Plugins, Search, etc.   │
-│  Brain Indexer                  │     │                          │
+│  Future brain-index work        │     │                          │
 │    ├─ Vector embeddings         │     └──────────────────────────┘
-│    │  (LanceDB, brain collection)            ↕
-│    ├─ Wikilink graph (SQLite)         Developer works directly
-│    └─ Frontmatter/tag index           in Obsidian alongside
-│                                       sirtopham
-│  Web UI                         │
-│    └─ "Open in Obsidian" links  │
-│                                 │
+│    ├─ Wikilink graph                        ↕
+│    └─ Metadata extraction               Developer works directly
+│                                         in Obsidian alongside
+│                                         sirtopham
 └─────────────────────────────────┘
 ```
 
@@ -231,19 +225,19 @@ Those may still be worthwhile v0.2+ work, but the docs should not imply they are
 
 Historical/future-design note: this section describes the older planned indexing model, not the current operator-facing runtime contract. Today the live brain path is MCP/vault-backed keyword retrieval; the vector/graph indexing story below remains reserved future work unless code and validation land for it.
 
-### Obsidian Handles Keyword Search
+### MCP/vault backend handles the live keyword path
 
-The Obsidian REST API plugin exposes Obsidian's own search. sirtopham doesn't need to maintain a separate FTS5 index for keyword queries — Obsidian does this automatically as files change in the vault.
+The current operator-facing brain path is MCP/vault-backed keyword retrieval. sirtopham does not currently promise a separate live FTS/vector/graph indexing pipeline for brain content.
 
-### sirtopham Handles Vector Search and Graph
+### Future brain-index work remains future work
 
-The brain indexer runs on startup and incrementally:
+If semantic/vector-backed brain retrieval is added later, it should be described as a derived layer under the vault source of truth. That future work may include:
 
-**On startup:** Scan the vault directory (via REST API or filesystem). For each document: compute content hash, compare to stored hash, re-embed if changed. Parse wikilinks and rebuild the link graph. Extract frontmatter and tags.
+**On explicit future indexing runs:** Scan the vault directory, compute content hashes, re-embed changed notes, parse wikilinks, and extract frontmatter/tags.
 
-**On agent write:** When the agent creates or updates a document via `brain_write` or `brain_update`, immediately update the vector embeddings and link graph for that document. No waiting for a reindex cycle. The document is semantically searchable on the very next turn.
+**On agent write:** Any immediate vector/graph refresh guarantees should only be documented once they actually exist.
 
-**On developer edit:** Detected on the next startup scan or mid-session if the indexer runs periodic checks (configurable). Developer edits made in Obsidian are picked up and re-embedded.
+**On developer edit:** Any startup or periodic refresh behavior should only be documented once it is implemented and validated.
 
 ### Chunking Strategy
 
@@ -319,8 +313,8 @@ Append to or edit a section of an existing document. More surgical than full ove
 - `section` (string, optional): Heading text to target for `replace_section` (e.g., "## Workaround")
 
 **Behavior:**
-- Reads the current document, applies the operation, writes back via REST API
-- Updates vector embeddings and link graph
+- Reads the current document, applies the operation, and writes back through the MCP/vault backend
+- Any future vector/graph refresh behavior should be documented separately when it actually exists
 - Returns the updated document content
 
 ---
@@ -402,7 +396,7 @@ This is detected by checking for `[` in type declarations during the parsing pha
 ...
 ```
 
-If adopted in v0.2, brain content is serialized before code chunks in the assembled context. This positions project knowledge early in the context where attention is highest.
+In the current runtime, brain content is serialized before code chunks in the assembled context. This positions project knowledge early in the context where attention is highest.
 
 ---
 

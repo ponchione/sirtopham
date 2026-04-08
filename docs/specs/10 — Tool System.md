@@ -296,16 +296,16 @@ The following are the complete JSON Schema definitions for every tool. These sch
         "type": "string",
         "description": "File path relative to project root"
       },
-      "old_string": {
+      "old_str": {
         "type": "string",
         "description": "The exact string to find in the file. Must be unique — appears exactly once. Include enough surrounding context to ensure uniqueness."
       },
-      "new_string": {
+      "new_str": {
         "type": "string",
         "description": "The replacement string. Use empty string to delete the matched text."
       }
     },
-    "required": ["path", "old_string", "new_string"]
+    "required": ["path", "old_str", "new_str"]
   }
 }
 ```
@@ -673,13 +673,13 @@ Applied edit to: internal/auth/middleware.go
 **Error cases:**
 
 - File not found → "Error: file not found: {path}\nAvailable files in {parent_dir}/: {listing}"
-- Search string not found → "Error: old_string not found in {path}.\nFirst 30 lines of file:\n{preview}"
-- Search string not unique → "Error: old_string found {N} times in {path} (must be unique).\nLocations: line {L1}, line {L2}, ..."
+- Search string not found → "Error: old_str not found in {path}.\nFirst 30 lines of file:\n{preview}"
+- Search string not unique → "Error: old_str found {N} times in {path} (must be unique).\nLocations: line {L1}, line {L2}, ..."
 - Path outside project root → "Error: path '{path}' is outside the project root ({project_root})"
 
 **Implementation notes:**
 
-- Read the file, search for `old_string` as a literal substring (not regex).
+- Read the file, search for `old_str` as a literal substring (not regex).
 - Require exactly one match. Zero matches or multiple matches are errors with enriched output.
 - Replace the match, compute unified diff, write back atomically.
 - The "not found" error shows the first 30 lines of the file so the LLM can see what the actual content looks like and adjust its search string.

@@ -69,7 +69,7 @@ Each design change is scoped as a discrete work item with enough context for an 
 
 **Affects:** [[10___Tool_System]] (`file_edit` tool) **Priority:** High **Category:** File edit safety
 
-**The problem:** Without a read gate, the model can confidently issue a `file_edit` on a file it has never read in the current session. It "knows" what the file contains from training data or from assembled context snippets, but those may be stale, incomplete, or hallucinated. The `old_string` match might succeed by coincidence while the surrounding context the model assumed is wrong.
+**The problem:** Without a read gate, the model can confidently issue a `file_edit` on a file it has never read in the current session. It "knows" what the file contains from training data or from assembled context snippets, but those may be stale, incomplete, or hallucinated. The `old_str` match might succeed by coincidence while the surrounding context the model assumed is wrong.
 
 **What CC does:** `file_edit` requires a prior full read of the target file via `readFileState`. Partial reads (line ranges) are explicitly insufficient. If the model hasn't read the file, the edit is rejected with: "Read it first before writing to it."
 

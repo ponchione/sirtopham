@@ -11,7 +11,7 @@
 
 Implement the three-pass indexing pipeline that orchestrates the full code intelligence workflow: (1) walk the project directory and parse files into chunks, (2) build the reverse call graph from forward call references, (3) generate descriptions, embed, and store in LanceDB. This is the heaviest epic in Layer 1 — it composes every other component into a working pipeline and adds change detection, incremental indexing via git diff, and the `index_state` SQLite table integration.
 
-The indexer is the entry point for `sirtopham init` (full index), `sirtopham index` (manual re-index), and the conversation-start auto-reindex trigger. Ports from topham's `internal/rag/indexer.go` with the net-new addition of git-aware incremental indexing.
+The indexer is the entry point for `sirtopham init` (full index) and `sirtopham index` (manual re-index). The current shipped runtime does not invoke indexing automatically on conversation start or server startup; operators run indexing explicitly before `serve` when they need fresh retrieval.
 
 ---
 
@@ -60,7 +60,7 @@ The indexer is the entry point for `sirtopham init` (full index), `sirtopham ind
 ### Indexing Triggers
 
 - [ ] **Full index:** invoked by `sirtopham init` or first run against a project
-- [ ] **Incremental index:** invoked at conversation start (auto-reindex) or manually via `sirtopham index`
+- [ ] **Incremental index:** invoked manually via `sirtopham index`
 - [ ] **Manual re-index:** `sirtopham index --force` for full rebuild
 
 ### Orchestration
@@ -92,7 +92,7 @@ The indexer is the entry point for `sirtopham init` (full index), `sirtopham ind
 ## Notes
 
 - This is the most complex epic in Layer 1 because it orchestrates every other component. It should be the last epic implemented, after all dependencies are individually tested.
-- The git-diff incremental indexing is net-new for sirtopham (topham uses file hash comparison only). The implementation shells out to `git diff --name-only` — no go-git library. This is consistent with [[01-project-vision-and-principles]] which specifies shell git execution.
+- The current runtime contract is explicit operator-controlled indexing. If automatic startup/conversation indexing is ever added later, reopen that as new product work rather than assuming it is already live.
 - Pass 3 is the slowest pass because it makes LLM calls (description generation) and embedding calls (HTTP to Docker container). These are I/O-bound and could benefit from concurrency — describe multiple files in parallel, embed in parallel batches. topham runs these sequentially; sirtopham can optimize later if indexing speed is a problem.
 - The `index_state` table and sqlc queries are already created by L0-E06. This epic writes the Go code that uses those generated query functions.
 - Task-08 (index state persistence) and Task-09 (schema version check) do not have dedicated unit test tasks. They are tested indirectly via the integration tests in Task-14, which verify SQLite state after full and incremental pipeline runs.

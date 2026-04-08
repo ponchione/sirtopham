@@ -145,6 +145,91 @@ func TestHistoryManagerPersistIterationInsertsAssistantAndToolMessages(t *testin
 	}
 }
 
+func TestHistoryManagerPersistIterationLinksChatSubCallsToAssistantMessage(t *testing.T) {
+	ctx := context.Background()
+	database := newHistoryTestDB(t)
+	queries := db.New(database)
+	conversationID := seedHistoryConversation(t, database)
+	createdAt := time.Unix(1700000860, 0).UTC().Format(time.RFC3339)
+
+	manager := NewHistoryManager(database, nil)
+	manager.now = func() time.Time { return time.Unix(1700000860, 0).UTC() }
+
+	if err := manager.PersistUserMessage(ctx, conversationID, 1, "fix auth"); err != nil {
+		t.Fatalf("PersistUserMessage returned error: %v", err)
+	}
+
+	mustExecHistory(t, database, `INSERT INTO sub_calls(conversation_id, turn_number, iteration, provider, model, purpose, tokens_in, tokens_out, latency_ms, success, created_at)
+		VALUES (?, 1, 1, 'anthropic', 'claude', 'chat', 1000, 200, 500, 1, ?)`, conversationID, createdAt)
+	mustExecHistory(t, database, `INSERT INTO sub_calls(conversation_id, turn_number, iteration, provider, model, purpose, tokens_in, tokens_out, latency_ms, success, created_at)
+		VALUES (?, 1, 1, 'anthropic', 'claude', 'compression', 10, 5, 20, 1, ?)`, conversationID, createdAt)
+
+	iterMsgs := []IterationMessage{
+		{Role: "assistant", Content: `[{"type":"text","text":"I'll check the auth code."}]`},
+		{Role: "tool", Content: "file contents", ToolUseID: "tc1", ToolName: "file_read"},
+	}
+	if err := manager.PersistIteration(ctx, conversationID, 1, 1, iterMsgs); err != nil {
+		t.Fatalf("PersistIteration returned error: %v", err)
+	}
+
+	rows, err := queries.ListTurnMessages(ctx, conversationID)
+	if err != nil {
+		t.Fatalf("ListTurnMessages returned error: %v", err)
+	}
+	if len(rows) < 2 || rows[1].Role != "assistant" {
+		t.Fatalf("rows = %#v, want assistant message at index 1", rows)
+	}
+	assistantID := rows[1].ID
+
+	var linkedMessageID sql.NullInt64
+	if err := database.QueryRowContext(ctx, `SELECT message_id FROM sub_calls WHERE conversation_id = ? AND purpose = 'chat'`, conversationID).Scan(&linkedMessageID); err != nil {
+		t.Fatalf("query linked chat sub_call returned error: %v", err)
+	}
+	if !linkedMessageID.Valid || linkedMessageID.Int64 != assistantID {
+		t.Fatalf("chat sub_call message_id = %+v, want %d", linkedMessageID, assistantID)
+	}
+
+	var compressionMessageID sql.NullInt64
+	if err := database.QueryRowContext(ctx, `SELECT message_id FROM sub_calls WHERE conversation_id = ? AND purpose = 'compression'`, conversationID).Scan(&compressionMessageID); err != nil {
+		t.Fatalf("query compression sub_call returned error: %v", err)
+	}
+	if compressionMessageID.Valid {
+		t.Fatalf("compression sub_call message_id = %+v, want NULL", compressionMessageID)
+	}
+}
+
+func TestHistoryManagerPersistIterationLeavesChatSubCallsUnlinkedWithoutAssistantMessage(t *testing.T) {
+	ctx := context.Background()
+	database := newHistoryTestDB(t)
+	conversationID := seedHistoryConversation(t, database)
+	createdAt := time.Unix(1700000861, 0).UTC().Format(time.RFC3339)
+
+	manager := NewHistoryManager(database, nil)
+	manager.now = func() time.Time { return time.Unix(1700000861, 0).UTC() }
+
+	if err := manager.PersistUserMessage(ctx, conversationID, 1, "fix auth"); err != nil {
+		t.Fatalf("PersistUserMessage returned error: %v", err)
+	}
+
+	mustExecHistory(t, database, `INSERT INTO sub_calls(conversation_id, turn_number, iteration, provider, model, purpose, tokens_in, tokens_out, latency_ms, success, created_at)
+		VALUES (?, 1, 1, 'anthropic', 'claude', 'chat', 1000, 200, 500, 1, ?)`, conversationID, createdAt)
+
+	iterMsgs := []IterationMessage{
+		{Role: "tool", Content: "file contents", ToolUseID: "tc1", ToolName: "file_read"},
+	}
+	if err := manager.PersistIteration(ctx, conversationID, 1, 1, iterMsgs); err != nil {
+		t.Fatalf("PersistIteration returned error: %v", err)
+	}
+
+	var linkedMessageID sql.NullInt64
+	if err := database.QueryRowContext(ctx, `SELECT message_id FROM sub_calls WHERE conversation_id = ? AND purpose = 'chat'`, conversationID).Scan(&linkedMessageID); err != nil {
+		t.Fatalf("query chat sub_call returned error: %v", err)
+	}
+	if linkedMessageID.Valid {
+		t.Fatalf("chat sub_call message_id = %+v, want NULL without assistant message", linkedMessageID)
+	}
+}
+
 func TestHistoryManagerPersistIterationMultipleIterationsIncrementSequence(t *testing.T) {
 	ctx := context.Background()
 	database := newHistoryTestDB(t)

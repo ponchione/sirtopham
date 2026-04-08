@@ -217,6 +217,30 @@ func (q *Queries) InsertUserMessage(ctx context.Context, arg InsertUserMessagePa
 	return err
 }
 
+const latestAssistantMessageIDForIteration = `-- name: LatestAssistantMessageIDForIteration :one
+SELECT id
+FROM messages
+WHERE conversation_id = ?
+  AND turn_number = ?
+  AND iteration = ?
+  AND role = 'assistant'
+ORDER BY sequence DESC
+LIMIT 1
+`
+
+type LatestAssistantMessageIDForIterationParams struct {
+	ConversationID string `json:"conversation_id"`
+	TurnNumber     int64  `json:"turn_number"`
+	Iteration      int64  `json:"iteration"`
+}
+
+func (q *Queries) LatestAssistantMessageIDForIteration(ctx context.Context, arg LatestAssistantMessageIDForIterationParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, latestAssistantMessageIDForIteration, arg.ConversationID, arg.TurnNumber, arg.Iteration)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
+}
+
 const listActiveMessages = `-- name: ListActiveMessages :many
 SELECT id, conversation_id, role, content, tool_use_id, tool_name, turn_number, iteration, sequence,
        is_compressed, is_summary, compressed_turn_start, compressed_turn_end, created_at

@@ -132,7 +132,7 @@ func TestCompressHistory_DuplicateElision(t *testing.T) {
 		{Role: "tool", Content: nullS("File: main.go (10 lines)\n 1\tpackage main\n"), ToolName: nullS("file_read"), TurnNumber: 2},
 	}
 
-	c := &HistoryCompressor{CurrentTurn: 3, SummarizeAfterTurns: 10}
+	c := &HistoryCompressor{CurrentTurn: 3, StripLineNumbers: true, ElideDuplicateReads: true, SummarizeAfterTurns: 10}
 	result := c.CompressHistory(messages)
 
 	// Turn 1 file_read should be elided (turn 2 has a more recent read).
@@ -156,7 +156,7 @@ func TestCompressHistory_NoElisionForCurrentTurn(t *testing.T) {
 		{Role: "tool", Content: nullS("File: main.go (3 lines)\n1\tpackage main\n"), ToolName: nullS("file_read"), TurnNumber: 2},
 	}
 
-	c := &HistoryCompressor{CurrentTurn: 2, SummarizeAfterTurns: 10}
+	c := &HistoryCompressor{CurrentTurn: 2, StripLineNumbers: true, ElideDuplicateReads: true, SummarizeAfterTurns: 10}
 	result := c.CompressHistory(messages)
 
 	// Should not be modified — it's from the current turn.
@@ -171,7 +171,7 @@ func TestCompressHistory_ShellResultsNotDeduplicated(t *testing.T) {
 		{Role: "tool", Content: nullS("go test ./...\nPASS"), ToolName: nullS("shell"), TurnNumber: 2},
 	}
 
-	c := &HistoryCompressor{CurrentTurn: 3, SummarizeAfterTurns: 10}
+	c := &HistoryCompressor{CurrentTurn: 3, StripLineNumbers: true, ElideDuplicateReads: true, SummarizeAfterTurns: 10}
 	result := c.CompressHistory(messages)
 
 	// Shell results should never be elided.
@@ -189,7 +189,7 @@ func TestCompressHistory_StaleSummarization(t *testing.T) {
 		{Role: "tool", Content: nullS("File: old.go (89 lines)\n 1\tpackage old\n 2\t// lots of code\n"), ToolName: nullS("file_read"), TurnNumber: 1},
 	}
 
-	c := &HistoryCompressor{CurrentTurn: 15, SummarizeAfterTurns: 10}
+	c := &HistoryCompressor{CurrentTurn: 15, StripLineNumbers: true, ElideDuplicateReads: true, SummarizeAfterTurns: 10}
 	result := c.CompressHistory(messages)
 
 	got := result[0].Content.String
@@ -212,7 +212,7 @@ func TestCompressHistory_StaleSummarization_Disabled(t *testing.T) {
 		{Role: "tool", Content: nullS("File: old.go (89 lines)\n1\tpackage old\n"), ToolName: nullS("file_read"), TurnNumber: 1},
 	}
 
-	c := &HistoryCompressor{CurrentTurn: 100, SummarizeAfterTurns: 0}
+	c := &HistoryCompressor{CurrentTurn: 100, StripLineNumbers: true, ElideDuplicateReads: true, SummarizeAfterTurns: 0}
 	result := c.CompressHistory(messages)
 
 	// Should not be summarized when disabled.
@@ -226,7 +226,7 @@ func TestCompressHistory_StaleSummarization_NotOldEnough(t *testing.T) {
 		{Role: "tool", Content: nullS("File: recent.go (5 lines)\n1\tpackage recent\n"), ToolName: nullS("file_read"), TurnNumber: 8},
 	}
 
-	c := &HistoryCompressor{CurrentTurn: 12, SummarizeAfterTurns: 10}
+	c := &HistoryCompressor{CurrentTurn: 12, StripLineNumbers: true, ElideDuplicateReads: true, SummarizeAfterTurns: 10}
 	result := c.CompressHistory(messages)
 
 	// Turn 8 is 4 turns ago — not old enough (threshold is 10).
@@ -240,7 +240,7 @@ func TestCompressHistory_StaleSummarization_SearchText(t *testing.T) {
 		{Role: "tool", Content: nullS("Found 5 matches:\nmain.go:10: func main\nmain.go:20: func init\nutil.go:5: func helper\nutil.go:10: func parse\nutil.go:15: func format\n"), ToolName: nullS("search_text"), TurnNumber: 1},
 	}
 
-	c := &HistoryCompressor{CurrentTurn: 15, SummarizeAfterTurns: 10}
+	c := &HistoryCompressor{CurrentTurn: 15, StripLineNumbers: true, ElideDuplicateReads: true, SummarizeAfterTurns: 10}
 	result := c.CompressHistory(messages)
 
 	got := result[0].Content.String
@@ -259,7 +259,7 @@ func TestCompressHistory_LineNumberStripping(t *testing.T) {
 		{Role: "tool", Content: nullS("File: main.go (3 lines)\n 1\tpackage main\n 2\t\n 3\tfunc main() {}\n"), ToolName: nullS("file_read"), TurnNumber: 1},
 	}
 
-	c := &HistoryCompressor{CurrentTurn: 3, SummarizeAfterTurns: 10}
+	c := &HistoryCompressor{CurrentTurn: 3, StripLineNumbers: true, ElideDuplicateReads: true, SummarizeAfterTurns: 10}
 	result := c.CompressHistory(messages)
 
 	got := result[0].Content.String
@@ -286,7 +286,7 @@ func TestCompressHistory_JSONReMinification(t *testing.T) {
 		{Role: "tool", Content: nullS(prettyJSON), ToolName: nullS("some_tool"), TurnNumber: 1},
 	}
 
-	c := &HistoryCompressor{CurrentTurn: 3, SummarizeAfterTurns: 10}
+	c := &HistoryCompressor{CurrentTurn: 3, StripLineNumbers: true, ElideDuplicateReads: true, SummarizeAfterTurns: 10}
 	result := c.CompressHistory(messages)
 
 	got := result[0].Content.String
@@ -307,7 +307,7 @@ func TestCompressHistory_NonToolMessagesUnchanged(t *testing.T) {
 		{Role: "assistant", Content: nullS("hi there"), TurnNumber: 1},
 	}
 
-	c := &HistoryCompressor{CurrentTurn: 3}
+	c := &HistoryCompressor{CurrentTurn: 3, StripLineNumbers: true, ElideDuplicateReads: true}
 	result := c.CompressHistory(messages)
 
 	for i, msg := range result {
@@ -325,7 +325,7 @@ func TestCompressHistory_EmptyContent(t *testing.T) {
 		{Role: "tool", Content: emptyNull(), ToolName: nullS("file_read"), TurnNumber: 1},
 	}
 
-	c := &HistoryCompressor{CurrentTurn: 3}
+	c := &HistoryCompressor{CurrentTurn: 3, StripLineNumbers: true, ElideDuplicateReads: true}
 	result := c.CompressHistory(messages)
 
 	if result[0].Content.Valid {
@@ -334,7 +334,7 @@ func TestCompressHistory_EmptyContent(t *testing.T) {
 }
 
 func TestCompressHistory_EmptySlice(t *testing.T) {
-	c := &HistoryCompressor{CurrentTurn: 3}
+	c := &HistoryCompressor{CurrentTurn: 3, StripLineNumbers: true, ElideDuplicateReads: true}
 	result := c.CompressHistory(nil)
 	if result != nil {
 		t.Errorf("expected nil for nil input, got: %v", result)
@@ -350,7 +350,7 @@ func TestCompressHistory_ElisionPriority(t *testing.T) {
 		{Role: "tool", Content: nullS("File: main.go (100 lines)\n 1\tpackage main\n"), ToolName: nullS("file_read"), TurnNumber: 5},
 	}
 
-	c := &HistoryCompressor{CurrentTurn: 20, SummarizeAfterTurns: 10}
+	c := &HistoryCompressor{CurrentTurn: 20, StripLineNumbers: true, ElideDuplicateReads: true, SummarizeAfterTurns: 10}
 	result := c.CompressHistory(messages)
 
 	// Turn 1 should be elided (not summarized) — elision takes priority.
@@ -384,6 +384,34 @@ func TestAtoiSafe(t *testing.T) {
 
 // --- Full pipeline integration test ---
 
+func TestCompressHistory_HonorsStripLineNumbersToggle(t *testing.T) {
+	messages := []HistoryMessage{
+		{Role: "tool", Content: nullS("File: main.go (2 lines)\n 1\tpackage main\n 2\tfunc main() {}\n"), ToolName: nullS("file_read"), TurnNumber: 1},
+	}
+
+	c := &HistoryCompressor{CurrentTurn: 3, StripLineNumbers: false, ElideDuplicateReads: true}
+	result := c.CompressHistory(messages)
+	if !strings.Contains(result[0].Content.String, " 1\tpackage main") {
+		t.Fatalf("StripLineNumbers=false should preserve line-number prefixes, got: %q", result[0].Content.String)
+	}
+}
+
+func TestCompressHistory_HonorsElideDuplicateReadsToggle(t *testing.T) {
+	messages := []HistoryMessage{
+		{Role: "tool", Content: nullS("File: main.go (2 lines)\n 1\tpackage main\n 2\tvar x = 1\n"), ToolName: nullS("file_read"), TurnNumber: 1},
+		{Role: "tool", Content: nullS("File: main.go (2 lines)\n 1\tpackage main\n 2\tvar x = 2\n"), ToolName: nullS("file_read"), TurnNumber: 2},
+	}
+
+	c := &HistoryCompressor{CurrentTurn: 3, SummarizeAfterTurns: 10, StripLineNumbers: true, ElideDuplicateReads: false}
+	result := c.CompressHistory(messages)
+	if strings.Contains(result[0].Content.String, "elided") {
+		t.Fatalf("ElideDuplicateReads=false should preserve earlier duplicate read, got: %q", result[0].Content.String)
+	}
+	if !strings.Contains(result[0].Content.String, "package main") {
+		t.Fatalf("earlier duplicate read should remain readable, got: %q", result[0].Content.String)
+	}
+}
+
 func TestCompressHistory_FullPipeline(t *testing.T) {
 	messages := []HistoryMessage{
 		// Turn 1: user + assistant + file_read (will be elided — re-read in turn 3)
@@ -400,7 +428,7 @@ func TestCompressHistory_FullPipeline(t *testing.T) {
 		{Role: "tool", Content: nullS("File: main.go (2 lines)\n1\tpackage main\n2\tfunc main() {}\n"), ToolName: nullS("file_read"), TurnNumber: 4},
 	}
 
-	c := &HistoryCompressor{CurrentTurn: 4, SummarizeAfterTurns: 10}
+	c := &HistoryCompressor{CurrentTurn: 4, StripLineNumbers: true, ElideDuplicateReads: true, SummarizeAfterTurns: 10}
 	result := c.CompressHistory(messages)
 
 	// Message 0: user — unchanged.

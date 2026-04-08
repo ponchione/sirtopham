@@ -178,7 +178,6 @@ func generateConfigYAML(projectRoot, projectName string) string {
 	b.WriteString("brain:\n")
 	b.WriteString("  enabled: true\n")
 	b.WriteString("  vault_path: .brain\n")
-	b.WriteString("  reindex_on_startup: true\n")
 	b.WriteString("  log_brain_queries: true\n")
 	b.WriteString("\n")
 	b.WriteString("local_services:\n")

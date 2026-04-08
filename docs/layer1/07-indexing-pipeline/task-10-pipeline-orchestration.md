@@ -8,7 +8,7 @@
 
 ## Description
 
-Implement the `Run` method that orchestrates the three-pass pipeline end-to-end. This is the top-level entry point called by `sirtopham init`, `sirtopham index`, and the conversation-start auto-reindex trigger. It coordinates schema version checking, the three passes, index state persistence, progress reporting, structured logging with timing, and clean shutdown on context cancellation.
+Implement the `Run` method that orchestrates the three-pass pipeline end-to-end. This is the top-level entry point called by `sirtopham init` and `sirtopham index`. The current shipped runtime does not trigger indexing automatically on conversation start or server startup; operators invoke indexing explicitly when they need a fresh code index. It coordinates schema version checking, the three passes, index state persistence, progress reporting, structured logging with timing, and clean shutdown on context cancellation.
 
 ## Function Signature
 
@@ -82,5 +82,5 @@ func (idx *Indexer) Run(ctx context.Context) error
 - [ ] `Run` is callable by:
   - `sirtopham init` — first run, always a full index
   - `sirtopham index` — manual re-index, respects incremental unless `--force`
-  - Conversation-start auto-reindex — incremental only
+  - Manual incremental runs via `sirtopham index`
 - [ ] The caller sets `IndexerConfig.Force = true` for full re-index scenarios

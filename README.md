@@ -25,7 +25,7 @@ If you are resuming implementation work, read these first:
 
 - The backend binary is built from `./cmd/sirtopham`.
 - The production build embeds the frontend from `web/dist/`.
-- Real retrieval depends on running `sirtopham index` before `sirtopham serve`.
+- Real retrieval depends on running `sirtopham index` before `sirtopham serve`; startup does not auto-reindex.
 - Indexing uses the local embedding service and now also wires the local qwen-coder describer when available; if qwen-coder is unavailable, indexing still proceeds with signature-only embeddings and warn-level logs.
 
 ## Requirements

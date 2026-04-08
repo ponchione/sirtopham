@@ -88,6 +88,7 @@ func TestRunWithDependenciesIndexesIncrementallyAndDeletesRemovedFiles(t *testin
 
 	store := &fakeStore{}
 	describer := &fakeDescriber{}
+	graphRebuilds := 0
 	now := time.Date(2026, 4, 2, 17, 0, 0, 0, time.UTC)
 	deps := dependencies{
 		openDB: appdb.OpenDB,
@@ -105,6 +106,13 @@ func TestRunWithDependenciesIndexesIncrementallyAndDeletesRemovedFiles(t *testin
 		},
 		ensureIndexServices: func(context.Context, *config.Config) error {
 			return nil
+		},
+		rebuildGraphIndex: func(_ context.Context, cfg *config.Config) error {
+			graphRebuilds++
+			if err := os.MkdirAll(filepath.Dir(cfg.GraphDBPath()), 0o755); err != nil {
+				return err
+			}
+			return os.WriteFile(cfg.GraphDBPath(), []byte("graph"), 0o644)
 		},
 		now: func() time.Time {
 			now = now.Add(time.Second)
@@ -131,6 +139,9 @@ func TestRunWithDependenciesIndexesIncrementallyAndDeletesRemovedFiles(t *testin
 	if got := store.upserts[0][0].Description; got != "Semantic example description." {
 		t.Fatalf("stored chunk description = %q, want semantic describer output", got)
 	}
+	if graphRebuilds != 1 {
+		t.Fatalf("graph rebuilds after first run = %d, want 1", graphRebuilds)
+	}
 
 	db := mustOpenDB(t, cfg.DatabasePath())
 	defer db.Close()
@@ -143,6 +154,9 @@ func TestRunWithDependenciesIndexesIncrementallyAndDeletesRemovedFiles(t *testin
 	}
 	if second.FilesChanged != 1 || len(second.DeletedFiles) != 0 {
 		t.Fatalf("second result = %+v, want one changed file and no deletions", second)
+	}
+	if graphRebuilds != 2 {
+		t.Fatalf("graph rebuilds after second run = %d, want 2", graphRebuilds)
 	}
 
 	if err := os.Remove(filepath.Join(projectRoot, "main.go")); err != nil {
@@ -158,7 +172,21 @@ func TestRunWithDependenciesIndexesIncrementallyAndDeletesRemovedFiles(t *testin
 	if len(store.deleted) < 3 {
 		t.Fatalf("DeleteByFilePath calls = %v, want deletes for replace/delete flow", store.deleted)
 	}
+	if graphRebuilds != 3 {
+		t.Fatalf("graph rebuilds after third run = %d, want 3", graphRebuilds)
+	}
 	assertIndexStateMissing(t, db, cfg.ProjectRoot, "main.go")
+
+	fourth, err := runWithDependencies(context.Background(), Options{Config: cfg}, deps)
+	if err != nil {
+		t.Fatalf("fourth run: %v", err)
+	}
+	if fourth.FilesChanged != 0 || fourth.FilesDeleted != 0 {
+		t.Fatalf("fourth result = %+v, want no-op run", fourth)
+	}
+	if graphRebuilds != 3 {
+		t.Fatalf("graph rebuilds after no-op run = %d, want unchanged 3", graphRebuilds)
+	}
 }
 
 func TestAcquireProjectLockRejectsOverlap(t *testing.T) {

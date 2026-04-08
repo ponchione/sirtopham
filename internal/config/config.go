@@ -228,7 +228,7 @@ func Default() *Config {
 			Exclude:               []string{"**/.git/**", "**/vendor/**", "**/node_modules/**"},
 			MaxRAGResults:         30,
 			MaxTreeLines:          200,
-			AutoReindex:           true,
+			AutoReindex:           false,
 			MaxFileSizeBytes:      51200,
 			MaxTotalFileSizeBytes: 524288,
 		},
@@ -277,7 +277,7 @@ func Default() *Config {
 			VaultPath:               ".brain",
 			EmbeddingModel:          "nomic-embed-code",
 			ChunkAtHeadings:         true,
-			ReindexOnStartup:        true,
+			ReindexOnStartup:        false,
 			MaxBrainTokens:          8000,
 			BrainRelevanceThreshold: 0.30,
 			IncludeGraphHops:        true,
@@ -468,6 +468,11 @@ func (c *Config) CodeLanceDBPath() string {
 // BrainLanceDBPath returns the directory for the brain vectorstore.
 func (c *Config) BrainLanceDBPath() string {
 	return filepath.Join(c.StateDir(), "lancedb", "brain")
+}
+
+// GraphDBPath returns the SQLite database path for the structural graph index.
+func (c *Config) GraphDBPath() string {
+	return filepath.Join(c.StateDir(), "graph.db")
 }
 
 // BrainVaultPath returns the resolved brain vault directory.

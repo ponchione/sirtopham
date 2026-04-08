@@ -192,8 +192,9 @@ The LanceDB API surface is minimal enough that sqlite-vec could be a drop-in rep
 ### Indexing Triggers for sirtopham
 
 - **Full index:** on `sirtopham init` or first run against a project
-- **Incremental index:** on conversation start — `git diff --name-only <last-indexed-commit>..HEAD` → re-parse and re-embed only changed files (net-new for sirtopham; topham uses file hash comparison)
+- **Incremental index:** via `sirtopham index` without `--force`; file-hash change detection decides what gets re-parsed and re-embedded
 - **Manual re-index:** via `sirtopham index`
+- **No startup or conversation auto-reindex today:** `serve` does not trigger indexing, so operators should run `sirtopham index` explicitly before expecting fresh retrieval
 
 ---
 
@@ -260,7 +261,7 @@ index:
     - "**/node_modules/**"
   max_rag_results: 30
   max_tree_lines: 200
-  auto_reindex: true
+  auto_reindex: false   # Reserved for future runtime auto-indexing; current indexing is explicit via `sirtopham index`
   max_file_size_bytes: 51200        # 50KB per file
   max_total_file_size_bytes: 524288  # 512KB total context
 ```
@@ -288,8 +289,8 @@ From `internal/graph/`:
 
 ## What's Net-New for sirtopham
 
-- **Incremental indexing via git diff** (topham uses file hash comparison; sirtopham adds git-aware incremental)
-- **Conversation-start auto-reindex trigger**
+- **Incremental indexing via git-aware/manual change detection** (incremental runs happen when `sirtopham index` is invoked without `--force`)
+- **Explicit operator-controlled indexing before `serve`**
 - **Turn-aware search** (replacing work-order-aware search with conversational query extraction)
 - **Combined RAG + graph queries** driven by the context assembly turn analyzer
 

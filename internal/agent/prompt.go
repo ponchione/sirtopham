@@ -77,6 +77,14 @@ type PromptConfig struct {
 	// duplicate result elision, and stale result summarization.
 	CompressHistoricalResults bool
 
+	// StripHistoricalLineNumbers controls whether historical file_read results
+	// have line-number prefixes removed during compression.
+	StripHistoricalLineNumbers bool
+
+	// ElideDuplicateReads controls whether older duplicate file reads are
+	// replaced with a short pointer to the later read.
+	ElideDuplicateReads bool
+
 	// HistorySummarizeAfterTurns controls stale result summarization.
 	// Tool results older than this many turns are replaced with a one-line
 	// summary. Set to 0 to disable summarization (other transforms still apply).
@@ -287,6 +295,8 @@ func (b *PromptBuilder) compressHistory(messages []db.Message, config PromptConf
 
 	compressor := &tool.HistoryCompressor{
 		CurrentTurn:         int64(config.TurnNumber),
+		StripLineNumbers:    config.StripHistoricalLineNumbers,
+		ElideDuplicateReads: config.ElideDuplicateReads,
 		SummarizeAfterTurns: config.HistorySummarizeAfterTurns,
 	}
 

@@ -8,12 +8,12 @@
 
 ## Description
 
-Implement the `GET /api/project`, `GET /api/project/tree`, and `GET /api/project/file` endpoints. The project info endpoint returns metadata about the current project from the database. The file tree endpoint walks the project directory and returns a nested JSON tree structure, respecting include/exclude globs from config. The file contents endpoint returns the raw text of a single file with metadata, with path traversal protection to prevent reading files outside the project root.
+Implement the `GET /api/project`, `GET /api/project/tree`, and `GET /api/project/file` endpoints. The project info endpoint returns metadata about the current project, with stable identity surfaced as the project root path. The file tree endpoint walks the project directory and returns a nested JSON tree structure, respecting include/exclude globs from config. The file contents endpoint returns the raw text of a single file with metadata, with path traversal protection to prevent reading files outside the project root.
 
 ## Acceptance Criteria
 
-- [ ] `GET /api/project` returns `{id, name, root_path, language, last_indexed_at, last_indexed_commit}` from the `projects` table
-- [ ] Returns HTTP 404 with `{"error": "project not found"}` if no project is registered (user needs to run `sirtopham init`)
+- [ ] `GET /api/project` returns `{id, name, root_path, language, last_indexed_at, last_indexed_commit}` where current shipped runtime uses the project root path as `id`
+- [ ] Endpoint may synthesize name/root_path/language from current config/filesystem while loading last-index metadata from the `projects` table when available
 - [ ] `GET /api/project/tree` returns a nested JSON structure: `{name: string, type: "dir"|"file", children?: [...]}` representing the project directory tree
 - [ ] Tree depth is limited (default 3 levels) and controllable via `depth` query parameter (max 10)
 - [ ] Tree respects the same include/exclude glob patterns from config that the indexer uses (e.g., excludes `node_modules/`, `.git/`, `vendor/`)

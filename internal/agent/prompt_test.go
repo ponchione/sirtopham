@@ -636,6 +636,8 @@ func TestBuildPromptPhase2HistoryCompression(t *testing.T) {
 		History:                    history,
 		TurnNumber:                 3,
 		CompressHistoricalResults:  true,
+		StripHistoricalLineNumbers: true,
+		ElideDuplicateReads:        true,
 		HistorySummarizeAfterTurns: 10,
 	})
 	if err != nil {
@@ -693,6 +695,68 @@ func TestBuildPromptPhase2CompressionDisabled(t *testing.T) {
 	}
 	if !strings.Contains(content, " 1\t") {
 		t.Errorf("with compression disabled, line numbers should be preserved, got: %q", content)
+	}
+}
+
+func TestBuildPromptPhase2CompressionHonorsStripLineNumbersToggle(t *testing.T) {
+	b := NewPromptBuilder(nil)
+
+	history := []db.Message{
+		{Role: "tool", Content: nullStr("File: main.go (2 lines)\n 1\tpackage main\n 2\tfunc main() {}\n"), ToolName: nullStr("file_read"), ToolUseID: nullStr("t1"), TurnNumber: 1, Iteration: 1, Sequence: 1},
+	}
+
+	req, err := b.BuildPrompt(PromptConfig{
+		BasePrompt:                  "You are helpful.",
+		History:                     history,
+		TurnNumber:                  3,
+		CompressHistoricalResults:   true,
+		StripHistoricalLineNumbers:  false,
+		ElideDuplicateReads:         true,
+		HistorySummarizeAfterTurns:  10,
+	})
+	if err != nil {
+		t.Fatalf("BuildPrompt: %v", err)
+	}
+
+	var content string
+	if err := json.Unmarshal(req.Messages[0].Content, &content); err != nil {
+		t.Fatalf("unmarshal content: %v", err)
+	}
+	if !strings.Contains(content, " 1\tpackage main") {
+		t.Fatalf("strip-line-numbers=false should preserve line prefixes, got: %q", content)
+	}
+}
+
+func TestBuildPromptPhase2CompressionHonorsElideDuplicateReadsToggle(t *testing.T) {
+	b := NewPromptBuilder(nil)
+
+	history := []db.Message{
+		{Role: "tool", Content: nullStr("File: config.go (2 lines)\n 1\tpackage config\n 2\tvar x = 1\n"), ToolName: nullStr("file_read"), ToolUseID: nullStr("t1"), TurnNumber: 1, Iteration: 1, Sequence: 1},
+		{Role: "tool", Content: nullStr("File: config.go (2 lines)\n 1\tpackage config\n 2\tvar x = 2\n"), ToolName: nullStr("file_read"), ToolUseID: nullStr("t2"), TurnNumber: 2, Iteration: 1, Sequence: 2},
+	}
+
+	req, err := b.BuildPrompt(PromptConfig{
+		BasePrompt:                  "You are helpful.",
+		History:                     history,
+		TurnNumber:                  3,
+		CompressHistoricalResults:   true,
+		StripHistoricalLineNumbers:  true,
+		ElideDuplicateReads:         false,
+		HistorySummarizeAfterTurns:  10,
+	})
+	if err != nil {
+		t.Fatalf("BuildPrompt: %v", err)
+	}
+
+	var firstContent string
+	if err := json.Unmarshal(req.Messages[0].Content, &firstContent); err != nil {
+		t.Fatalf("unmarshal first content: %v", err)
+	}
+	if strings.Contains(firstContent, "elided") {
+		t.Fatalf("elide-duplicate-reads=false should keep earlier read content, got: %q", firstContent)
+	}
+	if !strings.Contains(firstContent, "package config") {
+		t.Fatalf("earlier read should remain readable, got: %q", firstContent)
 	}
 }
 

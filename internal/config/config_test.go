@@ -60,6 +60,9 @@ func TestLoadMissingFileReturnsDefaults(t *testing.T) {
 	if cfg.Agent.ShellTimeoutSeconds != 120 {
 		t.Fatalf("Agent.ShellTimeoutSeconds = %d, want 120", cfg.Agent.ShellTimeoutSeconds)
 	}
+	if cfg.Index.AutoReindex {
+		t.Fatal("Index.AutoReindex = true, want false")
+	}
 	if cfg.Context.CompressionThreshold != 0.50 {
 		t.Fatalf("Context.CompressionThreshold = %v, want 0.50", cfg.Context.CompressionThreshold)
 	}
@@ -71,6 +74,9 @@ func TestLoadMissingFileReturnsDefaults(t *testing.T) {
 	}
 	if !cfg.Brain.LogBrainOperations {
 		t.Fatal("Brain.LogBrainOperations = false, want true")
+	}
+	if cfg.Brain.ReindexOnStartup {
+		t.Fatal("Brain.ReindexOnStartup = true, want false")
 	}
 	if cfg.Brain.LintStaleDays != 90 {
 		t.Fatalf("Brain.LintStaleDays = %d, want 90", cfg.Brain.LintStaleDays)
@@ -415,6 +421,9 @@ func TestProjectSpecificPathsFollowProjectRootName(t *testing.T) {
 	}
 	if got := cfg.BrainLanceDBPath(); got != filepath.Join(cfg.ProjectRoot, ".eyebox", "lancedb", "brain") {
 		t.Fatalf("BrainLanceDBPath() = %q, want %q", got, filepath.Join(cfg.ProjectRoot, ".eyebox", "lancedb", "brain"))
+	}
+	if got := cfg.GraphDBPath(); got != filepath.Join(cfg.ProjectRoot, ".eyebox", "graph.db") {
+		t.Fatalf("GraphDBPath() = %q, want %q", got, filepath.Join(cfg.ProjectRoot, ".eyebox", "graph.db"))
 	}
 }
 

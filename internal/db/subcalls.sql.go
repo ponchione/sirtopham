@@ -62,3 +62,30 @@ func (q *Queries) InsertSubCall(ctx context.Context, arg InsertSubCallParams) er
 	)
 	return err
 }
+
+const linkIterationSubCallsToMessage = `-- name: LinkIterationSubCallsToMessage :exec
+UPDATE sub_calls
+SET message_id = ?1
+WHERE conversation_id = ?2
+  AND turn_number = ?3
+  AND iteration = ?4
+  AND purpose = 'chat'
+  AND message_id IS NULL
+`
+
+type LinkIterationSubCallsToMessageParams struct {
+	MessageID      sql.NullInt64  `json:"message_id"`
+	ConversationID sql.NullString `json:"conversation_id"`
+	TurnNumber     sql.NullInt64  `json:"turn_number"`
+	Iteration      sql.NullInt64  `json:"iteration"`
+}
+
+func (q *Queries) LinkIterationSubCallsToMessage(ctx context.Context, arg LinkIterationSubCallsToMessageParams) error {
+	_, err := q.db.ExecContext(ctx, linkIterationSubCallsToMessage,
+		arg.MessageID,
+		arg.ConversationID,
+		arg.TurnNumber,
+		arg.Iteration,
+	)
+	return err
+}
