@@ -78,7 +78,7 @@ Each design change is scoped as a discrete work item with enough context for an 
 1. Track a `fullReadsThisSession` set (or map of `filePath → lastReadSequence`) on the session/conversation state.
 2. When `file_read` executes without a line range (full file read), record the file path in this set.
 3. When `file_edit` executes, check that the target file is in the set. If not, return an error: `"Error: file '{path}' has not been fully read in this session. Read it first with file_read before editing.\nThis prevents edits based on stale or assumed content."`
-4. `file_write` (create/overwrite) does NOT require a prior read — creating a new file or intentionally replacing an entire file is a different operation.
+4. Historical note: the landed runtime is stricter than this draft. `file_write` may create a new file without a prior read, but overwriting a non-empty existing file requires a fresh prior full read in the current session.
 
 **Implementation notes:**
 
@@ -100,7 +100,7 @@ Each design change is scoped as a discrete work item with enough context for an 
 
 1. When `file_read` executes, record `filePath → mtime` in the session state (extend the tracking from DC-03).
 2. When `file_edit` or `file_write` (overwrite case) executes: a. **Preflight check:** Compare current mtime to recorded mtime. If different, return an error: `"Error: file '{path}' has been modified since you last read it (likely by a shell command or external process). Read it again with file_read before editing."` b. **Pre-write check:** Immediately before the atomic write, check mtime again. If it changed between preflight and write, return the same error.
-3. After a successful write by `file_edit` or `file_write`, update the recorded mtime to the new file's mtime.
+3. Historical note: the landed runtime does not keep treating a just-written file as freshly trusted. After a successful `file_edit` or overwrite-style `file_write`, the stored snapshot/read state is cleared so a later mutation must re-read the file first.
 
 **Implementation notes:**
 

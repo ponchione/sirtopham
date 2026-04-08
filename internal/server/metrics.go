@@ -321,8 +321,8 @@ func (h *MetricsHandler) buildTokenBudgetReport(r *http.Request, report appdb.Co
 		}
 	}
 	usage, err := h.queries.GetTurnTokenUsage(r.Context(), appdb.GetTurnTokenUsageParams{
-		ConversationID: report.ConversationID,
-		TurnNumber:     report.TurnNumber,
+		ConversationID: sql.NullString{String: report.ConversationID, Valid: true},
+		TurnNumber:     sql.NullInt64{Int64: report.TurnNumber, Valid: true},
 	})
 	if err != nil {
 		return budget, err

@@ -73,6 +73,12 @@ type ToolExecutor interface {
 	Execute(ctx stdctx.Context, call provider.ToolCall) (*provider.ToolResult, error)
 }
 
+// BatchToolExecutor is an optional extension for executors that can dispatch
+// a whole provider batch while preserving result order.
+type BatchToolExecutor interface {
+	ExecuteBatch(ctx stdctx.Context, calls []provider.ToolCall) ([]provider.ToolResult, error)
+}
+
 // AgentLoopConfig carries the initial state-machine knobs for the future full
 // RunTurn implementation.
 type AgentLoopConfig struct {
@@ -557,6 +563,9 @@ func (l *AgentLoop) RunTurn(ctx stdctx.Context, req RunTurnRequest) (*TurnResult
 			inflight.ToolCalls[i] = inflightToolCall{ToolCallID: tc.ID, ToolName: tc.Name}
 		}
 		toolsCancelled := false
+		validCalls := make([]provider.ToolCall, 0, len(result.ToolCalls))
+		validIndices := make([]int, 0, len(result.ToolCalls))
+
 		for idx, tc := range result.ToolCalls {
 			// Check for cancellation before each tool call.
 			if isCancelled(ctx) {
@@ -610,62 +619,132 @@ func (l *AgentLoop) RunTurn(ctx stdctx.Context, req RunTurnRequest) (*TurnResult
 				Time:       l.now(),
 			})
 			inflight.ToolCalls[idx].Started = true
+			validCalls = append(validCalls, tc)
+			validIndices = append(validIndices, idx)
+		}
 
-			toolStart := l.now()
+		if toolsCancelled {
+			return nil, l.handleTurnCancellation(inflight, ctx.Err())
+		}
+
+		if len(validCalls) > 0 {
 			execCtx := toolpkg.ContextWithExecutionMeta(ctx, toolpkg.ExecutionMeta{
 				ConversationID: req.ConversationID,
 				TurnNumber:     req.TurnNumber,
 				Iteration:      iteration,
 			})
-			toolResult, toolErr := l.toolExecutor.Execute(execCtx, tc)
-			toolDuration := l.now().Sub(toolStart)
 
-			// Check if tool execution was cancelled.
+			batchDuration := time.Duration(0)
+			var batchResults []provider.ToolResult
+			var batchErr error
+			if batchExecutor, ok := l.toolExecutor.(BatchToolExecutor); ok {
+				batchStart := l.now()
+				batchResults, batchErr = batchExecutor.ExecuteBatch(execCtx, validCalls)
+				batchDuration = l.now().Sub(batchStart)
+			} else {
+				batchResults = make([]provider.ToolResult, 0, len(validCalls))
+				for _, tc := range validCalls {
+					toolStart := l.now()
+					toolResult, toolErr := l.toolExecutor.Execute(execCtx, tc)
+					batchDuration = l.now().Sub(toolStart)
+					if toolErr != nil {
+						enrichedMsg := enrichToolError(tc.Name, toolErr)
+						toolResult = &provider.ToolResult{
+							ToolUseID: tc.ID,
+							Content:   enrichedMsg,
+							IsError:   true,
+						}
+						l.emit(ErrorEvent{
+							ErrorCode:   ErrorCodeToolExecution,
+							Message:     enrichedMsg,
+							Recoverable: true,
+							Time:        l.now(),
+						})
+					}
+					batchResults = append(batchResults, *toolResult)
+					if isCancelled(ctx) {
+						toolsCancelled = true
+						break
+					}
+				}
+			}
+
 			if isCancelled(ctx) {
 				toolsCancelled = true
-				break
+			}
+			if toolsCancelled {
+				return nil, l.handleTurnCancellation(inflight, ctx.Err())
 			}
 
-			if toolErr != nil {
-				// Layer 1: tool execution failed — enrich the error message
-				// and feed it back to the LLM as a tool result so it can
-				// self-correct. Tool errors are NOT turn-ending.
-				enrichedMsg := enrichToolError(tc.Name, toolErr)
-				toolResult = &provider.ToolResult{
-					ToolUseID: tc.ID,
-					Content:   enrichedMsg,
-					IsError:   true,
+			if batchErr == nil && len(batchResults) != len(validCalls) {
+				batchErr = fmt.Errorf("tool executor returned %d batch results for %d calls", len(batchResults), len(validCalls))
+			}
+
+			if batchErr != nil {
+				for i, tc := range validCalls {
+					enrichedMsg := enrichToolError(tc.Name, batchErr)
+					toolResult := provider.ToolResult{
+						ToolUseID: tc.ID,
+						Content:   enrichedMsg,
+						IsError:   true,
+					}
+					toolResults = append(toolResults, toolResult)
+					idx := validIndices[i]
+					inflight.ToolCalls[idx].Completed = true
+					inflight.ToolCalls[idx].ResultStored = true
+					inflight.ToolMessages = append(inflight.ToolMessages, conversation.IterationMessage{
+						Role:      "tool",
+						Content:   toolResult.Content,
+						ToolUseID: tc.ID,
+						ToolName:  tc.Name,
+					})
+					l.emit(ErrorEvent{
+						ErrorCode:   ErrorCodeToolExecution,
+						Message:     enrichedMsg,
+						Recoverable: true,
+						Time:        l.now(),
+					})
+					l.emit(ToolCallOutputEvent{
+						ToolCallID: tc.ID,
+						Output:     toolResult.Content,
+						Time:       l.now(),
+					})
+					l.emit(ToolCallEndEvent{
+						ToolCallID: tc.ID,
+						Result:     toolResult.Content,
+						Duration:   batchDuration,
+						Success:    false,
+						Time:       l.now(),
+					})
 				}
-				l.emit(ErrorEvent{
-					ErrorCode:   ErrorCodeToolExecution,
-					Message:     enrichedMsg,
-					Recoverable: true,
-					Time:        l.now(),
-				})
+			} else {
+				for i, tc := range validCalls {
+					toolResult := batchResults[i]
+					toolResult.ToolUseID = tc.ID
+					toolResults = append(toolResults, toolResult)
+					idx := validIndices[i]
+					inflight.ToolCalls[idx].Completed = true
+					inflight.ToolCalls[idx].ResultStored = true
+					inflight.ToolMessages = append(inflight.ToolMessages, conversation.IterationMessage{
+						Role:      "tool",
+						Content:   toolResult.Content,
+						ToolUseID: tc.ID,
+						ToolName:  tc.Name,
+					})
+					l.emit(ToolCallOutputEvent{
+						ToolCallID: tc.ID,
+						Output:     toolResult.Content,
+						Time:       l.now(),
+					})
+					l.emit(ToolCallEndEvent{
+						ToolCallID: tc.ID,
+						Result:     toolResult.Content,
+						Duration:   batchDuration,
+						Success:    !toolResult.IsError,
+						Time:       l.now(),
+					})
+				}
 			}
-
-			toolResults = append(toolResults, *toolResult)
-			inflight.ToolCalls[idx].Completed = true
-			inflight.ToolCalls[idx].ResultStored = true
-			inflight.ToolMessages = append(inflight.ToolMessages, conversation.IterationMessage{
-				Role:      "tool",
-				Content:   toolResult.Content,
-				ToolUseID: tc.ID,
-				ToolName:  tc.Name,
-			})
-
-			l.emit(ToolCallOutputEvent{
-				ToolCallID: tc.ID,
-				Output:     toolResult.Content,
-				Time:       l.now(),
-			})
-			l.emit(ToolCallEndEvent{
-				ToolCallID: tc.ID,
-				Result:     toolResult.Content,
-				Duration:   toolDuration,
-				Success:    !toolResult.IsError,
-				Time:       l.now(),
-			})
 		}
 
 		if toolsCancelled {

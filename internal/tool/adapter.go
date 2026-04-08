@@ -30,19 +30,42 @@ func NewAgentLoopAdapter(executor *Executor) *AgentLoopAdapter {
 // It converts the provider types, dispatches a single-element batch through
 // the executor, and converts the result back to provider types.
 func (a *AgentLoopAdapter) Execute(ctx context.Context, call provider.ToolCall) (*provider.ToolResult, error) {
-	toolCall := ToolCallFromProvider(call)
-	var results []ToolResult
-	if meta, ok := ExecutionMetaFromContext(ctx); ok {
-		results = a.executor.ExecuteWithMeta(ctx, []ToolCall{toolCall}, meta)
-	} else {
-		results = a.executor.Execute(ctx, []ToolCall{toolCall})
+	results, err := a.ExecuteBatch(ctx, []provider.ToolCall{call})
+	if err != nil {
+		return nil, err
 	}
 	if len(results) == 0 {
 		return nil, fmt.Errorf("tool executor returned no results for %q", call.Name)
 	}
-	result := enrichToolResultForAgent(toolCall.Name, results[0])
-	pr := result.ToProvider()
-	return &pr, nil
+	return &results[0], nil
+}
+
+// ExecuteBatch satisfies agent.BatchToolExecutor by dispatching the full batch
+// through the underlying executor and converting results back to provider
+// types in the same order.
+func (a *AgentLoopAdapter) ExecuteBatch(ctx context.Context, calls []provider.ToolCall) ([]provider.ToolResult, error) {
+	if len(calls) == 0 {
+		return nil, nil
+	}
+	toolCalls := make([]ToolCall, 0, len(calls))
+	for _, call := range calls {
+		toolCalls = append(toolCalls, ToolCallFromProvider(call))
+	}
+	var results []ToolResult
+	if meta, ok := ExecutionMetaFromContext(ctx); ok {
+		results = a.executor.ExecuteWithMeta(ctx, toolCalls, meta)
+	} else {
+		results = a.executor.Execute(ctx, toolCalls)
+	}
+	if len(results) != len(toolCalls) {
+		return nil, fmt.Errorf("tool executor returned %d results for %d calls", len(results), len(toolCalls))
+	}
+	providerResults := make([]provider.ToolResult, 0, len(results))
+	for i, result := range results {
+		pr := enrichToolResultForAgent(toolCalls[i].Name, result).ToProvider()
+		providerResults = append(providerResults, pr)
+	}
+	return providerResults, nil
 }
 
 func enrichToolResultForAgent(toolName string, result ToolResult) ToolResult {

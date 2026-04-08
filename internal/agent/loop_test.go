@@ -216,6 +216,33 @@ func (s *toolExecutorMetaStub) Execute(ctx stdctx.Context, call provider.ToolCal
 	return &provider.ToolResult{ToolUseID: call.ID, Content: "ok"}, nil
 }
 
+type batchToolExecutorStub struct {
+	batches [][]provider.ToolCall
+	results map[string]provider.ToolResult
+}
+
+func (s *batchToolExecutorStub) Execute(_ stdctx.Context, call provider.ToolCall) (*provider.ToolResult, error) {
+	result, ok := s.results[call.ID]
+	if !ok {
+		result = provider.ToolResult{ToolUseID: call.ID, Content: "default result"}
+	}
+	return &result, nil
+}
+
+func (s *batchToolExecutorStub) ExecuteBatch(_ stdctx.Context, calls []provider.ToolCall) ([]provider.ToolResult, error) {
+	cp := append([]provider.ToolCall(nil), calls...)
+	s.batches = append(s.batches, cp)
+	results := make([]provider.ToolResult, 0, len(calls))
+	for _, call := range calls {
+		result, ok := s.results[call.ID]
+		if !ok {
+			result = provider.ToolResult{ToolUseID: call.ID, Content: "default result"}
+		}
+		results = append(results, result)
+	}
+	return results, nil
+}
+
 // --- Tests ---
 
 func TestNewAgentLoopPrepareTurnContextCallsLayer3AndEmitsEvents(t *testing.T) {
@@ -501,6 +528,69 @@ func TestRunTurnWithToolUse(t *testing.T) {
 	}
 	if executor.calls[0].Name != "read_file" {
 		t.Fatalf("tool call name = %q, want read_file", executor.calls[0].Name)
+	}
+}
+
+func TestRunTurnBatchesMultipleToolCallsWhenExecutorSupportsIt(t *testing.T) {
+	sink := NewChannelSink(64)
+	assembler := &loopContextAssemblerStub{pkg: &contextpkg.FullContextPackage{Content: "context", Frozen: true}}
+	conversations := &loopConversationManagerStub{history: []db.Message{}, seen: loopSeenFilesStub{}}
+	toolInput1 := json.RawMessage(`{"path":"main.go"}`)
+	toolInput2 := json.RawMessage(`{"query":"auth"}`)
+	routerStub := &providerRouterStub{streamEvents: [][]provider.StreamEvent{
+		{
+			provider.ToolCallStart{ID: "tool_1", Name: "read_file"},
+			provider.ToolCallEnd{ID: "tool_1", Input: toolInput1},
+			provider.ToolCallStart{ID: "tool_2", Name: "search"},
+			provider.ToolCallEnd{ID: "tool_2", Input: toolInput2},
+			provider.StreamDone{StopReason: provider.StopReasonToolUse, Usage: provider.Usage{InputTokens: 50, OutputTokens: 20}},
+		},
+		{
+			provider.TokenDelta{Text: "done"},
+			provider.StreamDone{StopReason: provider.StopReasonEndTurn, Usage: provider.Usage{InputTokens: 60, OutputTokens: 10}},
+		},
+	}}
+	executor := &batchToolExecutorStub{results: map[string]provider.ToolResult{
+		"tool_1": {ToolUseID: "tool_1", Content: "main.go contents"},
+		"tool_2": {ToolUseID: "tool_2", Content: "search results"},
+	}}
+	loop := NewAgentLoop(AgentLoopDeps{
+		ContextAssembler:    assembler,
+		ConversationManager: conversations,
+		ProviderRouter:      routerStub,
+		ToolExecutor:        executor,
+		PromptBuilder:       NewPromptBuilder(nil),
+		EventSink:           sink,
+	})
+	loop.now = func() time.Time { return time.Unix(1700000600, 0).UTC() }
+
+	result, err := loop.RunTurn(stdctx.Background(), RunTurnRequest{
+		ConversationID:    "conv-1",
+		TurnNumber:        1,
+		Message:           "inspect files",
+		ModelContextLimit: 200000,
+	})
+	if err != nil {
+		t.Fatalf("RunTurn error: %v", err)
+	}
+	if result.FinalText != "done" {
+		t.Fatalf("FinalText = %q, want done", result.FinalText)
+	}
+	if len(executor.batches) != 1 {
+		t.Fatalf("batch calls = %d, want 1", len(executor.batches))
+	}
+	if len(executor.batches[0]) != 2 {
+		t.Fatalf("batch size = %d, want 2", len(executor.batches[0]))
+	}
+	if executor.batches[0][0].Name != "read_file" || executor.batches[0][1].Name != "search" {
+		t.Fatalf("batched tool names = %q/%q, want read_file/search", executor.batches[0][0].Name, executor.batches[0][1].Name)
+	}
+	iter1 := conversations.persistIterCalls[0]
+	if len(iter1.messages) != 3 {
+		t.Fatalf("iteration 1 persist message count = %d, want 3", len(iter1.messages))
+	}
+	if iter1.messages[1].ToolUseID != "tool_1" || iter1.messages[2].ToolUseID != "tool_2" {
+		t.Fatalf("persisted tool ids = %q/%q, want tool_1/tool_2", iter1.messages[1].ToolUseID, iter1.messages[2].ToolUseID)
 	}
 }
 

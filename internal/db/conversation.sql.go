@@ -515,6 +515,29 @@ func (q *Queries) SearchConversations(ctx context.Context, content string) ([]Se
 	return items, nil
 }
 
+const setConversationRuntimeDefaults = `-- name: SetConversationRuntimeDefaults :exec
+UPDATE conversations
+SET model = ?, provider = ?, updated_at = ?
+WHERE id = ?
+`
+
+type SetConversationRuntimeDefaultsParams struct {
+	Model     sql.NullString `json:"model"`
+	Provider  sql.NullString `json:"provider"`
+	UpdatedAt string         `json:"updated_at"`
+	ID        string         `json:"id"`
+}
+
+func (q *Queries) SetConversationRuntimeDefaults(ctx context.Context, arg SetConversationRuntimeDefaultsParams) error {
+	_, err := q.db.ExecContext(ctx, setConversationRuntimeDefaults,
+		arg.Model,
+		arg.Provider,
+		arg.UpdatedAt,
+		arg.ID,
+	)
+	return err
+}
+
 const setConversationTitle = `-- name: SetConversationTitle :exec
 UPDATE conversations
 SET title = ?, updated_at = ?

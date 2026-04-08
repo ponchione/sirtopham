@@ -217,6 +217,29 @@ func (m *Manager) SetTitle(ctx context.Context, conversationID, title string) er
 	return nil
 }
 
+// SetRuntimeDefaults updates the conversation-scoped provider/model defaults
+// and bumps updated_at.
+func (m *Manager) SetRuntimeDefaults(ctx context.Context, conversationID string, provider, model *string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	params := db.SetConversationRuntimeDefaultsParams{
+		UpdatedAt: m.now().UTC().Format(time.RFC3339),
+		ID:        conversationID,
+	}
+	if model != nil {
+		params.Model = sql.NullString{String: *model, Valid: true}
+	}
+	if provider != nil {
+		params.Provider = sql.NullString{String: *provider, Valid: true}
+	}
+	if err := m.queries.SetConversationRuntimeDefaults(ctx, params); err != nil {
+		return fmt.Errorf("conversation manager: set runtime defaults: %w", err)
+	}
+	return nil
+}
+
 // Count returns the total number of conversations for a project.
 func (m *Manager) Count(ctx context.Context, projectID string) (int64, error) {
 	if ctx == nil {

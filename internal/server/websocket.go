@@ -14,6 +14,7 @@ import (
 
 	"github.com/ponchione/sirtopham/internal/agent"
 	"github.com/ponchione/sirtopham/internal/config"
+	"github.com/ponchione/sirtopham/internal/conversation"
 )
 
 // AgentService is the interface the WebSocket handler needs from the agent loop.
@@ -290,19 +291,10 @@ func (h *WebSocketHandler) handleMessage(ctx context.Context, conn *websocket.Co
 	defer h.agent.Unsubscribe(sink)
 
 	convID := msg.ConversationID
-	if convID == "" {
-		c, err := h.convSvc.Create(ctx, h.projectID)
-		if err != nil {
-			h.logger.Error("create conversation for ws", "error", err)
-			h.writeJSONMessage(ctx, conn, "error", map[string]string{"error": "failed to create conversation"})
-			return
-		}
-		convID = c.ID
-		h.writeJSONMessage(ctx, conn, "conversation_created", map[string]string{"conversation_id": convID})
-	}
 
 	// Resolve model/provider: prefer inline fields on the message, then the
-	// stored override from a preceding "model_override" event.
+	// stored override from a preceding "model_override" event, then persisted
+	// conversation defaults, and finally runtime defaults.
 	model := msg.Model
 	prov := msg.Provider
 	override.mu.Lock()
@@ -317,11 +309,21 @@ func (h *WebSocketHandler) handleMessage(ctx context.Context, conn *websocket.Co
 	override.provider = ""
 	override.mu.Unlock()
 
-	turnNumber, turnErr := h.nextTurnNumber(ctx, convID)
-	if turnErr != nil {
-		h.logger.Error("compute next turn number", "error", turnErr, "conversation_id", convID)
-		h.writeJSONMessage(ctx, conn, "error", map[string]string{"error": "failed to compute next turn number"})
-		return
+	var conversationDefaults *conversation.Conversation
+	if convID != "" {
+		stored, err := h.convSvc.Get(ctx, convID)
+		if err != nil {
+			h.logger.Error("load conversation defaults", "error", err, "conversation_id", convID)
+			h.writeJSONMessage(ctx, conn, "error", map[string]string{"error": "failed to load conversation"})
+			return
+		}
+		conversationDefaults = stored
+		if prov == "" && stored.Provider != nil {
+			prov = *stored.Provider
+		}
+		if model == "" && stored.Model != nil {
+			model = *stored.Model
+		}
 	}
 
 	defaultProvider, defaultModel := h.defaults.Get()
@@ -333,6 +335,41 @@ func (h *WebSocketHandler) handleMessage(ctx context.Context, conn *websocket.Co
 	}
 	if model == "" && prov == defaultProvider {
 		model = defaultModel
+	}
+
+	if convID == "" {
+		var opts []conversation.CreateOption
+		if prov != "" {
+			opts = append(opts, conversation.WithProvider(prov))
+		}
+		if model != "" {
+			opts = append(opts, conversation.WithModel(model))
+		}
+		c, err := h.convSvc.Create(ctx, h.projectID, opts...)
+		if err != nil {
+			h.logger.Error("create conversation for ws", "error", err)
+			h.writeJSONMessage(ctx, conn, "error", map[string]string{"error": "failed to create conversation"})
+			return
+		}
+		convID = c.ID
+		h.writeJSONMessage(ctx, conn, "conversation_created", map[string]string{"conversation_id": convID})
+	} else if conversationDefaults != nil {
+		providerChanged := conversationDefaults.Provider == nil || *conversationDefaults.Provider != prov
+		modelChanged := conversationDefaults.Model == nil || *conversationDefaults.Model != model
+		if providerChanged || modelChanged {
+			if err := h.convSvc.SetRuntimeDefaults(ctx, convID, &prov, &model); err != nil {
+				h.logger.Error("persist conversation defaults", "error", err, "conversation_id", convID)
+				h.writeJSONMessage(ctx, conn, "error", map[string]string{"error": "failed to persist conversation defaults"})
+				return
+			}
+		}
+	}
+
+	turnNumber, turnErr := h.nextTurnNumber(ctx, convID)
+	if turnErr != nil {
+		h.logger.Error("compute next turn number", "error", turnErr, "conversation_id", convID)
+		h.writeJSONMessage(ctx, conn, "error", map[string]string{"error": "failed to compute next turn number"})
+		return
 	}
 	modelContextLimit, limitErr := h.resolveModelContextLimit(prov)
 	if limitErr != nil {

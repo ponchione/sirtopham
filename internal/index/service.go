@@ -35,6 +35,7 @@ type dependencies struct {
 	newStore            func(context.Context, string) (codeintel.Store, error)
 	newParser           func(string) (codeintel.Parser, error)
 	newEmbedder         func(config.Embedding) codeintel.Embedder
+	newDescriber        func(*config.Config) codeintel.Describer
 	ensureIndexServices func(context.Context, *config.Config) error
 	now                 func() time.Time
 }
@@ -53,6 +54,7 @@ func defaultDependencies() dependencies {
 		newEmbedder: func(cfg config.Embedding) codeintel.Embedder {
 			return embedder.New(cfg)
 		},
+		newDescriber:        newRuntimeDescriber,
 		ensureIndexServices: runIndexPrecheck,
 		now:                 time.Now,
 	}
@@ -175,12 +177,16 @@ func runWithDependencies(ctx context.Context, opts Options, deps dependencies) (
 		if err != nil {
 			return nil, fmt.Errorf("index: build parser: %w", err)
 		}
+		var describer codeintel.Describer = noopDescriber{}
+		if deps.newDescriber != nil {
+			describer = deps.newDescriber(cfg)
+		}
 		indexResult, err := indexer.IndexFiles(ctx, indexer.IndexConfig{
 			ProjectName: cfg.ProjectName(),
 			ProjectRoot: projectRoot,
 			Include:     cfg.Index.Include,
 			Exclude:     cfg.Index.Exclude,
-		}, parser, store, deps.newEmbedder(cfg.Embedding), noopDescriber{}, changedFiles)
+		}, parser, store, deps.newEmbedder(cfg.Embedding), describer, changedFiles)
 		if err != nil {
 			return nil, fmt.Errorf("index: run indexer: %w", err)
 		}
