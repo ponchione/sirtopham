@@ -78,7 +78,7 @@
       }
     ],
     "direction": "horizontal",
-    "width": 300
+    "width": 297.5
   },
   "right": {
     "id": "f572a091d8e36e87",
@@ -185,6 +185,22 @@
   },
   "active": "bf882d8b14c93249",
   "lastOpenFiles": [
+    "notes/runtime/soak-token-1775406502744482047.md",
+    "notes/runtime/soak-token-1775406284337634459.md",
+    "notes/runtime/runtime-token-1775406242703119901.md",
+    "notes/runtime/brain-routing-gpt54mini-1775404100608333852.md",
+    "notes/runtime/brain-routing-1775402380663984595.md",
+    "notes/runtime/defaults-probe-1775400659005694387.md",
+    "notes/runtime/soak-token-1775399818325593258.md",
+    "notes/runtime/soak-token-1775397162232844728.md",
+    "notes/runtime/soak-token-1775396828867863599.md",
+    "notes/runtime/soak-token-1775395201890645533.md",
+    "notes/runtime/soak-token-1775392943429798953.md",
+    "notes/runtime/soak-token-1775392724511125308.md",
+    "notes/runtime/soak-token-1775384690184819403.md",
+    "notes/runtime/runtime-token-1775381019630534665.md",
+    "notes/runtime/runtime-token-1775380560910306008.md",
+    "notes/runtime",
     "brain-viewer.md",
     "brain-mcp-migration.md",
     "notes/hello.md",

@@ -70,6 +70,39 @@ func TestAdapterUnknownTool(t *testing.T) {
 	}
 }
 
+func TestAdapterExecuteBatchConvertsTypes(t *testing.T) {
+	reg := NewRegistry()
+	readTool := newMockTool("file_read", Pure)
+	readTool.executeFn = func(ctx context.Context, projectRoot string, input json.RawMessage) (*ToolResult, error) {
+		return &ToolResult{Success: true, Content: "read ok"}, nil
+	}
+	searchTool := newMockTool("search", Pure)
+	searchTool.executeFn = func(ctx context.Context, projectRoot string, input json.RawMessage) (*ToolResult, error) {
+		return &ToolResult{Success: true, Content: "search ok"}, nil
+	}
+	reg.Register(readTool)
+	reg.Register(searchTool)
+
+	exec := NewExecutor(reg, ExecutorConfig{}, nil)
+	adapter := NewAgentLoopAdapter(exec)
+	results, err := adapter.ExecuteBatch(context.Background(), []provider.ToolCall{
+		{ID: "tc-1", Name: "file_read", Input: json.RawMessage(`{"path":"main.go"}`)},
+		{ID: "tc-2", Name: "search", Input: json.RawMessage(`{"query":"auth"}`)},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("batch result count = %d, want 2", len(results))
+	}
+	if results[0].ToolUseID != "tc-1" || results[0].Content != "read ok" || results[0].IsError {
+		t.Fatalf("first batch result = %+v, want successful tc-1/read ok", results[0])
+	}
+	if results[1].ToolUseID != "tc-2" || results[1].Content != "search ok" || results[1].IsError {
+		t.Fatalf("second batch result = %+v, want successful tc-2/search ok", results[1])
+	}
+}
+
 func TestAdapterToolFailure(t *testing.T) {
 	reg := NewRegistry()
 	m := newMockTool("failing_tool", Pure)

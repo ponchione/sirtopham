@@ -26,7 +26,7 @@ If you are resuming implementation work, read these first:
 - The backend binary is built from `./cmd/sirtopham`.
 - The production build embeds the frontend from `web/dist/`.
 - Real retrieval depends on running `sirtopham index` before `sirtopham serve`.
-- Indexing requires the local embedding service; qwen-coder is optional today because the current indexing path uses a no-op describer.
+- Indexing uses the local embedding service and now also wires the local qwen-coder describer when available; if qwen-coder is unavailable, indexing still proceeds with signature-only embeddings and warn-level logs.
 
 ## Requirements
 
@@ -36,7 +36,7 @@ If you are resuming implementation work, read these first:
 - At least one working provider configuration for runtime turns
 - Local indexing service:
   - embeddings / nomic-embed-code at `http://localhost:12435`
-- Optional local describer service if/when description generation is re-enabled:
+- Local describer service for richer code-search embeddings:
   - qwen-coder at `http://localhost:12434`
 
 ## Quick Start

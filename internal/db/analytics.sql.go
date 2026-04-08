@@ -134,48 +134,6 @@ func (q *Queries) GetConversationTokenUsage(ctx context.Context, conversationID 
 	return i, err
 }
 
-const getTurnTokenUsage = `-- name: GetTurnTokenUsage :one
-SELECT
-    CAST(COALESCE(SUM(tokens_in), 0) AS INTEGER) AS tokens_in,
-    CAST(COALESCE(SUM(tokens_out), 0) AS INTEGER) AS tokens_out,
-    CAST(COALESCE(SUM(cache_read_tokens), 0) AS INTEGER) AS cache_read_tokens,
-    CAST(COALESCE(SUM(cache_creation_tokens), 0) AS INTEGER) AS cache_creation_tokens,
-    CAST(COALESCE(SUM(latency_ms), 0) AS INTEGER) AS latency_ms,
-    CAST(COALESCE(MAX(iteration), 1) AS INTEGER) AS iteration_count
-FROM sub_calls
-WHERE conversation_id = ?
-  AND purpose = 'chat'
-  AND turn_number = ?
-`
-
-type GetTurnTokenUsageParams struct {
-	ConversationID string `json:"conversation_id"`
-	TurnNumber     int64  `json:"turn_number"`
-}
-
-type GetTurnTokenUsageRow struct {
-	TokensIn            int64 `json:"tokens_in"`
-	TokensOut           int64 `json:"tokens_out"`
-	CacheReadTokens     int64 `json:"cache_read_tokens"`
-	CacheCreationTokens int64 `json:"cache_creation_tokens"`
-	LatencyMs           int64 `json:"latency_ms"`
-	IterationCount      int64 `json:"iteration_count"`
-}
-
-func (q *Queries) GetTurnTokenUsage(ctx context.Context, arg GetTurnTokenUsageParams) (GetTurnTokenUsageRow, error) {
-	row := q.db.QueryRowContext(ctx, getTurnTokenUsage, arg.ConversationID, arg.TurnNumber)
-	var i GetTurnTokenUsageRow
-	err := row.Scan(
-		&i.TokensIn,
-		&i.TokensOut,
-		&i.CacheReadTokens,
-		&i.CacheCreationTokens,
-		&i.LatencyMs,
-		&i.IterationCount,
-	)
-	return i, err
-}
-
 const getConversationToolUsage = `-- name: GetConversationToolUsage :many
 SELECT
     tool_name,
@@ -220,6 +178,48 @@ func (q *Queries) GetConversationToolUsage(ctx context.Context, conversationID s
 		return nil, err
 	}
 	return items, nil
+}
+
+const getTurnTokenUsage = `-- name: GetTurnTokenUsage :one
+SELECT
+    CAST(COALESCE(SUM(tokens_in), 0) AS INTEGER) AS tokens_in,
+    CAST(COALESCE(SUM(tokens_out), 0) AS INTEGER) AS tokens_out,
+    CAST(COALESCE(SUM(cache_read_tokens), 0) AS INTEGER) AS cache_read_tokens,
+    CAST(COALESCE(SUM(cache_creation_tokens), 0) AS INTEGER) AS cache_creation_tokens,
+    CAST(COALESCE(SUM(latency_ms), 0) AS INTEGER) AS latency_ms,
+    CAST(COALESCE(MAX(iteration), 1) AS INTEGER) AS iteration_count
+FROM sub_calls
+WHERE conversation_id = ?
+  AND purpose = 'chat'
+  AND turn_number = ?
+`
+
+type GetTurnTokenUsageParams struct {
+	ConversationID sql.NullString `json:"conversation_id"`
+	TurnNumber     sql.NullInt64  `json:"turn_number"`
+}
+
+type GetTurnTokenUsageRow struct {
+	TokensIn            int64 `json:"tokens_in"`
+	TokensOut           int64 `json:"tokens_out"`
+	CacheReadTokens     int64 `json:"cache_read_tokens"`
+	CacheCreationTokens int64 `json:"cache_creation_tokens"`
+	LatencyMs           int64 `json:"latency_ms"`
+	IterationCount      int64 `json:"iteration_count"`
+}
+
+func (q *Queries) GetTurnTokenUsage(ctx context.Context, arg GetTurnTokenUsageParams) (GetTurnTokenUsageRow, error) {
+	row := q.db.QueryRowContext(ctx, getTurnTokenUsage, arg.ConversationID, arg.TurnNumber)
+	var i GetTurnTokenUsageRow
+	err := row.Scan(
+		&i.TokensIn,
+		&i.TokensOut,
+		&i.CacheReadTokens,
+		&i.CacheCreationTokens,
+		&i.LatencyMs,
+		&i.IterationCount,
+	)
+	return i, err
 }
 
 const insertToolExecution = `-- name: InsertToolExecution :exec

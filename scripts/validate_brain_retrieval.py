@@ -33,6 +33,27 @@ DEFAULT_PROMPT = "What is the runtime brain proof canary phrase?"
 DEFAULT_EXPECTED_PHRASE = "ORBIT LANTERN 642"
 DEFAULT_EXPECTED_NOTE = "notes/runtime-brain-proof-apr-07.md"
 
+SCENARIOS: dict[str, dict[str, Any]] = {
+    "runtime-proof": {
+        "prompt": DEFAULT_PROMPT,
+        "expected_phrase": DEFAULT_EXPECTED_PHRASE,
+        "expected_note": DEFAULT_EXPECTED_NOTE,
+        "allow_tool_calls": False,
+    },
+    "rationale-layout": {
+        "prompt": "From our rationale notes, why did we choose the minimal content-first layout for the site? Answer in one short paragraph.",
+        "expected_phrase": "minimal content-first layout because",
+        "expected_note": "notes/minimal-content-first-layout-rationale.md",
+        "allow_tool_calls": True,
+    },
+    "debug-history-vite": {
+        "prompt": "From our past debugging notes, what was the root cause of the vite rebuild loop and what was the fix? Answer in two sentences.",
+        "expected_phrase": "src/generated/index.ts",
+        "expected_note": "notes/past-debugging-vite-rebuild-loop.md",
+        "allow_tool_calls": True,
+    },
+}
+
 
 @dataclass
 class ValidationResult:
@@ -234,6 +255,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Repeatable live validation for V2-B4 proactive brain retrieval")
     parser.add_argument("--base-url", default="http://localhost:8092", help="HTTP base URL for the running sirtopham app")
     parser.add_argument("--ws-url", default="", help="Optional websocket URL override; defaults to <base-url>/api/ws")
+    parser.add_argument(
+        "--scenario",
+        choices=sorted(SCENARIOS.keys()),
+        default="runtime-proof",
+        help="Maintained validation scenario. Supplies default prompt/expected phrase/expected note unless explicitly overridden.",
+    )
     parser.add_argument("--prompt", default=DEFAULT_PROMPT, help="Prompt to submit as the first turn")
     parser.add_argument("--expected-phrase", default=DEFAULT_EXPECTED_PHRASE, help="Brain-only fact expected in the assistant answer")
     parser.add_argument("--expected-note", default=DEFAULT_EXPECTED_NOTE, help="Expected document_path in context_report.brain_results")
@@ -248,6 +275,15 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    scenario = SCENARIOS.get(args.scenario, {})
+    if args.prompt == DEFAULT_PROMPT and scenario.get("prompt"):
+        args.prompt = scenario["prompt"]
+    if args.expected_phrase == DEFAULT_EXPECTED_PHRASE and scenario.get("expected_phrase"):
+        args.expected_phrase = scenario["expected_phrase"]
+    if args.expected_note == DEFAULT_EXPECTED_NOTE and scenario.get("expected_note"):
+        args.expected_note = scenario["expected_note"]
+    if scenario.get("allow_tool_calls"):
+        args.allow_tool_calls = True
     try:
         asyncio.run(validate(args))
     except KeyboardInterrupt:

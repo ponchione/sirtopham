@@ -67,6 +67,15 @@ func (fakeEmbedder) EmbedQuery(context.Context, string) ([]float32, error) {
 	return []float32{0.1, 0.2}, nil
 }
 
+type fakeDescriber struct {
+	called int
+}
+
+func (f *fakeDescriber) DescribeFile(context.Context, string, string) ([]codeintel.Description, error) {
+	f.called++
+	return []codeintel.Description{{Name: "Example", Description: "Semantic example description."}}, nil
+}
+
 func TestRunWithDependenciesIndexesIncrementallyAndDeletesRemovedFiles(t *testing.T) {
 	projectRoot := t.TempDir()
 	writeTestFile(t, projectRoot, "main.go", "package main\n\nfunc Example() {}\n")
@@ -78,6 +87,7 @@ func TestRunWithDependenciesIndexesIncrementallyAndDeletesRemovedFiles(t *testin
 	cfg.Index.MaxFileSizeBytes = 1024 * 1024
 
 	store := &fakeStore{}
+	describer := &fakeDescriber{}
 	now := time.Date(2026, 4, 2, 17, 0, 0, 0, time.UTC)
 	deps := dependencies{
 		openDB: appdb.OpenDB,
@@ -89,6 +99,9 @@ func TestRunWithDependenciesIndexesIncrementallyAndDeletesRemovedFiles(t *testin
 		},
 		newEmbedder: func(config.Embedding) codeintel.Embedder {
 			return fakeEmbedder{}
+		},
+		newDescriber: func(*config.Config) codeintel.Describer {
+			return describer
 		},
 		ensureIndexServices: func(context.Context, *config.Config) error {
 			return nil
@@ -111,6 +124,12 @@ func TestRunWithDependenciesIndexesIncrementallyAndDeletesRemovedFiles(t *testin
 	}
 	if first.ChunksWritten != 1 {
 		t.Fatalf("ChunksWritten = %d, want 1", first.ChunksWritten)
+	}
+	if describer.called != 1 {
+		t.Fatalf("describer called %d times, want 1", describer.called)
+	}
+	if got := store.upserts[0][0].Description; got != "Semantic example description." {
+		t.Fatalf("stored chunk description = %q, want semantic describer output", got)
 	}
 
 	db := mustOpenDB(t, cfg.DatabasePath())

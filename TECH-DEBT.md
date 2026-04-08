@@ -1,195 +1,278 @@
 # TECH-DEBT
 
-Open items for the next phase after the v0.1 harness closeout.
+Last audit: 2026-04-08 (full spec-vs-implementation code audit)
+Last implementation sweep: 2026-04-08 (batch tool dispatch + persisted conversation runtime defaults + runtime describer wiring)
+Current phase: operationally healthy, not fully spec-complete
 
-Last sweep: 2026-04-07
-Current phase: v0.2 scoping and post-v0.1 cleanup
+This register replaces the old resolved-item log. It now tracks the highest-signal gaps and spec drifts found by auditing the current code against docs/specs.
 
-What is no longer tech debt
-- B1/B2/B3/B4/B5/B6/B7 are landed and validated enough to stop carrying as open debt.
-- Basic code-path retrieval is proven on `~/source/my-website/`.
-- The harness punchlist is effectively cleared for v0.1.
-- Provider/config/operator surfaces now respect explicitly configured provider names.
+Overall verdict:
+- build/test health is good (`make build`, `make test` pass)
+- the codebase is broadly aligned with the spec set
+- this sweep closed live batch tool dispatch (T4), conversation-scoped provider/model runtime defaults (T6), and runtime describer wiring (T1)
+- the biggest remaining work is now concentrated in graph/convention runtime wiring, schema/linkage hardening, and contract reconciliation docs
 
-The remaining items below are the real open work.
+## Active tech debt
 
----
+### T1. Runtime indexing still uses a noop describer
+Status: closed 2026-04-08
+Priority: high
+Area: code intelligence / RAG
 
-## v0.2 brain scope
+What landed:
+- runtime indexing now requests a describer from the index service dependency graph instead of hard-coding `noopDescriber{}`
+- the default runtime path constructs a real qwen-coder-backed describer and discovers the live model from `/v1/models`
+- if qwen-coder is unavailable or the describer call fails, indexing still continues via the describer's existing graceful fallback path, leaving signature-only embeddings and warn-level evidence rather than aborting the whole index run
 
-The next meaningful product phase is v0.2. The brain is the main unfinished capability that should define that phase.
+Evidence:
+- `internal/index/service.go`
+- `internal/index/runtime_describer.go`
+- `internal/index/service_test.go`
+- `internal/index/runtime_describer_test.go`
 
-### V2-B1. Proactive brain retrieval in context assembly
-Severity: High
+Notes:
+- this closes the wiring gap, but retrieval-quality proof after a fresh real reindex is still worth doing when taking the next code-intelligence validation pass
 
-Current state:
-- brain tools work reactively: `brain_read`, `brain_write`, `brain_update`, `brain_search`, `brain_lint`
-- a first proactive slice is now wired: context assembly runs keyword-backed brain search against the active MCP/vault backend and populates `RetrievalResults.BrainHits`
-- assembled-context budgeting/serialization/reporting now treat brain hits as a real category
-- proactive filtering now excludes `_log.md` operational brain log hits so they do not compete with real notes in Project Brain context
-- brain-directed prompts can now emit a `brain_intent` signal so proactive retrieval can prefer brain context and skip generic code RAG when there are no explicit code references
-- remaining gap: query shaping is still only lightly brain-aware; architecture/design questions that do not explicitly mention the brain may still rely on generic code-oriented queries/signals
+### T2. Structural graph exists but is not live-wired into runtime retrieval
+Status: active
+Priority: high
+Area: code intelligence / context assembly
 
-v0.2 target:
-- brain retrieval runs alongside code retrieval during context assembly
-- analyzer/query extraction can emit brain-oriented queries/signals
-- `RetrievalResults.BrainHits` is populated from the active brain backend
-- context assembly reports, the new `/api/metrics/conversation/{id}/context/{turn}/signals` stream endpoint, and the inspector show real proactive brain retrieval decisions
+What exists today:
+- graph analyzers, types, and storage code exist
+- the live server retrieval orchestrator is constructed with no graph store
 
-Expected implementation seams:
-- `internal/context/*` retrieval orchestration
-- `internal/context/budget*` priority fitting
-- context-report serialization / inspector payloads
-- whichever backend stays canonical for brain retrieval (`mcpclient`/vault path vs any future index-backed path)
+Evidence:
+- `cmd/sirtopham/serve.go:173`
+- `internal/context/retrieval.go:117-134`
 
-Done means:
-- a live turn can answer from brain content without the model explicitly calling a brain tool
-- inspector shows non-empty brain retrieval evidence for that turn
-- budget breakdown includes brain budget use as a first-class category
-
-### V2-B2. Brain-aware budget fitting and serialization
-Severity: High
-
-Current state:
-- budget order is now effectively explicit files -> proactive brain hits -> top code RAG -> graph -> conventions -> git -> lower-priority code RAG overflow
-- serializer emits a distinct Project Brain section and `budget_breakdown` includes a `brain` bucket
-- remaining gap: the priority order is implemented but still needs live validation evidence and explicit operator-facing documentation polish
-
-v0.2 target:
-- introduce a real brain tier in budget fitting
-- decide and document the priority order explicitly
-- serialize proactive brain context as a distinct section, not as an implicit side-effect of tool usage
-
-Initial intended ordering:
-- explicit files
-- proactive brain hits
-- top code RAG hits
-- structural graph
-- conventions
-- git
-- lower-priority code RAG overflow
+Why this matters:
+- the spec expects structural graph results to be part of context assembly
+- current runtime behavior is code-RAG plus explicit files/brain, without live graph-backed retrieval
 
 Done means:
-- `budget_breakdown` can truthfully report brain token usage
-- included/excluded brain results have the same diagnostic quality as code hits
+- index/build flow populates graph data in a supported runtime path
+- serve/runtime injects a real graph store into retrieval orchestration
+- context reports and inspector surfaces show real graph retrieval when relevant
 
-### V2-B3. Brain backend/product contract cleanup
-Severity: Medium-High
+### T3. Convention retrieval remains a placeholder
+Status: active
+Priority: medium
+Area: context assembly
 
-Current state:
-- practical runtime path today is MCP/vault-backed brain tools plus MCP/vault-backed proactive keyword retrieval during context assembly
-- README/spec/inspector docs have been reconciled to describe that operator-facing truth
-- several future-facing config fields and old design notes still imply richer brain indexing/retrieval than the runtime actually uses, so the remaining debt is tightening or deleting those reserved surfaces rather than explaining the old story
+What exists today:
+- convention loading is abstracted behind an interface
+- the default runtime implementation is `NoopConventionSource`
 
-v0.2 target:
-- pick and document the actual source of truth for brain retrieval
-- explicitly state whether v0.2 brain retrieval is:
-  - MCP/vault keyword-backed only,
-  - MCP + semantic/index-backed hybrid,
-  - or an internal indexer with MCP/tooling as the mutation path
-- remove ambiguity about which fields are active vs reserved
+Evidence:
+- `internal/context/conventions.go:5-13`
+- `internal/context/retrieval.go:117-125`
+
+Why this matters:
+- the specs include conventions as a first-class context source
+- current runtime cannot actually retrieve or inject project conventions unless this is replaced
 
 Done means:
-- README, handoff, TECH-DEBT, and the brain spec all tell the same story
-- operators can tell what brain setup is required and what behavior to expect
-- stale root-level execution docs from the v0.1 harness phase are removed or explicitly archived
+- a real convention source is implemented and wired into the runtime
+- convention retrieval appears in assembled context and context reports when applicable
 
-### V2-B4. Brain retrieval validation package
-Severity: Low
-Status: Landed 2026-04-07
+### T4. Live agent loop still dispatches tool calls one-by-one
+Status: closed 2026-04-08
+Priority: high
+Area: agent loop / tool system
 
-Current state:
-- the maintained package now lives at:
-  - `docs/v2-b4-brain-retrieval-validation.md`
-  - `scripts/validate_brain_retrieval.py`
-- the default canary prompt (`What is the runtime brain proof canary phrase?`) now gives one repeatable live proof against the `:8092` my-website runtime that:
-  - answers the brain-only fact `ORBIT LANTERN 642`
-  - completes without explicit tool detours
-  - persists `needs.semantic_queries`, `brain_results`, and non-zero `budget_breakdown.brain`
-  - exposes the same signal/query flow through `/api/metrics/conversation/{id}/context/{turn}/signals`
+What landed:
+- the agent loop now batches same-iteration valid tool calls when the executor supports batch dispatch
+- the adapter now exposes batch execution to the loop while preserving provider/tool result conversion
+- persistence and emitted tool result ordering remain per-call and input-ordered
 
-Remaining note:
-- this package intentionally proves the current operator-facing MCP/vault keyword path, not a future semantic/index-backed brain path
+Evidence:
+- `internal/agent/loop.go`
+- `internal/tool/adapter.go`
+- `internal/agent/loop_test.go`
+- `internal/tool/adapter_test.go`
 
----
+Notes:
+- malformed tool calls are still filtered and surfaced individually before batch execution
+- mixed pure/mutating execution strategy still lives in the lower-level executor
 
-## Post-v0.1 hardening that still matters
+### T5. Tool input validation is weaker than the tool schemas imply
+Status: active
+Priority: medium
+Area: tool system
 
-### H1. `file_write` has no stale-write safety model
-Severity: Medium
+What exists today:
+- tools expose schemas
+- runtime validation is not full JSON Schema enforcement before execution
 
-`file_edit` participates in read-state / stale-write protection. `file_write` does not. An agent can overwrite existing content it never read.
+Why this matters:
+- the written tool contract implies stronger schema-based validation than the current implementation guarantees
+- this increases drift between provider-facing tool definitions and actual execution-time checks
 
-Fix direction:
-- require a recent read before overwriting existing non-empty files, or
-- route `file_write` through the same read-state invariants as `file_edit`
+Done means:
+- tool inputs are validated against their declared schemas before execution
+- user/agent-facing errors clearly identify missing or invalid fields
+- validation behavior is covered by tests
 
-### H2. Prompt-cache latching is still absent
-Severity: Medium
+### T6. Per-conversation provider/model defaults are only partially realized
+Status: closed 2026-04-08
+Priority: medium
+Area: providers / conversations
 
-This is mostly cost/efficiency debt, not correctness debt.
+What landed:
+- WebSocket turn resolution now falls back to stored conversation provider/model defaults before runtime defaults
+- new WebSocket-created conversations persist the resolved provider/model defaults at creation time
+- existing conversations persist updated provider/model selections when a turn supplies a new override
 
-Fix direction:
-- separate stable prompt prefix from dynamic suffix
-- apply provider prompt-cache controls on the stable segments where supported
+Evidence:
+- `internal/server/websocket.go`
+- `internal/conversation/manager.go`
+- `internal/db/query/conversation.sql`
+- `internal/server/websocket_test.go`
 
-### H3. Token-budget reserve/estimate/reconcile tracking is still thin
-Severity: Medium
+Notes:
+- REST create/get already exposed the fields; the missing part was live runtime participation and WebSocket persistence behavior
 
-Budgeting works, but there is no explicit reserve -> estimate -> reconcile tracker.
+### T7. WebSocket protocol has drifted from the written spec
+Status: active
+Priority: medium
+Area: web interface / streaming
 
-Fix direction:
-- add a dedicated budget tracker with output headroom reservation
-- reconcile planned vs actual token use
-- expose discrepancies in observability surfaces
+What exists today:
+- the protocol works, but event names and payload shapes differ from the original spec docs
+- example: the server emits `conversation_created` rather than the spec’s earlier event naming
 
-### H4. Local LLM stack UX is correct but still a bit rough
-Severity: Low-Medium
+Evidence:
+- `internal/server/websocket.go:292-301`
+- `internal/server/websocket.go:202-239`
 
-Still worth cleaning later:
-- container names are global and can conflict across multiple repo-owned stacks on one machine
-- `llm up` surfaces raw Docker conflict text for stale container-name conflicts
-- `llm status` always prints remediation lines, even when healthy
+Why this matters:
+- this is a maintenance/documentation mismatch
+- future frontend/backend work has to infer the real contract from code rather than the spec docs
 
-This is not an architecture blocker anymore.
+Done means:
+- either the protocol is reconciled back to the spec, or the spec docs are updated to the real contract
+- event names, payloads, and status states are documented consistently in one place
 
-### H5. Security hardening remains deferred for localhost-only usage
-Severity: Low for single-user localhost / High for any networked deployment
+### T8. The UI still lacks some spec-level surfaces
+Status: active
+Priority: medium
+Area: web interface
 
-Still deferred:
-- gate any insecure TLS behavior behind dev mode only
-- replace shell denylist substring matching with token-aware matching
-- validate git refs defensively
-- audit/finish LanceDB filter escaping
+What exists today:
+- the backend exposes project endpoints for tree/file access
+- the frontend routes currently cover conversation list, conversation, and settings only
 
----
+Evidence:
+- `internal/server/project.go:33-35`
+- `web/src/main.tsx:15-50`
 
-## Cleanup / docs debt
+Why this matters:
+- the implementation is missing some of the product surfaces implied by the specs, especially file/browser-style navigation
 
-### D1. Reconcile v0.1-complete docs vs v0.2-active docs
-Severity: Low
+Done means:
+- either the missing UI surfaces are implemented, or the specs are narrowed to the actual supported product scope
 
-Status: mostly done. The root README, handoff, TECH-DEBT, brain spec, context-assembly spec, and inspector/metrics docs now describe the current proactive-brain and signal-flow observability story.
+### T9. Project IDs do not match the original UUIDv7 data-model intent
+Status: active
+Priority: low
+Area: data model
 
-Remaining cleanup direction:
-- continue deleting or archiving stale one-off root docs from the old harness closeout phase
-- keep future doc updates honest about keyword-backed brain retrieval vs any still-hypothetical semantic/index path
-- avoid reintroducing old REST-only language unless the runtime actually depends on it again
+What exists today:
+- conversation IDs are UUIDv7-backed
+- project records use `projectRoot` as the project ID during initialization
 
-### D2. Decide whether to stop registering unused built-in providers internally
-Severity: Low-Medium
+Evidence:
+- `internal/conversation/manager.go:90-123`
+- `cmd/sirtopham/init.go:238-247`
 
-Operator-facing surfaces are now filtered correctly for explicitly scoped project YAMLs, which fixes the practical bug. Internally, built-in provider defaults may still be present in the merged config.
+Why this matters:
+- this is direct drift from the original data-model spec
+- it may be fine product-wise, but the docs and implementation do not currently agree
 
-Fix direction:
-- either keep this as an intentional internal-defaults model and document it
-- or tighten config loading/build-provider registration so explicitly scoped configs do not carry unused built-ins at all
+Done means:
+- either projects move to UUIDv7 IDs, or the spec/docs are updated to make path-keyed single-project identity explicit
 
-This is now cleanup, not a user-facing blocker.
+### T10. `sub_calls.message_id` linkage is not wired through
+Status: active
+Priority: medium
+Area: data model / observability
 
----
+What exists today:
+- the schema supports message-linked sub-calls
+- tracked provider persistence currently does not populate `message_id`
 
-## Status note
+Evidence:
+- `internal/provider/tracking/tracked.go:222-245`
 
-v0.1 is in good enough shape to stop treating every remaining issue as a harness blocker.
-The next serious implementation phase should be v0.2 brain work, with only selective hardening/polish taken ahead of it when there is concrete evidence it matters.
+Why this matters:
+- the data model suggests stronger per-message linkage than the current runtime records
+- this weakens forensic/debug/metrics joins relative to the intended design
+
+Done means:
+- sub-call persistence is linked to the corresponding assistant message row when available
+- tests cover the linkage behavior and fallback cases
+
+### T11. Brain implementation is intentionally narrower than the original broad spec
+Status: active, but likely docs/product reconciliation rather than pure implementation debt
+Priority: medium
+Area: project brain
+
+What exists today:
+- runtime brain behavior is MCP/vault-backed keyword retrieval
+- proactive brain retrieval is live in context assembly
+- semantic/index-backed brain retrieval is not implemented as a production path
+
+Evidence:
+- `cmd/sirtopham/serve.go:167-174`
+- `internal/context/retrieval.go:327-379`
+
+Why this matters:
+- this is one of the biggest spec-to-product shifts in the repo
+- some of the old brain spec should likely be treated as stale architecture, not pending implementation
+
+Done means:
+- either semantic brain indexing/retrieval is actually implemented, or the spec/docs are fully rewritten around the supported MCP/vault keyword contract
+
+## Spec drift / documentation reconciliation items
+
+These are important, but they may be better treated as doc cleanup than as engineering debt.
+
+### D1. Specs still read as pre-implementation in places where code is now settled
+Examples:
+- SQLite driver choice is no longer pending
+- LanceDB is no longer hypothetical in the current codebase
+- some protocol and runtime decisions have already stabilized in implementation
+
+Done means:
+- docs/specs are updated so current architecture docs describe the real shipped/runtime contract
+
+### D2. Tool contract naming drift (`old_str`/`new_str` vs older spec wording)
+Evidence:
+- `internal/tool/file_edit.go:21-35`
+
+Done means:
+- either the tool contract is renamed to match the spec, or the docs are updated to the real parameter names
+
+### D3. Current runtime is stronger than some stale docs in a few areas
+Examples:
+- tool-result normalization/compression is real
+- cancellation cleanup is more robust than the original draft implied
+- provider/auth/runtime surfaces are more mature than the old pre-implementation docs suggest
+
+Done means:
+- docs distinguish closed work from actual open debt so this file stays focused on live gaps
+
+## Recommended order of attack
+
+1. T1 runtime describer wiring
+2. T2 structural graph runtime wiring
+3. T3 convention retrieval implementation
+4. T10 sub-call to message linkage
+5. T5 stronger schema validation
+6. T7/T8/T9/T11 doc and product-contract reconciliation
+
+## Notes
+
+This file should stay focused on current, unresolved gaps.
+Resolved historical cleanup slices should live in git history or dedicated audit notes, not remain in TECH-DEBT once closed.

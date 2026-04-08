@@ -30,6 +30,9 @@ type mockConversationService struct {
 	lastGetID         string
 	lastDeleteID      string
 	lastSearchQuery   string
+	lastSetID         string
+	lastSetProvider   *string
+	lastSetModel      *string
 
 	getErr    error
 	listErr   error
@@ -44,12 +47,20 @@ func (m *mockConversationService) Create(_ context.Context, projectID string, op
 	if m.createErr != nil {
 		return nil, m.createErr
 	}
+	createOpts := &conversation.CreateOptions{}
+	for _, opt := range opts {
+		opt(createOpts)
+	}
 	c := &conversation.Conversation{
 		ID:        "conv-new-123",
 		ProjectID: projectID,
+		Title:     createOpts.Title,
+		Model:     createOpts.Model,
+		Provider:  createOpts.Provider,
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}
+	m.conversations = append(m.conversations, c)
 	return c, nil
 }
 
@@ -79,6 +90,21 @@ func (m *mockConversationService) List(_ context.Context, projectID string, limi
 func (m *mockConversationService) Delete(_ context.Context, id string) error {
 	m.lastDeleteID = id
 	return m.deleteErr
+}
+
+func (m *mockConversationService) SetRuntimeDefaults(_ context.Context, conversationID string, provider, model *string) error {
+	m.lastSetID = conversationID
+	m.lastSetProvider = provider
+	m.lastSetModel = model
+	for _, c := range m.conversations {
+		if c.ID != conversationID {
+			continue
+		}
+		c.Provider = provider
+		c.Model = model
+		break
+	}
+	return nil
 }
 
 func (m *mockConversationService) GetMessages(_ context.Context, conversationID string) ([]conversation.MessageView, error) {

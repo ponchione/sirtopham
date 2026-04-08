@@ -14,6 +14,7 @@ INSERT INTO context_reports (
     budget_total,
     budget_used,
     budget_breakdown_json,
+    token_budget_json,
     included_count,
     excluded_count,
     agent_used_search_tool,
@@ -21,7 +22,7 @@ INSERT INTO context_reports (
     context_hit_rate,
     created_at
 ) VALUES (
-    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 );
 
 -- name: UpdateContextReportQuality :exec
@@ -50,6 +51,7 @@ SELECT
     budget_total,
     budget_used,
     budget_breakdown_json,
+    token_budget_json,
     included_count,
     excluded_count,
     agent_used_search_tool,

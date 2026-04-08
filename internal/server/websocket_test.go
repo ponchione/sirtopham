@@ -71,7 +71,9 @@ func (m *mockAgentService) getSubscribed() []agent.EventSink {
 
 func setupWSTest(t *testing.T, agentMock *mockAgentService) (string, *mockConversationService) {
 	t.Helper()
-	convMock := &mockConversationService{}
+	conv123 := &conversation.Conversation{ID: "conv-123", ProjectID: "test-project", CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	conv1 := &conversation.Conversation{ID: "conv-1", ProjectID: "test-project", CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	convMock := &mockConversationService{conversations: []*conversation.Conversation{conv123, conv1}}
 	srv := server.New(server.Config{Host: "127.0.0.1", Port: 0, DevMode: true}, newTestLogger())
 	cfg := &config.Config{ProjectRoot: "test-project", Providers: map[string]config.ProviderConfig{
 		"codex": {Type: "codex", ContextLength: 200000},
@@ -255,6 +257,89 @@ func TestWebSocketMessageCreatesConversation(t *testing.T) {
 	}
 
 	conn.Close(websocket.StatusNormalClosure, "test done")
+}
+
+func TestWebSocketNewConversationPersistsResolvedRuntimeDefaults(t *testing.T) {
+	turnStarted := make(chan agent.RunTurnRequest, 1)
+	agentMock := &mockAgentService{runTurnFn: func(ctx context.Context, req agent.RunTurnRequest) (*agent.TurnResult, error) {
+		turnStarted <- req
+		return &agent.TurnResult{}, nil
+	}}
+	base, convMock := setupWSTest(t, agentMock)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	wsURL := "ws" + base[4:] + "/api/ws"
+	conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	if err != nil {
+		t.Fatalf("websocket dial failed: %v", err)
+	}
+	defer conn.CloseNow()
+
+	msg := map[string]string{"type": "message", "content": "New chat", "provider": "local", "model": "qwen-coder"}
+	data, _ := json.Marshal(msg)
+	if err := conn.Write(ctx, websocket.MessageText, data); err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+	if _, _, err := conn.Read(ctx); err != nil {
+		t.Fatalf("read conversation_created failed: %v", err)
+	}
+	select {
+	case req := <-turnStarted:
+		if req.Provider != "local" || req.Model != "qwen-coder" {
+			t.Fatalf("RunTurn provider/model = %q/%q, want local/qwen-coder", req.Provider, req.Model)
+		}
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for RunTurn")
+	}
+	createOpts := &conversation.CreateOptions{}
+	for _, opt := range convMock.lastCreateOpts {
+		opt(createOpts)
+	}
+	if createOpts.Provider == nil || *createOpts.Provider != "local" {
+		t.Fatalf("created provider default = %#v, want local", createOpts.Provider)
+	}
+	if createOpts.Model == nil || *createOpts.Model != "qwen-coder" {
+		t.Fatalf("created model default = %#v, want qwen-coder", createOpts.Model)
+	}
+}
+
+func TestWebSocketExistingConversationUsesStoredRuntimeDefaults(t *testing.T) {
+	turnStarted := make(chan agent.RunTurnRequest, 1)
+	agentMock := &mockAgentService{runTurnFn: func(ctx context.Context, req agent.RunTurnRequest) (*agent.TurnResult, error) {
+		turnStarted <- req
+		return &agent.TurnResult{}, nil
+	}}
+	base, convMock := setupWSTest(t, agentMock)
+	providerName := "local"
+	modelName := "qwen-coder"
+	convMock.conversations = []*conversation.Conversation{{ID: "conv-1", ProjectID: "test-project", Provider: &providerName, Model: &modelName, CreatedAt: time.Now(), UpdatedAt: time.Now()}}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	wsURL := "ws" + base[4:] + "/api/ws"
+	conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	if err != nil {
+		t.Fatalf("websocket dial failed: %v", err)
+	}
+	defer conn.CloseNow()
+
+	msg := map[string]string{"type": "message", "conversation_id": "conv-1", "content": "hello"}
+	data, _ := json.Marshal(msg)
+	if err := conn.Write(ctx, websocket.MessageText, data); err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+	select {
+	case req := <-turnStarted:
+		if req.Provider != "local" || req.Model != "qwen-coder" {
+			t.Fatalf("RunTurn provider/model = %q/%q, want local/qwen-coder", req.Provider, req.Model)
+		}
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for RunTurn")
+	}
+	if convMock.lastSetID != "" {
+		t.Fatalf("unexpected runtime-default persistence for unchanged conversation: %q", convMock.lastSetID)
+	}
 }
 
 func TestWebSocketUsesRoutingDefaultProvider(t *testing.T) {

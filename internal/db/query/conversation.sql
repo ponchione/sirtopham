@@ -121,5 +121,10 @@ UPDATE conversations
 SET title = ?, updated_at = ?
 WHERE id = ?;
 
+-- name: SetConversationRuntimeDefaults :exec
+UPDATE conversations
+SET model = ?, provider = ?, updated_at = ?
+WHERE id = ?;
+
 -- name: CountConversations :one
 SELECT COUNT(*) FROM conversations WHERE project_id = ?;

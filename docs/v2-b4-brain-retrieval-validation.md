@@ -24,6 +24,27 @@ Primary validated runtime:
 
 The note exists only in the brain vault, not in the repo code. That makes it a useful operator-facing proof that the answer came from brain retrieval rather than ordinary code RAG.
 
+## Maintained scenarios
+
+The validation package now carries three maintained prompt families:
+
+1. `runtime-proof`
+   - prompt: `What is the runtime brain proof canary phrase?`
+   - expected note: `notes/runtime-brain-proof-apr-07.md`
+   - expected answer evidence: `ORBIT LANTERN 642`
+
+2. `rationale-layout`
+   - prompt: `From our rationale notes, why did we choose the minimal content-first layout for the site? Answer in one short paragraph.`
+   - expected note: `notes/minimal-content-first-layout-rationale.md`
+   - expected answer evidence: `minimal content-first layout because`
+
+3. `debug-history-vite`
+   - prompt: `From our past debugging notes, what was the root cause of the vite rebuild loop and what was the fix? Answer in two sentences.`
+   - expected note: `notes/past-debugging-vite-rebuild-loop.md`
+   - expected answer evidence: `src/generated/index.ts`
+
+The first scenario is the narrow no-detour canary. The second and third scenarios are the maintained broader live proofs for rationale/decision notes and prior-debugging/history notes. Those broader scenarios allow explicit brain tool detours when they happen, but they still fail closed unless the persisted proactive context report shows the expected brain hit, non-zero brain budget, and `prefer_brain_context` signal flow.
+
 ## Exact prompt
 
 Use this as the default first-turn prompt:
@@ -39,22 +60,30 @@ Expected answer shape:
 
 From the repo root:
 
-`python3 scripts/validate_brain_retrieval.py --base-url http://localhost:8092 --expected-note notes/runtime-brain-proof-apr-07.md`
+`python3 scripts/validate_brain_retrieval.py --base-url http://localhost:8092 --scenario runtime-proof`
+
+Broader rationale-family proof:
+
+`python3 scripts/validate_brain_retrieval.py --base-url http://localhost:8092 --scenario rationale-layout`
+
+Broader prior-debugging/history proof:
+
+`python3 scripts/validate_brain_retrieval.py --base-url http://localhost:8092 --scenario debug-history-vite`
 
 Optional looser mode for exploratory prompts that may still choose reactive note reads:
 
 `python3 scripts/validate_brain_retrieval.py --base-url http://localhost:8092 --prompt "What is the runtime brain proof canary phrase for this project? Answer in one sentence and cite the source note path." --expected-note notes/runtime-brain-proof-apr-07.md --allow-tool-calls`
 
-The default command is the real V2-B4 proof because it requires the canary prompt to complete without explicit tool detours while still proving the proactive retrieval path through the persisted context report and signal stream.
+The default runtime-proof command is still the strictest canary because it requires the brain-only fact prompt to complete without explicit tool detours while still proving the proactive retrieval path through the persisted context report and signal stream. The rationale and debug-history scenarios are the maintained broader live proofs that V2-B1/V2-B2 now require.
 
 ## Passing conditions
 
 The script must exit 0 and print JSON with `"status": "passed"`.
 
-Required evidence in the output:
-- `assistant_text` includes `ORBIT LANTERN 642`
+Required evidence in the output for every scenario:
+- `assistant_text` includes the scenario's expected phrase
 - `semantic_queries` is non-empty
-- `brain_results` contains `notes/runtime-brain-proof-apr-07.md`
+- `brain_results` contains the scenario's expected note
 - `budget_breakdown.brain > 0`
 - `signal_stream` is non-empty and includes at least:
   - a `semantic_query` entry
