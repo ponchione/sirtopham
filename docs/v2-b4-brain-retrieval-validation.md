@@ -1,16 +1,18 @@
 # V2-B4 proactive brain retrieval validation
 
-This is the maintained live validation package for the current v0.2 brain-retrieval contract.
+This is the maintained live validation package for the current v0.2+ brain-retrieval contract.
 
 What it proves:
 - a fresh turn against the running app can answer a brain-only fact from proactive context assembly
 - the stored context report shows the actual semantic queries, included brain hits, and non-zero brain budget
 - the ordered `/api/metrics/conversation/:id/context/:turn/signals` endpoint exposes the signal/query flow used to make the retrieval decision
+- when a scenario expects structural retrieval, the matched `brain_results` hit can also be checked for `match_mode`, `match_sources`, and `graph_hop_depth`
+- the package does not pin the canary to a specific lexical-vs-semantic source unless the local vault/runtime makes that stable on purpose
 
 What it does not claim:
-- this is not proof of semantic/index-backed brain retrieval
+- this is not a blanket guarantee that semantic or graph retrieval will outperform lexical retrieval on every real vault
 - this is not a guarantee that the model will never choose a reactive brain tool detour for other prompts
-- this package is intentionally scoped to the current operator-facing truth: MCP/vault-backed keyword retrieval is live today
+- this package is intentionally scoped to the current operator-facing truth: hybrid brain retrieval is now real at runtime, but live confidence still depends on the actual note corpus and graph quality
 
 ## Runtime assumptions
 
@@ -26,7 +28,7 @@ The note exists only in the brain vault, not in the repo code. That makes it a u
 
 ## Maintained scenarios
 
-The validation package now carries three maintained prompt families:
+The validation package now carries six maintained prompt families:
 
 1. `runtime-proof`
    - prompt: `What is the runtime brain proof canary phrase?`
@@ -43,7 +45,36 @@ The validation package now carries three maintained prompt families:
    - expected note: `notes/past-debugging-vite-rebuild-loop.md`
    - expected answer evidence: `src/generated/index.ts`
 
-The first scenario is the narrow no-detour canary. The second and third scenarios are the maintained broader live proofs for rationale/decision notes and prior-debugging/history notes. Those broader scenarios allow explicit brain tool detours when they happen, but they still fail closed unless the persisted proactive context report shows the expected brain hit, non-zero brain budget, and `prefer_brain_context` signal flow.
+4. `debug-history-lunar-hinge-graph`
+   - prompt: `From our past debugging notes, what phrase sits behind LUNAR HINGE 91?`
+   - expected note: `notes/past-debugging-deep-panel-fix.md`
+   - expected answer evidence: `DEEP PANEL 23`
+   - structural expectation: matched `brain_results` hit includes `match_sources: [.., "graph", ..]` with `graph_hop_depth >= 1`
+
+5. `debug-history-saturn-rail-graph`
+   - prompt: `From our past debugging notes, what follow-on fix canary phrase sits behind SATURN RAIL?`
+   - expected note: `notes/past-debugging-saturn-rail-fix.md`
+   - expected answer evidence: `PANEL LOCK 58`
+   - structural expectation: matched `brain_results` hit includes `match_sources: [.., "graph", ..]` with `graph_hop_depth >= 1`
+
+6. `layout-graph-saturn-rail`
+   - prompt: `From our layout graph notes, what linked layout canary phrase sits behind SATURN RAIL?`
+   - expected note: `notes/layout-graph-proof.md`
+   - expected answer evidence: `PROSE FIRST 17`
+   - structural expectation: matched `brain_results` hit includes `match_sources: [.., "graph", ..]` with `graph_hop_depth >= 1`, while `prefer_brain_context` remains present and code RAG stays out of the budget
+
+The first scenario is the narrow no-detour canary. The second and third scenarios are the maintained broader live proofs for rationale/decision notes and prior-debugging/history notes. The fourth through sixth scenarios are maintained graph-aware proofs for the seeded bridge/fix and layout-graph pairs. The broader scenarios allow explicit brain tool detours when they happen, but they still fail closed unless the persisted proactive context report shows the expected brain hit, non-zero brain budget, and `prefer_brain_context` signal flow.
+
+On the current validated `my-website` vault/runtime, the strict canary and the broader rationale/debug-history scenarios all match through the hybrid runtime path. The matched hit currently lands as `semantic` for the first three scenarios, while the maintained LUNAR HINGE, SATURN RAIL debug-history, and SATURN RAIL layout-graph canaries land as structural hybrid hits (`match_sources` includes `graph`, `graph_hop_depth = 1`) for their respective target notes. The latest full six-scenario package rerun on 2026-04-09 stayed green on the live `:8092` runtime.
+
+The validator can now also enforce optional graph-aware expectations on the matched `brain_results` hit:
+- `--expected-match-mode`
+- `--expected-match-source`
+- `--min-graph-hop-depth`
+
+Use those only for scenarios whose target vault notes/links are stable enough to support a structural canary; do not overconstrain the general canary scenarios unless the local vault contract is intentionally fixed.
+
+Current real-vault note: the first live pass on the validated `my-website` runtime had `Brain links indexed: 0`, so there was initially no structural canary to maintain. We then seeded linked validation notes and fixed parser/index truth so `.md` wikilink targets persist with exact document paths, and `sirtopham index brain --config /tmp/my-website-runtime-8092.yaml` now reports non-zero links. A follow-up proactive graph-debugging slice found the remaining blocker: `internal/context/brain_search.go` was skipping structural annotation whenever a direct semantic hit had already seeded `bestDepth = 0`, so one-hop graph evidence never attached to already-matched notes. The next slice tightened the reverse-edge policy too: direct bridge-note semantic seeds no longer get noisy `hybrid-backlink` promotion just because the linked fix note points back at them, while the intended fix-side target still keeps `hybrid-graph` annotation. With that cleanup in place, both the LUNAR HINGE 91 / DEEP PANEL 23 pair and the SATURN RAIL / PANEL LOCK 58 pair now yield stable proactive structural evidence in persisted `brain_results`, so this package maintains graph-aware scenarios for both pairs.
 
 ## Exact prompt
 
@@ -70,6 +101,18 @@ Broader prior-debugging/history proof:
 
 `python3 scripts/validate_brain_retrieval.py --base-url http://localhost:8092 --scenario debug-history-vite`
 
+Maintained graph-aware proof for the LUNAR HINGE bridge/fix pair:
+
+`python3 scripts/validate_brain_retrieval.py --base-url http://localhost:8092 --scenario debug-history-lunar-hinge-graph`
+
+Maintained graph-aware proof for the SATURN RAIL bridge/fix pair:
+
+`python3 scripts/validate_brain_retrieval.py --base-url http://localhost:8092 --scenario debug-history-saturn-rail-graph`
+
+Maintained graph-aware proof for the SATURN RAIL layout-graph pair:
+
+`python3 scripts/validate_brain_retrieval.py --base-url http://localhost:8092 --scenario layout-graph-saturn-rail`
+
 Optional looser mode for exploratory prompts that may still choose reactive note reads:
 
 `python3 scripts/validate_brain_retrieval.py --base-url http://localhost:8092 --prompt "What is the runtime brain proof canary phrase for this project? Answer in one sentence and cite the source note path." --expected-note notes/runtime-brain-proof-apr-07.md --allow-tool-calls`
@@ -89,6 +132,11 @@ Required evidence in the output for every scenario:
   - a `semantic_query` entry
   - a `flag` entry with `value: "prefer_brain_context"`
 
+Optional structural evidence when you pass graph-aware flags:
+- `matched_brain_hit.match_mode` matches `--expected-match-mode`
+- `matched_brain_hit.match_sources` includes `--expected-match-source`
+- `matched_brain_hit.graph_hop_depth >= --min-graph-hop-depth`
+
 Useful corroboration:
 - `tool_calls` is empty for the canary prompt, or at least does not need to carry the proof by itself
 - `event_counts.context_debug == 1`
@@ -107,6 +155,7 @@ Things to confirm in the full context report:
 - `brain_results` includes the runtime proof note and not just `_log.md`
 - `budget_breakdown.brain` is non-zero
 - code RAG is absent or clearly secondary for this prompt family
+- for structural scenarios, inspect whether the matched hit carries the expected `match_mode`, `match_sources`, `graph_source_path`, and `graph_hop_depth`
 
 Things to confirm in the signal stream:
 - the ordered stream shows the same retrieval intent the analyzer produced
