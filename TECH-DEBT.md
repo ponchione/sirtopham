@@ -34,9 +34,9 @@ Priority: high
 Area: project brain / retrieval quality
 
 Current truth
-- proactive MCP/vault-backed keyword brain retrieval is live and useful
-- semantic/index-backed brain retrieval is still future work
-- current operator confidence depends heavily on note wording quality and keyword matchability
+- proactive brain retrieval is now hybrid at runtime: MCP/vault keyword hits plus the derived semantic brain index can both feed context assembly
+- reactive `brain_search` now exposes real semantic/auto runtime behavior and graph-aware labeling, while `brain_read include_backlinks` prefers derived `brain_links` when available
+- current operator confidence still depends on note wording quality, graph quality, and on how well the hybrid runtime path matches real vault usage
 
 Why it matters
 - the brain can help daily, but it is still easiest on notes with strong textual anchors
@@ -58,8 +58,9 @@ Priority: medium
 Area: indexing / operator ergonomics
 
 Current truth
-- retrieval freshness depends on running `sirtopham index`
-- `serve` does not auto-reindex
+- code retrieval freshness depends on running `sirtopham index`
+- brain freshness depends on running `sirtopham index brain`
+- `serve` does not auto-reindex, but brain stale/clean status is now surfaced in Settings and `/api/project`
 
 Why it matters
 - this is acceptable, but it adds friction and is easy to forget during real use
@@ -105,4 +106,4 @@ Primary references
 ## Notes
 - Keep this file focused on unresolved current gaps only.
 - Closed audit items belong in git history and session handoff, not here.
-- The next best work is likely a real daily-driver validation pass and/or a deliberate decision about whether brain retrieval remains keyword-only or grows a semantic/index-backed path.
+- The maintained six-scenario brain-retrieval validation package is currently green on the live `:8092` runtime; the next best work should come from broader daily-driver validation, ranking/selection quality, or wider real-vault coverage rather than more prompt-family routing churn.
