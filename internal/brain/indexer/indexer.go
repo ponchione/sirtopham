@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -180,9 +179,5 @@ func nullableJSON(data []byte) sql.NullString {
 }
 
 func isOperationalBrainDocument(docPath string) bool {
-	cleaned := strings.Trim(filepath.ToSlash(strings.TrimSpace(docPath)), "/")
-	if cleaned == "" {
-		return false
-	}
-	return filepath.Base(cleaned) == "_log.md"
+	return brain.IsOperationalDocument(docPath)
 }

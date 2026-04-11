@@ -195,9 +195,11 @@ func consumeBrainHit(remaining *int, brainRemaining *int, budget *BudgetResult, 
 	}
 }
 
+const defaultMaxBrainTokens = 8000
+
 func brainTokenBudget(cfg config.BrainConfig) int {
 	if cfg.MaxBrainTokens <= 0 {
-		return -1
+		return defaultMaxBrainTokens
 	}
 	return cfg.MaxBrainTokens
 }

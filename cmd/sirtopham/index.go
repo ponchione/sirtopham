@@ -7,8 +7,11 @@ import (
 	"io"
 	"log/slog"
 	"strings"
+	"time"
 
 	brainindexer "github.com/ponchione/sirtopham/internal/brain/indexer"
+	brainindexstate "github.com/ponchione/sirtopham/internal/brain/indexstate"
+	"github.com/ponchione/sirtopham/internal/codeintel"
 	"github.com/ponchione/sirtopham/internal/codeintel/embedder"
 	"github.com/ponchione/sirtopham/internal/codestore"
 	appconfig "github.com/ponchione/sirtopham/internal/config"
@@ -20,7 +23,9 @@ import (
 var runIndexService = appindex.Run
 var runBrainIndexCommand = runBrainIndex
 var openBrainVectorStore = codestore.Open
-var newBrainEmbedder = embedder.New
+var newBrainEmbedder = func(cfg appconfig.Embedding) codeintel.Embedder { return embedder.New(cfg) }
+var buildBrainIndexBackend = buildBrainBackend
+var markBrainIndexFresh = brainindexstate.MarkFresh
 
 func newIndexCmd(configPath *string) *cobra.Command {
 	var (
@@ -98,7 +103,7 @@ func runBrainIndex(ctx context.Context, cfg *appconfig.Config) (brainindexer.Res
 		return brainindexer.Result{}, fmt.Errorf("brain index: brain.enabled must be true")
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	backend, cleanup, err := buildBrainBackend(ctx, cfg.Brain, logger)
+	backend, cleanup, err := buildBrainIndexBackend(ctx, cfg.Brain, logger)
 	if err != nil {
 		return brainindexer.Result{}, fmt.Errorf("brain index: build brain backend: %w", err)
 	}
@@ -142,6 +147,9 @@ func runBrainIndex(ctx context.Context, cfg *appconfig.Config) (brainindexer.Res
 	semanticResult, err := brainindexer.NewSemantic(backend, store, newBrainEmbedder(cfg.Embedding)).RebuildProject(ctx, cfg.ProjectName(), previousPaths)
 	if err != nil {
 		return brainindexer.Result{}, fmt.Errorf("brain index: semantic rebuild: %w", err)
+	}
+	if err := markBrainIndexFresh(cfg.ProjectRoot, time.Now().UTC()); err != nil {
+		return brainindexer.Result{}, fmt.Errorf("brain index: persist freshness state: %w", err)
 	}
 	result.SemanticChunksIndexed = semanticResult.SemanticChunksIndexed
 	result.SemanticDocumentsDeleted = semanticResult.SemanticDocumentsDeleted

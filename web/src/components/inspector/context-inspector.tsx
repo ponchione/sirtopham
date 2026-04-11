@@ -496,6 +496,8 @@ function BrainResultsList({ results }: { results: BrainResult[] }) {
             subtitle={result.vault_path ?? result.document_path}
             meta={[
               result.match_mode,
+              result.graph_hop_depth != null ? `hop ${result.graph_hop_depth}` : undefined,
+              result.graph_source_path ? `via ${result.graph_source_path}` : undefined,
               result.exclusion_reason,
             ].filter(Boolean) as string[]}
           />

@@ -57,9 +57,15 @@ type RAGHit struct {
 type BrainHit struct {
 	DocumentPath    string   `json:"document_path"`
 	Title           string   `json:"title,omitempty"`
+	SectionHeading  string   `json:"section_heading,omitempty"`
 	Snippet         string   `json:"snippet,omitempty"`
+	LexicalScore    float64  `json:"lexical_score,omitempty"`
+	SemanticScore   float64  `json:"semantic_score,omitempty"`
 	MatchScore      float64  `json:"match_score"`
 	MatchMode       string   `json:"match_mode,omitempty"`
+	MatchSources    []string `json:"match_sources,omitempty"`
+	GraphSourcePath string   `json:"graph_source_path,omitempty"`
+	GraphHopDepth   int      `json:"graph_hop_depth,omitempty"`
 	Tags            []string `json:"tags,omitempty"`
 	Included        bool     `json:"included,omitempty"`
 	ExclusionReason string   `json:"exclusion_reason,omitempty"`

@@ -34,11 +34,15 @@ func main() {
 	authCmd := newAuthCmd(&configPath)
 	doctorCmd := newDoctorCmd(&configPath)
 	serveCmd := newServeCmd(&configPath)
+	runCmd := newRunCmd(&configPath)
 	brainServeCmd := newBrainServeCmd()
 
-	rootCmd.AddCommand(serveCmd, brainServeCmd, initCmd, indexCmd, configCmd, llmCmd, authCmd, doctorCmd)
+	rootCmd.AddCommand(serveCmd, runCmd, brainServeCmd, initCmd, indexCmd, configCmd, llmCmd, authCmd, doctorCmd)
 
 	if err := rootCmd.Execute(); err != nil {
+		if coded, ok := err.(interface{ ExitCode() int }); ok {
+			os.Exit(coded.ExitCode())
+		}
 		os.Exit(1)
 	}
 }

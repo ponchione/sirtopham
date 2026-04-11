@@ -98,11 +98,13 @@ type retrievalBrainSearcherStub struct {
 	delay       time.Duration
 	calls       int
 	gotQueries  []string
+	gotRequests []BrainSearchRequest
 }
 
-func (s *retrievalBrainSearcherStub) SearchKeyword(ctx stdctx.Context, query string) ([]brain.SearchHit, error) {
+func (s *retrievalBrainSearcherStub) Search(ctx stdctx.Context, request BrainSearchRequest) ([]BrainSearchResult, error) {
 	s.calls++
-	s.gotQueries = append(s.gotQueries, query)
+	s.gotQueries = append(s.gotQueries, request.Query)
+	s.gotRequests = append(s.gotRequests, request)
 	if s.delay > 0 {
 		select {
 		case <-time.After(s.delay):
@@ -113,10 +115,24 @@ func (s *retrievalBrainSearcherStub) SearchKeyword(ctx stdctx.Context, query str
 	if s.err != nil {
 		return nil, s.err
 	}
+	var hits []brain.SearchHit
 	if s.hitsByQuery != nil {
-		return append([]brain.SearchHit(nil), s.hitsByQuery[query]...), nil
+		hits = append([]brain.SearchHit(nil), s.hitsByQuery[request.Query]...)
+	} else {
+		hits = append([]brain.SearchHit(nil), s.hits...)
 	}
-	return append([]brain.SearchHit(nil), s.hits...), nil
+	results := make([]BrainSearchResult, 0, len(hits))
+	for _, hit := range hits {
+		results = append(results, BrainSearchResult{
+			DocumentPath: hit.Path,
+			Snippet:      hit.Snippet,
+			LexicalScore: hit.Score,
+			FinalScore:   hit.Score,
+			MatchMode:    "keyword",
+			MatchSources: []string{"keyword"},
+		})
+	}
+	return results, nil
 }
 
 func TestRetrievalOrchestratorNormalizesBrainKeywordQueries(t *testing.T) {
@@ -322,6 +338,43 @@ func TestRetrievalOrchestratorSkipsSemanticSearchForBrainPreferredTurns(t *testi
 	}
 	if len(results.BrainHits) != 1 || results.BrainHits[0].DocumentPath != "notes/runtime-brain-proof-apr-07.md" {
 		t.Fatalf("BrainHits = %v, want retained brain hit", results.BrainHits)
+	}
+}
+
+func TestRetrievalOrchestratorSkipsSemanticSearchForLayoutGraphBrainPrompt(t *testing.T) {
+	searcher := &retrievalSearcherStub{results: []codeintel.SearchResult{{
+		Chunk: codeintel.Chunk{ID: "chunk-1", FilePath: "src/components/SideNav.tsx", Name: "SideNav"},
+		Score: 0.91,
+	}}}
+	brainSearcher := &retrievalBrainSearcherStub{hitsByQuery: map[string][]brain.SearchHit{
+		"from our layout graph notes what linked layout canary phrase sits behind saturn rail": {
+			{Path: "notes/layout-graph-bridge.md", Snippet: "SATURN RAIL is the bridge term.", Score: 0.52},
+			{Path: "notes/layout-graph-proof.md", Snippet: "The linked layout canary phrase is PROSE FIRST 17.", Score: 0.50},
+		},
+	}}
+	orchestrator := NewRetrievalOrchestrator(searcher, nil, NoopConventionSource{}, brainSearcher, t.TempDir())
+	analyzer := RuleBasedAnalyzer{}
+	prompt := "From our layout graph notes, what linked layout canary phrase sits behind SATURN RAIL?"
+	needs := analyzer.AnalyzeTurn(prompt, nil)
+
+	results, err := orchestrator.Retrieve(stdctx.Background(), needs, []string{"from our layout graph notes what linked layout canary phrase sits behind saturn rail"}, config.ContextConfig{})
+	if err != nil {
+		t.Fatalf("Retrieve returned error: %v", err)
+	}
+	if !needs.PreferBrainContext {
+		t.Fatal("PreferBrainContext = false, want true for layout graph brain prompt")
+	}
+	if searcher.calls != 0 {
+		t.Fatalf("searcher calls = %d, want 0 when layout graph prompt prefers brain context", searcher.calls)
+	}
+	if len(results.RAGHits) != 0 {
+		t.Fatalf("RAGHits = %v, want no semantic search results for layout graph brain prompt", results.RAGHits)
+	}
+	if len(results.BrainHits) != 2 {
+		t.Fatalf("len(BrainHits) = %d, want 2 retained layout brain hits", len(results.BrainHits))
+	}
+	if results.BrainHits[1].DocumentPath != "notes/layout-graph-proof.md" {
+		t.Fatalf("second BrainHit = %+v, want layout graph proof note", results.BrainHits[1])
 	}
 }
 
@@ -595,6 +648,53 @@ func TestRetrievalOrchestratorContinuesAfterPathErrors(t *testing.T) {
 	}
 	if results.GitContext != "" {
 		t.Fatalf("GitContext = %q, want empty", results.GitContext)
+	}
+}
+
+func TestRetrievalOrchestratorPassesGraphExpansionConfigToBrainSearch(t *testing.T) {
+	brainSearcher := &retrievalBrainSearcherStub{hitsByQuery: map[string][]brain.SearchHit{
+		"runtime cache": {{Path: "notes/runtime-cache.md", Snippet: "cache reminder", Score: 0.9}},
+	}}
+	orchestrator := NewRetrievalOrchestrator(nil, nil, NoopConventionSource{}, brainSearcher, t.TempDir())
+	orchestrator.SetBrainConfig(config.BrainConfig{IncludeGraphHops: true, GraphHopDepth: 2})
+
+	results, err := orchestrator.Retrieve(stdctx.Background(), &ContextNeeds{PreferBrainContext: true}, []string{"runtime cache"}, config.ContextConfig{})
+	if err != nil {
+		t.Fatalf("Retrieve returned error: %v", err)
+	}
+	if len(results.BrainHits) != 1 {
+		t.Fatalf("len(BrainHits) = %d, want 1", len(results.BrainHits))
+	}
+	if results.BrainHits[0].GraphHopDepth != 0 || results.BrainHits[0].GraphSourcePath != "" {
+		t.Fatalf("BrainHits[0] graph metadata = %+v, want zero values for direct hit", results.BrainHits[0])
+	}
+	if len(brainSearcher.gotRequests) != 1 {
+		t.Fatalf("gotRequests = %d, want 1", len(brainSearcher.gotRequests))
+	}
+	if !brainSearcher.gotRequests[0].IncludeGraphHops || brainSearcher.gotRequests[0].GraphHopDepth != 2 {
+		t.Fatalf("brain request = %+v, want graph expansion enabled with depth 2", brainSearcher.gotRequests[0])
+	}
+	if brainSearcher.gotRequests[0].MaxResults != defaultRetrievalMaxResults {
+		t.Fatalf("brain request MaxResults = %d, want %d", brainSearcher.gotRequests[0].MaxResults, defaultRetrievalMaxResults)
+	}
+}
+
+func TestRetrievalOrchestratorPassesContextMaxChunksToBrainSearch(t *testing.T) {
+	brainSearcher := &retrievalBrainSearcherStub{hitsByQuery: map[string][]brain.SearchHit{
+		"runtime cache": {{Path: "notes/runtime-cache.md", Snippet: "cache reminder", Score: 0.9}},
+	}}
+	orchestrator := NewRetrievalOrchestrator(nil, nil, NoopConventionSource{}, brainSearcher, t.TempDir())
+	orchestrator.SetBrainConfig(config.BrainConfig{IncludeGraphHops: true, GraphHopDepth: 2})
+
+	_, err := orchestrator.Retrieve(stdctx.Background(), &ContextNeeds{PreferBrainContext: true}, []string{"runtime cache"}, config.ContextConfig{MaxChunks: 17})
+	if err != nil {
+		t.Fatalf("Retrieve returned error: %v", err)
+	}
+	if len(brainSearcher.gotRequests) != 1 {
+		t.Fatalf("gotRequests = %d, want 1", len(brainSearcher.gotRequests))
+	}
+	if brainSearcher.gotRequests[0].MaxResults != 17 {
+		t.Fatalf("brain request MaxResults = %d, want 17", brainSearcher.gotRequests[0].MaxResults)
 	}
 }
 

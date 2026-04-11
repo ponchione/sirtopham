@@ -27,6 +27,15 @@ var allowedProviderTypes = map[string]struct{}{
 	"openai-compatible": {},
 }
 
+var allowedAgentRoleToolGroups = map[string]struct{}{
+	"brain":     {},
+	"file":      {},
+	"file:read": {},
+	"git":       {},
+	"shell":     {},
+	"search":    {},
+}
+
 type Config struct {
 	ProjectRoot string `yaml:"project_root"`
 	LogLevel    string `yaml:"log_level"`
@@ -36,15 +45,26 @@ type Config struct {
 
 	ConfiguredProviders []string `yaml:"-"`
 
-	Server        ServerConfig              `yaml:"server"`
-	Routing       RoutingConfig             `yaml:"routing"`
-	Providers     map[string]ProviderConfig `yaml:"providers"`
-	Index         IndexConfig               `yaml:"index"`
-	Embedding     Embedding                 `yaml:"embedding"`
-	Agent         AgentConfig               `yaml:"agent"`
-	Context       ContextConfig             `yaml:"context"`
-	Brain         BrainConfig               `yaml:"brain"`
-	LocalServices LocalServicesConfig       `yaml:"local_services"`
+	Server        ServerConfig               `yaml:"server"`
+	Routing       RoutingConfig              `yaml:"routing"`
+	Providers     map[string]ProviderConfig  `yaml:"providers"`
+	Index         IndexConfig                `yaml:"index"`
+	Embedding     Embedding                  `yaml:"embedding"`
+	Agent         AgentConfig                `yaml:"agent"`
+	AgentRoles    map[string]AgentRoleConfig `yaml:"agent_roles"`
+	Context       ContextConfig              `yaml:"context"`
+	Brain         BrainConfig                `yaml:"brain"`
+	LocalServices LocalServicesConfig        `yaml:"local_services"`
+}
+
+type AgentRoleConfig struct {
+	SystemPrompt    string   `yaml:"system_prompt"`
+	Tools           []string `yaml:"tools"`
+	CustomTools     []string `yaml:"custom_tools"`
+	BrainWritePaths []string `yaml:"brain_write_paths"`
+	BrainDenyPaths  []string `yaml:"brain_deny_paths"`
+	MaxTurns        int      `yaml:"max_turns"`
+	MaxTokens       int      `yaml:"max_tokens"`
 }
 
 type ServerConfig struct {
@@ -145,6 +165,8 @@ type BrainConfig struct {
 	LogBrainOperations      bool     `yaml:"log_brain_operations"`
 	LintStaleDays           int      `yaml:"lint_stale_days"`
 	LintOrphanAllowlist     []string `yaml:"lint_orphan_allowlist"`
+	BrainWritePaths         []string `yaml:"brain_write_paths"`
+	BrainDenyPaths          []string `yaml:"brain_deny_paths"`
 }
 
 type LocalServicesConfig struct {
@@ -418,6 +440,9 @@ func (c *Config) Validate() error {
 	if err := c.validateNumericFields(); err != nil {
 		return err
 	}
+	if err := c.validateAgentRoles(); err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -490,6 +515,21 @@ func (c *Config) BrainVaultPath() string {
 		root = "."
 	}
 	return filepath.Join(root, vp)
+}
+
+func (c *Config) ResolveAgentRoleSystemPromptPath(path string) string {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return ""
+	}
+	if filepath.IsAbs(trimmed) {
+		return filepath.Clean(trimmed)
+	}
+	root := c.ProjectRoot
+	if strings.TrimSpace(root) == "" {
+		root = "."
+	}
+	return filepath.Join(root, trimmed)
 }
 
 func (c *Config) ServerAddress() string {
@@ -820,6 +860,30 @@ func (c *Config) validateNumericFields() error {
 		}
 	}
 
+	return nil
+}
+
+func (c *Config) validateAgentRoles() error {
+	for name, role := range c.AgentRoles {
+		trimmedName := strings.TrimSpace(name)
+		if trimmedName == "" {
+			return errors.New("invalid field agent_roles (role names must be non-empty)")
+		}
+		if strings.TrimSpace(role.SystemPrompt) == "" {
+			return fmt.Errorf("invalid field agent_roles.%s.system_prompt=\"\" (must not be empty)", name)
+		}
+		for _, group := range role.Tools {
+			if _, ok := allowedAgentRoleToolGroups[strings.TrimSpace(group)]; !ok {
+				return fmt.Errorf("invalid field agent_roles.%s.tools (unsupported tool group %q; expected brain, file, file:read, git, shell, or search)", name, group)
+			}
+		}
+		if role.MaxTurns <= 0 && role.MaxTurns != 0 {
+			return fmt.Errorf("invalid field agent_roles.%s.max_turns=%d (must be > 0 when specified)", name, role.MaxTurns)
+		}
+		if role.MaxTokens <= 0 && role.MaxTokens != 0 {
+			return fmt.Errorf("invalid field agent_roles.%s.max_tokens=%d (must be > 0 when specified)", name, role.MaxTokens)
+		}
+	}
 	return nil
 }
 

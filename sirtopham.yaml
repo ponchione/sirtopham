@@ -58,6 +58,249 @@ brain:
   vault_path: .brain
   log_brain_queries: true
 
+agent_roles:
+  orchestrator:
+    system_prompt: agents/orchestrator.md
+    tools:
+      - brain
+    custom_tools:
+      - spawn_agent
+      - chain_complete
+    brain_write_paths:
+      - "receipts/orchestrator/**"
+      - "logs/orchestrator/**"
+      - "plans/**"
+    brain_deny_paths:
+      - "specs/**"
+      - "architecture/**"
+      - "conventions/**"
+    max_turns: 50
+    max_tokens: 500000
+
+  epic-decomposer:
+    system_prompt: agents/epic-decomposer.md
+    tools:
+      - brain
+    brain_write_paths:
+      - "epics/**"
+      - "receipts/epic-decomposer/**"
+      - "logs/epic-decomposer/**"
+    brain_deny_paths:
+      - "specs/**"
+      - "architecture/**"
+      - "conventions/**"
+      - "tasks/**"
+      - "plans/**"
+    max_turns: 20
+    max_tokens: 200000
+
+  task-decomposer:
+    system_prompt: agents/task-decomposer.md
+    tools:
+      - brain
+    brain_write_paths:
+      - "tasks/**"
+      - "receipts/task-decomposer/**"
+      - "logs/task-decomposer/**"
+    brain_deny_paths:
+      - "specs/**"
+      - "architecture/**"
+      - "conventions/**"
+      - "epics/**"
+      - "plans/**"
+    max_turns: 20
+    max_tokens: 200000
+
+  planner:
+    system_prompt: agents/planner.md
+    tools:
+      - brain
+      - search
+    brain_write_paths:
+      - "plans/**"
+      - "receipts/planner/**"
+      - "logs/planner/**"
+    brain_deny_paths:
+      - "specs/**"
+      - "architecture/**"
+      - "conventions/**"
+      - "epics/**"
+      - "tasks/**"
+    max_turns: 30
+    max_tokens: 300000
+
+  coder:
+    system_prompt: agents/coder.md
+    tools:
+      - brain
+      - file
+      - git
+      - shell
+      - search
+    brain_write_paths:
+      - "plans/**"
+      - "receipts/coder/**"
+      - "logs/coder/**"
+    brain_deny_paths:
+      - "specs/**"
+      - "architecture/**"
+      - "conventions/**"
+      - "epics/**"
+      - "tasks/**"
+    max_turns: 100
+    max_tokens: 1000000
+
+  correctness-auditor:
+    system_prompt: agents/correctness-auditor.md
+    tools:
+      - brain
+      - file:read
+      - git
+    brain_write_paths:
+      - "receipts/correctness/**"
+      - "logs/correctness/**"
+    brain_deny_paths:
+      - "specs/**"
+      - "architecture/**"
+      - "conventions/**"
+      - "epics/**"
+      - "tasks/**"
+      - "plans/**"
+    max_turns: 30
+    max_tokens: 300000
+
+  quality-auditor:
+    system_prompt: agents/quality-auditor.md
+    tools:
+      - brain
+      - file:read
+      - git
+    brain_write_paths:
+      - "receipts/quality/**"
+      - "logs/quality/**"
+    brain_deny_paths:
+      - "specs/**"
+      - "architecture/**"
+      - "conventions/**"
+      - "epics/**"
+      - "tasks/**"
+      - "plans/**"
+    max_turns: 30
+    max_tokens: 300000
+
+  performance-auditor:
+    system_prompt: agents/performance-auditor.md
+    tools:
+      - brain
+      - file:read
+      - git
+    brain_write_paths:
+      - "receipts/performance/**"
+      - "logs/performance/**"
+    brain_deny_paths:
+      - "specs/**"
+      - "architecture/**"
+      - "conventions/**"
+      - "epics/**"
+      - "tasks/**"
+      - "plans/**"
+    max_turns: 20
+    max_tokens: 200000
+
+  security-auditor:
+    system_prompt: agents/security-auditor.md
+    tools:
+      - brain
+      - file:read
+      - git
+    brain_write_paths:
+      - "receipts/security/**"
+      - "logs/security/**"
+    brain_deny_paths:
+      - "specs/**"
+      - "architecture/**"
+      - "conventions/**"
+      - "epics/**"
+      - "tasks/**"
+      - "plans/**"
+    max_turns: 20
+    max_tokens: 200000
+
+  integration-auditor:
+    system_prompt: agents/integration-auditor.md
+    tools:
+      - brain
+      - file:read
+      - git
+    brain_write_paths:
+      - "receipts/integration/**"
+      - "logs/integration/**"
+    brain_deny_paths:
+      - "specs/**"
+      - "architecture/**"
+      - "conventions/**"
+      - "epics/**"
+      - "tasks/**"
+      - "plans/**"
+    max_turns: 20
+    max_tokens: 200000
+
+  test-writer:
+    system_prompt: agents/test-writer.md
+    tools:
+      - brain
+      - file
+      - git
+      - shell
+    brain_write_paths:
+      - "receipts/tests/**"
+      - "logs/tests/**"
+    brain_deny_paths:
+      - "specs/**"
+      - "architecture/**"
+      - "conventions/**"
+      - "epics/**"
+      - "tasks/**"
+      - "plans/**"
+    max_turns: 50
+    max_tokens: 500000
+
+  resolver:
+    system_prompt: agents/resolver.md
+    tools:
+      - brain
+      - file
+      - git
+      - shell
+    brain_write_paths:
+      - "receipts/resolver/**"
+      - "logs/resolver/**"
+    brain_deny_paths:
+      - "specs/**"
+      - "architecture/**"
+      - "conventions/**"
+      - "epics/**"
+      - "tasks/**"
+      - "plans/**"
+    max_turns: 50
+    max_tokens: 500000
+
+  docs-arbiter:
+    system_prompt: agents/docs-arbiter.md
+    tools:
+      - brain
+    brain_write_paths:
+      - "specs/**"
+      - "architecture/**"
+      - "receipts/arbiter/**"
+      - "logs/arbiter/**"
+    brain_deny_paths:
+      - "epics/**"
+      - "tasks/**"
+      - "plans/**"
+    max_turns: 20
+    max_tokens: 200000
+
 local_services:
   enabled: true
   mode: manual

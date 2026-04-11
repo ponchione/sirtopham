@@ -5,9 +5,10 @@ This script drives a real websocket turn against a running sirtopham server,
 then fetches the stored context report and ordered signal stream for turn 1.
 It is meant to prove the current operator-facing contract end to end:
 
-- a brain-only fact can be answered from proactive MCP/vault-backed keyword retrieval
+- a brain-only fact can be answered from proactive hybrid brain retrieval
 - the persisted context report shows semantic queries, brain results, and brain budget
 - the ordered `/signals` endpoint exposes the retrieval signal flow used for debugging
+- optional structural expectations can be asserted when a local vault has stable graph evidence
 
 Example:
   python3 scripts/validate_brain_retrieval.py \
@@ -50,6 +51,30 @@ SCENARIOS: dict[str, dict[str, Any]] = {
         "prompt": "From our past debugging notes, what was the root cause of the vite rebuild loop and what was the fix? Answer in two sentences.",
         "expected_phrase": "src/generated/index.ts",
         "expected_note": "notes/past-debugging-vite-rebuild-loop.md",
+        "allow_tool_calls": True,
+    },
+    "debug-history-lunar-hinge-graph": {
+        "prompt": "From our past debugging notes, what phrase sits behind LUNAR HINGE 91?",
+        "expected_phrase": "DEEP PANEL 23",
+        "expected_note": "notes/past-debugging-deep-panel-fix.md",
+        "expected_match_source": "graph",
+        "min_graph_hop_depth": 1,
+        "allow_tool_calls": True,
+    },
+    "debug-history-saturn-rail-graph": {
+        "prompt": "From our past debugging notes, what follow-on fix canary phrase sits behind SATURN RAIL?",
+        "expected_phrase": "PANEL LOCK 58",
+        "expected_note": "notes/past-debugging-saturn-rail-fix.md",
+        "expected_match_source": "graph",
+        "min_graph_hop_depth": 1,
+        "allow_tool_calls": True,
+    },
+    "layout-graph-saturn-rail": {
+        "prompt": "From our layout graph notes, what linked layout canary phrase sits behind SATURN RAIL?",
+        "expected_phrase": "PROSE FIRST 17",
+        "expected_note": "notes/layout-graph-proof.md",
+        "expected_match_source": "graph",
+        "min_graph_hop_depth": 1,
         "allow_tool_calls": True,
     },
 }
@@ -183,11 +208,35 @@ async def validate(args: argparse.Namespace) -> ValidationResult:
         failures.append("context report missing needs.semantic_queries")
 
     brain_results = context_report.get("brain_results")
+    matched_brain_hit: dict[str, Any] | None = None
     if not brain_results:
         failures.append("context report missing brain_results")
     else:
-        if not any((hit or {}).get("document_path") == args.expected_note for hit in brain_results if isinstance(hit, dict)):
+        matched_brain_hit = next(
+            (
+                hit
+                for hit in brain_results
+                if isinstance(hit, dict) and (hit or {}).get("document_path") == args.expected_note
+            ),
+            None,
+        )
+        if matched_brain_hit is None:
             failures.append(f"brain_results missing expected note {args.expected_note}")
+        else:
+            if args.expected_match_mode and matched_brain_hit.get("match_mode") != args.expected_match_mode:
+                failures.append(
+                    f"brain_results expected match_mode {args.expected_match_mode!r} but saw {matched_brain_hit.get('match_mode')!r}"
+                )
+            if args.expected_match_source and args.expected_match_source not in (matched_brain_hit.get("match_sources") or []):
+                failures.append(
+                    f"brain_results expected match_sources to include {args.expected_match_source!r} but saw {matched_brain_hit.get('match_sources')!r}"
+                )
+            if args.min_graph_hop_depth > 0:
+                graph_hop_depth = matched_brain_hit.get("graph_hop_depth") or 0
+                if not isinstance(graph_hop_depth, int) or graph_hop_depth < args.min_graph_hop_depth:
+                    failures.append(
+                        f"brain_results expected graph_hop_depth >= {args.min_graph_hop_depth} but saw {graph_hop_depth!r}"
+                    )
 
     budget_breakdown = context_report.get("budget_breakdown") or {}
     brain_budget = budget_breakdown.get("brain", 0)
@@ -244,6 +293,14 @@ async def validate(args: argparse.Namespace) -> ValidationResult:
                 "brain_results": result.context_report.get("brain_results") or [],
                 "budget_breakdown": result.context_report.get("budget_breakdown") or {},
                 "signal_stream": result.signal_stream,
+                "matched_brain_hit": next(
+                    (
+                        hit
+                        for hit in (result.context_report.get("brain_results") or [])
+                        if isinstance(hit, dict) and hit.get("document_path") == args.expected_note
+                    ),
+                    None,
+                ),
             },
             indent=2,
         )
@@ -264,6 +321,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--prompt", default=DEFAULT_PROMPT, help="Prompt to submit as the first turn")
     parser.add_argument("--expected-phrase", default=DEFAULT_EXPECTED_PHRASE, help="Brain-only fact expected in the assistant answer")
     parser.add_argument("--expected-note", default=DEFAULT_EXPECTED_NOTE, help="Expected document_path in context_report.brain_results")
+    parser.add_argument("--expected-match-mode", default="", help="Optional expected match_mode on the matched brain_results hit")
+    parser.add_argument("--expected-match-source", default="", help="Optional expected member of match_sources on the matched brain_results hit")
+    parser.add_argument("--min-graph-hop-depth", type=int, default=0, help="Optional minimum graph_hop_depth required on the matched brain_results hit")
     parser.add_argument("--timeout", type=int, default=240, help="Per-event websocket timeout in seconds")
     parser.add_argument(
         "--allow-tool-calls",
@@ -282,6 +342,12 @@ def main() -> int:
         args.expected_phrase = scenario["expected_phrase"]
     if args.expected_note == DEFAULT_EXPECTED_NOTE and scenario.get("expected_note"):
         args.expected_note = scenario["expected_note"]
+    if args.expected_match_mode == "" and scenario.get("expected_match_mode"):
+        args.expected_match_mode = scenario["expected_match_mode"]
+    if args.expected_match_source == "" and scenario.get("expected_match_source"):
+        args.expected_match_source = scenario["expected_match_source"]
+    if args.min_graph_hop_depth == 0 and scenario.get("min_graph_hop_depth"):
+        args.min_graph_hop_depth = int(scenario["min_graph_hop_depth"])
     if scenario.get("allow_tool_calls"):
         args.allow_tool_calls = True
     try:

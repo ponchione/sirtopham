@@ -15,10 +15,10 @@ type mockTool struct {
 	executeFn   func(ctx context.Context, projectRoot string, input json.RawMessage) (*ToolResult, error)
 }
 
-func (m *mockTool) Name() string              { return m.name }
-func (m *mockTool) Description() string        { return m.description }
-func (m *mockTool) ToolPurity() Purity         { return m.purity }
-func (m *mockTool) Schema() json.RawMessage    { return m.schema }
+func (m *mockTool) Name() string            { return m.name }
+func (m *mockTool) Description() string     { return m.description }
+func (m *mockTool) ToolPurity() Purity      { return m.purity }
+func (m *mockTool) Schema() json.RawMessage { return m.schema }
 func (m *mockTool) Execute(ctx context.Context, projectRoot string, input json.RawMessage) (*ToolResult, error) {
 	if m.executeFn != nil {
 		return m.executeFn(ctx, projectRoot, input)
@@ -231,6 +231,38 @@ func TestRegistryToolDefinitionsWithRealTools(t *testing.T) {
 		}
 		if !json.Valid(d.InputSchema) {
 			t.Errorf("defs[%d].InputSchema is not valid JSON", i)
+		}
+	}
+}
+
+func TestRegisterFileReadToolsRegistersOnlyFileRead(t *testing.T) {
+	reg := NewRegistry()
+	RegisterFileReadTools(reg)
+
+	got := reg.Names()
+	want := []string{"file_read"}
+	if len(got) != len(want) {
+		t.Fatalf("Names() len = %d, want %d (%v)", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("Names()[%d] = %q, want %q (all=%v)", i, got[i], want[i], got)
+		}
+	}
+}
+
+func TestRegisterFileWriteToolsRegistersOnlyMutatingFileTools(t *testing.T) {
+	reg := NewRegistry()
+	RegisterFileWriteTools(reg)
+
+	got := reg.Names()
+	want := []string{"file_edit", "file_write"}
+	if len(got) != len(want) {
+		t.Fatalf("Names() len = %d, want %d (%v)", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("Names()[%d] = %q, want %q (all=%v)", i, got[i], want[i], got)
 		}
 	}
 }

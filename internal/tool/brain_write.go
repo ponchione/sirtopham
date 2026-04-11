@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ponchione/sirtopham/internal/brain"
+	brainindexstate "github.com/ponchione/sirtopham/internal/brain/indexstate"
 	"github.com/ponchione/sirtopham/internal/config"
 )
 
@@ -61,6 +62,7 @@ func (b *BrainWrite) Execute(ctx context.Context, projectRoot string, input json
 		return &ToolResult{
 			Success: false,
 			Content: "Project brain is not configured. See the project's YAML config brain section.",
+			Error:   "brain not configured",
 		}, nil
 	}
 
@@ -88,6 +90,16 @@ func (b *BrainWrite) Execute(ctx context.Context, projectRoot string, input json
 		}, nil
 	}
 
+	normalizedPath, err := ensureBrainWriteAllowed(b.config, params.Path)
+	if err != nil {
+		return &ToolResult{
+			Success: false,
+			Content: fmt.Sprintf("Invalid brain write path: %v", err),
+			Error:   err.Error(),
+		}, nil
+	}
+	params.Path = normalizedPath
+
 	// Warn if no frontmatter.
 	if !strings.HasPrefix(strings.TrimSpace(params.Content), "---") {
 		slog.Warn("brain_write: document written without YAML frontmatter", "path", params.Path)
@@ -97,6 +109,13 @@ func (b *BrainWrite) Execute(ctx context.Context, projectRoot string, input json
 		return &ToolResult{
 			Success: false,
 			Content: fmt.Sprintf("Failed to write brain document: %v", err),
+			Error:   err.Error(),
+		}, nil
+	}
+	if err := brainindexstate.MarkStale(projectRoot, "brain_write", time.Now().UTC()); err != nil {
+		return &ToolResult{
+			Success: false,
+			Content: fmt.Sprintf("Brain document written but failed to record stale brain index state: %v", err),
 			Error:   err.Error(),
 		}, nil
 	}

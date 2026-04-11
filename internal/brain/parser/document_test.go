@@ -178,6 +178,18 @@ func TestParseDocumentSupportsLongerFencesAndRejectsInvalidClosers(t *testing.T)
 	}
 }
 
+func TestParseDocumentPreservesMarkdownSuffixWhenWikilinkTargetIncludesIt(t *testing.T) {
+	content := "# Title\n\nSee [[notes/graph-target.md|Graph Target]]."
+	doc, err := ParseDocument("notes/source.md", content)
+	if err != nil {
+		t.Fatalf("ParseDocument: %v", err)
+	}
+	wantLinks := []ParsedLink{{Target: "notes/graph-target.md", Display: "Graph Target", Raw: "notes/graph-target.md|Graph Target"}}
+	if !reflect.DeepEqual(doc.Wikilinks, wantLinks) {
+		t.Fatalf("Wikilinks = %#v, want %#v", doc.Wikilinks, wantLinks)
+	}
+}
+
 func TestParseDocumentRejectsInvalidFrontmatter(t *testing.T) {
 	_, err := ParseDocument("notes/bad.md", "---\ntags: [broken\n---\n# Bad")
 	if err == nil {

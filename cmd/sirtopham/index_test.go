@@ -4,13 +4,17 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/ponchione/sirtopham/internal/brain"
 	brainindexer "github.com/ponchione/sirtopham/internal/brain/indexer"
+	brainindexstate "github.com/ponchione/sirtopham/internal/brain/indexstate"
+	"github.com/ponchione/sirtopham/internal/codeintel"
 	appconfig "github.com/ponchione/sirtopham/internal/config"
 	appindex "github.com/ponchione/sirtopham/internal/index"
 )
@@ -176,5 +180,113 @@ func TestIndexBrainSubcommandJSONOutput(t *testing.T) {
 	}
 	if result.DocumentsIndexed != 2 || result.LinksIndexed != 4 || result.DocumentsDeleted != 1 || result.SemanticChunksIndexed != 6 || result.SemanticDocumentsDeleted != 1 {
 		t.Fatalf("result = %+v, want 2/4/1 plus semantic 6/1", result)
+	}
+}
+
+type fakeBrainIndexBackend struct {
+	docs map[string]string
+}
+
+func (f fakeBrainIndexBackend) ReadDocument(_ context.Context, path string) (string, error) {
+	content, ok := f.docs[path]
+	if !ok {
+		return "", os.ErrNotExist
+	}
+	return content, nil
+}
+func (fakeBrainIndexBackend) WriteDocument(context.Context, string, string) error         { return nil }
+func (fakeBrainIndexBackend) PatchDocument(context.Context, string, string, string) error { return nil }
+func (fakeBrainIndexBackend) SearchKeyword(context.Context, string) ([]brain.SearchHit, error) {
+	return nil, nil
+}
+func (f fakeBrainIndexBackend) ListDocuments(context.Context, string) ([]string, error) {
+	paths := make([]string, 0, len(f.docs))
+	for path := range f.docs {
+		paths = append(paths, path)
+	}
+	return paths, nil
+}
+
+type fakeBrainIndexStore struct{}
+
+func (fakeBrainIndexStore) Upsert(context.Context, []codeintel.Chunk) error { return nil }
+func (fakeBrainIndexStore) VectorSearch(context.Context, []float32, int, codeintel.Filter) ([]codeintel.SearchResult, error) {
+	return nil, nil
+}
+func (fakeBrainIndexStore) GetByFilePath(context.Context, string) ([]codeintel.Chunk, error) {
+	return nil, nil
+}
+func (fakeBrainIndexStore) GetByName(context.Context, string) ([]codeintel.Chunk, error) {
+	return nil, nil
+}
+func (fakeBrainIndexStore) DeleteByFilePath(context.Context, string) error { return nil }
+func (fakeBrainIndexStore) Close() error                                   { return nil }
+
+type fakeBrainIndexEmbedder struct{}
+
+func (fakeBrainIndexEmbedder) EmbedTexts(_ context.Context, texts []string) ([][]float32, error) {
+	out := make([][]float32, len(texts))
+	for i := range texts {
+		out[i] = []float32{0.1, 0.2}
+	}
+	return out, nil
+}
+func (fakeBrainIndexEmbedder) EmbedQuery(context.Context, string) ([]float32, error) {
+	return []float32{0.1, 0.2}, nil
+}
+
+func TestRunBrainIndexMarksBrainIndexFresh(t *testing.T) {
+	projectRoot := t.TempDir()
+	vaultPath := t.TempDir()
+	cfg := appconfig.Default()
+	cfg.ProjectRoot = projectRoot
+	cfg.Brain.Enabled = true
+	cfg.Brain.VaultPath = vaultPath
+	if err := os.MkdirAll(cfg.StateDir(), 0o755); err != nil {
+		t.Fatalf("mkdir state dir: %v", err)
+	}
+	brainDoc := "---\ntags: [debug]\n---\n# Runtime Notes\n\nBrain freshness proof."
+	if err := brainindexstate.MarkStale(projectRoot, "brain_write", time.Date(2026, 4, 9, 15, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("MarkStale: %v", err)
+	}
+
+	origBackend := buildBrainIndexBackend
+	origStore := openBrainVectorStore
+	origEmbedder := newBrainEmbedder
+	origMarkFresh := markBrainIndexFresh
+	defer func() {
+		buildBrainIndexBackend = origBackend
+		openBrainVectorStore = origStore
+		newBrainEmbedder = origEmbedder
+		markBrainIndexFresh = origMarkFresh
+	}()
+
+	backend := fakeBrainIndexBackend{docs: map[string]string{"notes.md": brainDoc}}
+	buildBrainIndexBackend = func(context.Context, appconfig.BrainConfig, *slog.Logger) (brain.Backend, func(), error) {
+		return backend, func() {}, nil
+	}
+	openBrainVectorStore = func(context.Context, string) (codeintel.Store, error) { return fakeBrainIndexStore{}, nil }
+	newBrainEmbedder = func(appconfig.Embedding) codeintel.Embedder { return fakeBrainIndexEmbedder{} }
+	markBrainIndexFresh = brainindexstate.MarkFresh
+
+	result, err := runBrainIndex(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("runBrainIndex: %v", err)
+	}
+	if result.DocumentsIndexed != 1 {
+		t.Fatalf("DocumentsIndexed = %d, want 1", result.DocumentsIndexed)
+	}
+	state, err := brainindexstate.Load(projectRoot)
+	if err != nil {
+		t.Fatalf("Load brain index state: %v", err)
+	}
+	if state.Status != brainindexstate.StatusClean {
+		t.Fatalf("brain index status = %q, want clean", state.Status)
+	}
+	if state.LastIndexedAt == "" {
+		t.Fatal("expected last_indexed_at to be populated after reindex")
+	}
+	if state.StaleSince != "" || state.StaleReason != "" {
+		t.Fatalf("stale fields should be cleared after reindex: %+v", state)
 	}
 }

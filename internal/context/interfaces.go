@@ -3,7 +3,6 @@ package context
 import (
 	stdctx "context"
 
-	"github.com/ponchione/sirtopham/internal/brain"
 	"github.com/ponchione/sirtopham/internal/config"
 	"github.com/ponchione/sirtopham/internal/db"
 )
@@ -36,10 +35,36 @@ type ConventionSource interface {
 	Load(ctx stdctx.Context) (string, error)
 }
 
+// BrainSearchRequest captures one proactive/runtime brain search query.
+type BrainSearchRequest struct {
+	Query            string
+	Mode             string
+	MaxResults       int
+	IncludeGraphHops bool
+	GraphHopDepth    int
+}
+
+// BrainSearchResult is the richer retrieval payload returned by runtime brain
+// searchers for proactive context assembly.
+type BrainSearchResult struct {
+	DocumentPath    string
+	Title           string
+	SectionHeading  string
+	Snippet         string
+	Tags            []string
+	LexicalScore    float64
+	SemanticScore   float64
+	FinalScore      float64
+	MatchMode       string
+	MatchSources    []string
+	GraphSourcePath string
+	GraphHopDepth   int
+}
+
 // BrainSearcher provides the narrow brain search surface context assembly needs
 // for proactive retrieval.
 type BrainSearcher interface {
-	SearchKeyword(ctx stdctx.Context, query string) ([]brain.SearchHit, error)
+	Search(ctx stdctx.Context, request BrainSearchRequest) ([]BrainSearchResult, error)
 }
 
 // Retriever executes the retrieval phase and returns the collected pre-budget

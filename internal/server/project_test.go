@@ -8,7 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	brainindexstate "github.com/ponchione/sirtopham/internal/brain/indexstate"
 	"github.com/ponchione/sirtopham/internal/config"
 	appdb "github.com/ponchione/sirtopham/internal/db"
 	"github.com/ponchione/sirtopham/internal/server"
@@ -157,6 +159,54 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 	}
 	if body.LastIndexedCommit != "abc123def" {
 		t.Fatalf("last_indexed_commit = %q, want abc123def", body.LastIndexedCommit)
+	}
+}
+
+func TestProjectEndpointIncludesBrainIndexState(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.ProjectRoot = dir
+	cfg.Brain.Enabled = true
+	staleAt := time.Date(2026, 4, 9, 16, 5, 0, 0, time.UTC)
+	if err := brainindexstate.MarkStale(dir, "brain_update", staleAt); err != nil {
+		t.Fatalf("MarkStale: %v", err)
+	}
+
+	srv := server.New(server.Config{Host: "127.0.0.1", Port: 0}, newTestLogger())
+	server.NewProjectHandler(srv, cfg, newTestLogger())
+	_, base := startServer(t, srv)
+
+	resp, err := http.Get(base + "/api/project")
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var body struct {
+		BrainIndex *struct {
+			Status        string `json:"status"`
+			LastIndexedAt string `json:"last_indexed_at"`
+			StaleSince    string `json:"stale_since"`
+			StaleReason   string `json:"stale_reason"`
+		} `json:"brain_index"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.BrainIndex == nil {
+		t.Fatal("expected brain_index payload")
+	}
+	if body.BrainIndex.Status != brainindexstate.StatusStale {
+		t.Fatalf("brain_index.status = %q, want %q", body.BrainIndex.Status, brainindexstate.StatusStale)
+	}
+	if body.BrainIndex.StaleSince != staleAt.Format(time.RFC3339) {
+		t.Fatalf("brain_index.stale_since = %q, want %q", body.BrainIndex.StaleSince, staleAt.Format(time.RFC3339))
+	}
+	if body.BrainIndex.StaleReason != "brain_update" {
+		t.Fatalf("brain_index.stale_reason = %q, want brain_update", body.BrainIndex.StaleReason)
 	}
 }
 

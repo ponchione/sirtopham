@@ -140,10 +140,16 @@ export interface BrainResult {
   vault_path?: string;
   document_path?: string;
   title?: string;
+  section_heading?: string;
   snippet?: string;
   score?: number;
+  lexical_score?: number;
+  semantic_score?: number;
   match_score?: number;
   match_mode?: string;
+  match_sources?: string[];
+  graph_source_path?: string;
+  graph_hop_depth?: number;
   tags?: string[];
   included?: boolean;
   exclusion_reason?: string;
@@ -220,6 +226,13 @@ export interface AppConfig {
 
 // ── GET /api/project ─────────────────────────────────────────────────
 
+export interface BrainIndexInfo {
+  status: "never_indexed" | "clean" | "stale" | string;
+  last_indexed_at?: string;
+  stale_since?: string;
+  stale_reason?: string;
+}
+
 export interface ProjectInfo {
   id: string;
   root_path: string;
@@ -227,4 +240,5 @@ export interface ProjectInfo {
   language?: string;
   last_indexed_at?: string;
   last_indexed_commit?: string;
+  brain_index?: BrainIndexInfo;
 }

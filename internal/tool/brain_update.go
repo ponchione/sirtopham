@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ponchione/sirtopham/internal/brain"
+	brainindexstate "github.com/ponchione/sirtopham/internal/brain/indexstate"
 	"github.com/ponchione/sirtopham/internal/config"
 )
 
@@ -71,6 +72,7 @@ func (b *BrainUpdate) Execute(ctx context.Context, projectRoot string, input jso
 		return &ToolResult{
 			Success: false,
 			Content: "Project brain is not configured. See the project's YAML config brain section.",
+			Error:   "brain not configured",
 		}, nil
 	}
 
@@ -108,6 +110,16 @@ func (b *BrainUpdate) Execute(ctx context.Context, projectRoot string, input jso
 			Error:   "invalid operation",
 		}, nil
 	}
+
+	normalizedPath, err := ensureBrainWriteAllowed(b.config, params.Path)
+	if err != nil {
+		return &ToolResult{
+			Success: false,
+			Content: fmt.Sprintf("Invalid brain write path: %v", err),
+			Error:   err.Error(),
+		}, nil
+	}
+	params.Path = normalizedPath
 
 	patchContent := params.Content
 	if params.Operation == "replace_section" {
@@ -162,6 +174,13 @@ func (b *BrainUpdate) Execute(ctx context.Context, projectRoot string, input jso
 			Error:   err.Error(),
 		}, nil
 	}
+	if err := brainindexstate.MarkStale(projectRoot, "brain_update", time.Now().UTC()); err != nil {
+		return &ToolResult{
+			Success: false,
+			Content: fmt.Sprintf("Brain document updated but failed to record stale brain index state: %v", err),
+			Error:   err.Error(),
+		}, nil
+	}
 
 	if b.config.LogBrainOperations {
 		if err := appendBrainLog(ctx, b.client, BrainLogEntry{
@@ -185,124 +204,3 @@ func (b *BrainUpdate) Execute(ctx context.Context, projectRoot string, input jso
 	}, nil
 }
 
-// appendContent appends new content at the end with a blank line separator.
-func appendContent(current, addition string) string {
-	if !strings.HasSuffix(current, "\n") {
-		current += "\n"
-	}
-	return current + "\n" + addition
-}
-
-// prependContent inserts new content after YAML frontmatter (if present)
-// or at the very start.
-func prependContent(current, addition string) string {
-	if !strings.HasPrefix(current, "---") {
-		return addition + "\n\n" + current
-	}
-	// Find end of frontmatter.
-	rest := current[3:]
-	idx := strings.Index(rest, "\n---")
-	if idx < 0 {
-		return addition + "\n\n" + current
-	}
-	fmEnd := 3 + idx + 4 // "---" + content up to "\n---" + len("\n---")
-	fm := current[:fmEnd]
-	body := strings.TrimLeft(current[fmEnd:], "\n")
-	return fm + "\n\n" + addition + "\n\n" + body
-}
-
-// replaceSectionContent replaces a heading's content up to the next heading
-// of equal or higher level.
-func replaceSectionContent(current, section, newContent string) (string, error) {
-	lines := strings.Split(current, "\n")
-
-	// Parse the target heading level.
-	targetLevel, targetText := parseHeading(section)
-	if targetLevel == 0 {
-		// Treat as plain text heading match.
-		targetLevel = 0
-		targetText = section
-	}
-
-	// Find the target heading line.
-	targetIdx := -1
-	for i, line := range lines {
-		level, text := parseHeading(line)
-		if level == 0 {
-			continue
-		}
-		if targetLevel > 0 && level == targetLevel && strings.TrimSpace(text) == strings.TrimSpace(targetText) {
-			targetIdx = i
-			break
-		}
-		if targetLevel == 0 && strings.TrimSpace(text) == strings.TrimSpace(targetText) {
-			targetIdx = i
-			targetLevel = level
-			break
-		}
-	}
-
-	if targetIdx < 0 {
-		// List available headings.
-		headings := listHeadings(lines)
-		if len(headings) > 0 {
-			return "", fmt.Errorf("Section '%s' not found. Available headings: %s",
-				section, strings.Join(headings, ", "))
-		}
-		return "", fmt.Errorf("Section '%s' not found. The document has no headings.", section)
-	}
-
-	// Find the end of the section (next heading of equal or higher level).
-	endIdx := len(lines)
-	for i := targetIdx + 1; i < len(lines); i++ {
-		level, _ := parseHeading(lines[i])
-		if level > 0 && level <= targetLevel {
-			endIdx = i
-			break
-		}
-	}
-
-	// Reconstruct: before + target heading + new content + after.
-	var parts []string
-	parts = append(parts, lines[:targetIdx+1]...)
-	parts = append(parts, newContent)
-	if endIdx < len(lines) {
-		parts = append(parts, lines[endIdx:]...)
-	}
-
-	return strings.Join(parts, "\n"), nil
-}
-
-// parseHeading extracts the level and text from a markdown heading line.
-// Returns (0, "") if the line is not a heading.
-func parseHeading(line string) (int, string) {
-	trimmed := strings.TrimSpace(line)
-	if !strings.HasPrefix(trimmed, "#") {
-		return 0, ""
-	}
-	level := 0
-	for _, ch := range trimmed {
-		if ch == '#' {
-			level++
-		} else {
-			break
-		}
-	}
-	if level > 6 || level == 0 {
-		return 0, ""
-	}
-	text := strings.TrimSpace(trimmed[level:])
-	return level, text
-}
-
-// listHeadings returns all heading lines from the document.
-func listHeadings(lines []string) []string {
-	var headings []string
-	for _, line := range lines {
-		level, text := parseHeading(line)
-		if level > 0 {
-			headings = append(headings, strings.Repeat("#", level)+" "+text)
-		}
-	}
-	return headings
-}
