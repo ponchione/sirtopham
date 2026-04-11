@@ -1,13 +1,46 @@
-// Command sirtopham is the chain orchestrator binary for the sodoryard
-// monorepo. It runs chains of agent invocations against a shared brain
-// vault, spawning headless tidmouth engines via a subprocess mechanism.
-//
-// This is a Phase 1 placeholder. The actual orchestrator implementation
-// lands in Phase 3 per docs/specs/15-chain-orchestrator.md.
 package main
 
-import "fmt"
+import (
+	"fmt"
+	"os"
+
+	appconfig "github.com/ponchione/sodoryard/internal/config"
+	"github.com/spf13/cobra"
+)
+
+const defaultCLIConfigPath = appconfig.ConfigFilename
+
+var version = "dev"
+
+func newRootCmd() *cobra.Command {
+	var configPath string
+	rootCmd := &cobra.Command{
+		Use:          "sirtopham",
+		Short:        "SirTopham chain orchestrator",
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "sirtopham %s\n", version)
+			return nil
+		},
+	}
+	rootCmd.PersistentFlags().StringVar(&configPath, "config", defaultCLIConfigPath, "Path to yard.yaml config file")
+	rootCmd.AddCommand(
+		newChainCmd(&configPath),
+		newStatusCmd(&configPath),
+		newLogsCmd(&configPath),
+		newReceiptCmd(&configPath),
+		newCancelCmd(&configPath),
+		newPauseCmd(&configPath),
+		newResumeCmd(&configPath),
+	)
+	return rootCmd
+}
 
 func main() {
-	fmt.Println("sirtopham orchestrator placeholder (Phase 3 — see docs/specs/15-chain-orchestrator.md)")
+	if err := newRootCmd().Execute(); err != nil {
+		if coded, ok := err.(interface{ ExitCode() int }); ok {
+			os.Exit(coded.ExitCode())
+		}
+		os.Exit(1)
+	}
 }
