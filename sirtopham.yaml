@@ -157,8 +157,8 @@ agent_roles:
       - file:read
       - git
     brain_write_paths:
-      - "receipts/correctness/**"
-      - "logs/correctness/**"
+      - "receipts/correctness-auditor/**"
+      - "logs/correctness-auditor/**"
     brain_deny_paths:
       - "specs/**"
       - "architecture/**"
@@ -176,8 +176,8 @@ agent_roles:
       - file:read
       - git
     brain_write_paths:
-      - "receipts/quality/**"
-      - "logs/quality/**"
+      - "receipts/quality-auditor/**"
+      - "logs/quality-auditor/**"
     brain_deny_paths:
       - "specs/**"
       - "architecture/**"
@@ -195,8 +195,8 @@ agent_roles:
       - file:read
       - git
     brain_write_paths:
-      - "receipts/performance/**"
-      - "logs/performance/**"
+      - "receipts/performance-auditor/**"
+      - "logs/performance-auditor/**"
     brain_deny_paths:
       - "specs/**"
       - "architecture/**"
@@ -214,8 +214,8 @@ agent_roles:
       - file:read
       - git
     brain_write_paths:
-      - "receipts/security/**"
-      - "logs/security/**"
+      - "receipts/security-auditor/**"
+      - "logs/security-auditor/**"
     brain_deny_paths:
       - "specs/**"
       - "architecture/**"
@@ -233,8 +233,8 @@ agent_roles:
       - file:read
       - git
     brain_write_paths:
-      - "receipts/integration/**"
-      - "logs/integration/**"
+      - "receipts/integration-auditor/**"
+      - "logs/integration-auditor/**"
     brain_deny_paths:
       - "specs/**"
       - "architecture/**"
@@ -253,8 +253,8 @@ agent_roles:
       - git
       - shell
     brain_write_paths:
-      - "receipts/tests/**"
-      - "logs/tests/**"
+      - "receipts/test-writer/**"
+      - "logs/test-writer/**"
     brain_deny_paths:
       - "specs/**"
       - "architecture/**"
@@ -292,8 +292,8 @@ agent_roles:
     brain_write_paths:
       - "specs/**"
       - "architecture/**"
-      - "receipts/arbiter/**"
-      - "logs/arbiter/**"
+      - "receipts/docs-arbiter/**"
+      - "logs/docs-arbiter/**"
     brain_deny_paths:
       - "epics/**"
       - "tasks/**"
