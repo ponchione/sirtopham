@@ -212,7 +212,7 @@ func TestLoadAppendsRequiredIndexExcludesWhenCustomListOmitsThem(t *testing.T) {
 		t.Fatalf("Load returned error: %v", err)
 	}
 
-	wantPatterns := []string{"**/.git/**", "**/.brain/**", "**/node_modules/**", "**/vendor/**", "**/." + cfg.ProjectName() + "/**"}
+	wantPatterns := []string{"**/.git/**", "**/.brain/**", "**/node_modules/**", "**/vendor/**", "**/.yard/**"}
 	for _, pattern := range wantPatterns {
 		if !slices.Contains(cfg.Index.Exclude, pattern) {
 			t.Fatalf("Index.Exclude = %#v, want to contain %q", cfg.Index.Exclude, pattern)
@@ -402,29 +402,33 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 	}
 }
 
-func TestProjectSpecificPathsFollowProjectRootName(t *testing.T) {
+func TestProjectPathsUseCanonicalYardDirectory(t *testing.T) {
 	cfg := &Config{ProjectRoot: filepath.Join(string(filepath.Separator), "tmp", "eyebox")}
 
+	// ProjectName is still derived from the basename because codeintel
+	// and brain indexers use it as a label on chunks in the vector store.
 	if got := cfg.ProjectName(); got != "eyebox" {
 		t.Fatalf("ProjectName() = %q, want eyebox", got)
 	}
-	if got := DefaultConfigFilename(cfg.ProjectRoot); got != "eyebox.yaml" {
-		t.Fatalf("DefaultConfigFilename() = %q, want eyebox.yaml", got)
+	// Every other derived path is hardcoded to the canonical .yard name
+	// regardless of basename.
+	if got := DefaultConfigFilename(cfg.ProjectRoot); got != "yard.yaml" {
+		t.Fatalf("DefaultConfigFilename() = %q, want yard.yaml", got)
 	}
-	if got := cfg.StateDir(); got != filepath.Join(cfg.ProjectRoot, ".eyebox") {
-		t.Fatalf("StateDir() = %q, want %q", got, filepath.Join(cfg.ProjectRoot, ".eyebox"))
+	if got := cfg.StateDir(); got != filepath.Join(cfg.ProjectRoot, ".yard") {
+		t.Fatalf("StateDir() = %q, want %q", got, filepath.Join(cfg.ProjectRoot, ".yard"))
 	}
-	if got := cfg.DatabasePath(); got != filepath.Join(cfg.ProjectRoot, ".eyebox", "sirtopham.db") {
-		t.Fatalf("DatabasePath() = %q, want %q", got, filepath.Join(cfg.ProjectRoot, ".eyebox", "sirtopham.db"))
+	if got := cfg.DatabasePath(); got != filepath.Join(cfg.ProjectRoot, ".yard", "yard.db") {
+		t.Fatalf("DatabasePath() = %q, want %q", got, filepath.Join(cfg.ProjectRoot, ".yard", "yard.db"))
 	}
-	if got := cfg.CodeLanceDBPath(); got != filepath.Join(cfg.ProjectRoot, ".eyebox", "lancedb", "code") {
-		t.Fatalf("CodeLanceDBPath() = %q, want %q", got, filepath.Join(cfg.ProjectRoot, ".eyebox", "lancedb", "code"))
+	if got := cfg.CodeLanceDBPath(); got != filepath.Join(cfg.ProjectRoot, ".yard", "lancedb", "code") {
+		t.Fatalf("CodeLanceDBPath() = %q, want %q", got, filepath.Join(cfg.ProjectRoot, ".yard", "lancedb", "code"))
 	}
-	if got := cfg.BrainLanceDBPath(); got != filepath.Join(cfg.ProjectRoot, ".eyebox", "lancedb", "brain") {
-		t.Fatalf("BrainLanceDBPath() = %q, want %q", got, filepath.Join(cfg.ProjectRoot, ".eyebox", "lancedb", "brain"))
+	if got := cfg.BrainLanceDBPath(); got != filepath.Join(cfg.ProjectRoot, ".yard", "lancedb", "brain") {
+		t.Fatalf("BrainLanceDBPath() = %q, want %q", got, filepath.Join(cfg.ProjectRoot, ".yard", "lancedb", "brain"))
 	}
-	if got := cfg.GraphDBPath(); got != filepath.Join(cfg.ProjectRoot, ".eyebox", "graph.db") {
-		t.Fatalf("GraphDBPath() = %q, want %q", got, filepath.Join(cfg.ProjectRoot, ".eyebox", "graph.db"))
+	if got := cfg.GraphDBPath(); got != filepath.Join(cfg.ProjectRoot, ".yard", "graph.db") {
+		t.Fatalf("GraphDBPath() = %q, want %q", got, filepath.Join(cfg.ProjectRoot, ".yard", "graph.db"))
 	}
 }
 
@@ -435,7 +439,7 @@ func TestNormalizeAddsDerivedStateDirExcludePattern(t *testing.T) {
 
 	cfg.normalize()
 
-	want := "**/.sodoryard/**"
+	want := "**/.yard/**"
 	if !slices.Contains(cfg.Index.Exclude, want) {
 		t.Fatalf("Index.Exclude = %#v, want %q", cfg.Index.Exclude, want)
 	}
@@ -448,7 +452,7 @@ func TestNormalizeKeepsUniversalRequiredExcludes(t *testing.T) {
 
 	cfg.normalize()
 
-	for _, want := range []string{"**/.git/**", "**/.brain/**", "**/node_modules/**", "**/vendor/**", "**/.eyebox/**"} {
+	for _, want := range []string{"**/.git/**", "**/.brain/**", "**/node_modules/**", "**/vendor/**", "**/.yard/**"} {
 		if !slices.Contains(cfg.Index.Exclude, want) {
 			t.Fatalf("Index.Exclude = %#v, want %q", cfg.Index.Exclude, want)
 		}

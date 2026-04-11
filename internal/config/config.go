@@ -21,6 +21,16 @@ const (
 	localServicesProviderDocker = "docker-compose"
 )
 
+// Canonical on-disk names for the yard state directory and its contents.
+// These are hardcoded (not derived from project basename) so that every
+// project writes yard state to the same relative path, simplifying tooling,
+// dashboards, and docker-compose mounts.
+const (
+	StateDirName   = ".yard"
+	StateDBName    = "yard.db"
+	ConfigFilename = "yard.yaml"
+)
+
 var allowedProviderTypes = map[string]struct{}{
 	"anthropic":         {},
 	"codex":             {},
@@ -466,23 +476,27 @@ func DefaultProjectName(projectRoot string) string {
 }
 
 func DefaultConfigFilename(projectRoot string) string {
-	return DefaultProjectName(projectRoot) + ".yaml"
+	return ConfigFilename
 }
 
 func (c *Config) ProjectName() string {
 	return DefaultProjectName(c.ProjectRoot)
 }
 
+// StateDir returns the absolute path to the yard state directory for this
+// project. The name is hardcoded (.yard) and does NOT depend on the project
+// directory basename. See ProjectName() for the basename-derived codeintel
+// label, which is a separate concept.
 func (c *Config) StateDir() string {
 	root := c.ProjectRoot
 	if root == "" {
 		root = "."
 	}
-	return filepath.Join(root, "."+c.ProjectName())
+	return filepath.Join(root, StateDirName)
 }
 
 func (c *Config) DatabasePath() string {
-	return filepath.Join(c.StateDir(), "sirtopham.db")
+	return filepath.Join(c.StateDir(), StateDBName)
 }
 
 // CodeLanceDBPath returns the directory for the code vectorstore.
@@ -549,10 +563,7 @@ func (c *Config) QwenCoderBaseURL() string {
 
 func (c *Config) requiredIndexExcludePatterns() []string {
 	patterns := append([]string(nil), requiredIndexExcludePatterns...)
-	projectName := strings.TrimSpace(c.ProjectName())
-	if projectName != "" {
-		patterns = append(patterns, fmt.Sprintf("**/.%s/**", projectName))
-	}
+	patterns = append(patterns, "**/"+StateDirName+"/**")
 	return patterns
 }
 
