@@ -8,14 +8,14 @@ import (
 	"testing"
 )
 
-func TestRootCommandDefaultsConfigPathToSirtophamYAML(t *testing.T) {
+func TestRootCommandDefaultsConfigPathToYardYAML(t *testing.T) {
 	cmd := newRootCmd()
 	flag := cmd.PersistentFlags().Lookup("config")
 	if flag == nil {
 		t.Fatal("config flag missing")
 	}
-	if got := flag.DefValue; got != "sirtopham.yaml" {
-		t.Fatalf("config default = %q, want sirtopham.yaml", got)
+	if got := flag.DefValue; got != "yard.yaml" {
+		t.Fatalf("config default = %q, want yard.yaml", got)
 	}
 }
 
@@ -59,7 +59,7 @@ func TestConfigCommandPrintsEffectiveConfig(t *testing.T) {
 	}
 
 	output := buf.String()
-	stateDir := filepath.Join(projectRoot, "."+filepath.Base(projectRoot))
+	stateDir := filepath.Join(projectRoot, ".yard")
 	for _, want := range []string{
 		"config: valid",
 		"project_root: " + projectRoot,
@@ -68,7 +68,7 @@ func TestConfigCommandPrintsEffectiveConfig(t *testing.T) {
 		"default_model: claude-sonnet-4-6-20250514",
 		"fallback_provider: openrouter",
 		"fallback_model: anthropic/claude-sonnet-4",
-		"database_path: " + filepath.Join(stateDir, "sirtopham.db"),
+		"database_path: " + filepath.Join(stateDir, "yard.db"),
 		"code_index_path: " + filepath.Join(stateDir, "lancedb", "code"),
 		"brain_vault_path: <disabled>",
 		"embedding_base_url: http://localhost:12435",
