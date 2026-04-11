@@ -5,9 +5,11 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+
+	appconfig "github.com/ponchione/sodoryard/internal/config"
 )
 
-const defaultCLIConfigPath = "sirtopham.yaml"
+const defaultCLIConfigPath = appconfig.ConfigFilename
 
 var version = "dev"
 
