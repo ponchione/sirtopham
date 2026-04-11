@@ -256,9 +256,10 @@ than to Phase 1 mechanical restructuring. Phase 1 now stays minimal.
   `.<ProjectName()>/` which resolves to `.sodoryard/` in practice. Eventually
   this becomes `.yard/yard.db` (hardcoded). Deferred to Phase 5.
 - Config filename `sirtopham.yaml` → `yard.yaml` (hardcoded, not derived
-  from project dir name). `DefaultConfigFilename()` currently derives the
-  default; that derivation gets replaced rather than reconciled. Deferred
-  to Phase 5. Phase 1 leaves `sirtopham.yaml` in place.
+  from project dir name). The Tidmouth CLI currently keeps its explicit default
+  at `sirtopham.yaml` so Phase 1/2 behavior stays aligned with the checked-in
+  config; the broader filename model still gets replaced rather than reconciled
+  in Phase 5. Phase 1 leaves `sirtopham.yaml` in place.
 - Review whether `project_root:` in the config should stay absolute or move
   to relative / derived. Non-blocking; defer.
 
@@ -381,13 +382,15 @@ embedding:
 ./bin/tidmouth run \
   --config /tmp/my-website-smoke.yaml \
   --role correctness-auditor \
-  --task "Use brain_search to list the notes in the vault. Then use brain_write to create a receipt at receipts/correctness-auditor/smoke-test-p1.md with the spec-13 frontmatter schema (agent, chain_id, step, verdict=completed, timestamp, turns_used, tokens_used, duration_seconds). After writing the receipt, stop." \
+  --task "Use brain_search to list the notes in the vault. Then use brain_write to create a receipt at receipts/correctness-auditor/smoke-test-p1.md. The receipt must use valid spec-13 YAML frontmatter with exactly these fields: agent, chain_id, step, verdict, timestamp, turns_used, tokens_used, duration_seconds. Set step to the integer 1. Set verdict to completed. After writing the receipt, stop." \
   --chain-id smoke-test-p1 \
   --max-turns 6 \
   --timeout 3m
 ```
 
 (Before Step 1.2 finishes, use `./bin/sirtopham run` instead of `./bin/tidmouth run`.)
+
+Note: `step` must be the integer `1`; the receipt validator enforces spec-13 field types and will reject string values like `final`.
 
 ### Pass criteria
 
