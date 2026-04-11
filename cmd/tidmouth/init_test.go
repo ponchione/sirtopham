@@ -27,7 +27,7 @@ func withWorkingDir(t *testing.T, dir string) {
 	})
 }
 
-func TestRunInitUsesProjectNamedArtifacts(t *testing.T) {
+func TestRunInitUsesCanonicalYardPaths(t *testing.T) {
 	projectRoot := filepath.Join(t.TempDir(), "eyebox")
 	if err := os.MkdirAll(projectRoot, 0o755); err != nil {
 		t.Fatalf("MkdirAll(projectRoot): %v", err)
@@ -39,11 +39,11 @@ func TestRunInitUsesProjectNamedArtifacts(t *testing.T) {
 	}
 
 	for _, path := range []string{
-		filepath.Join(projectRoot, "eyebox.yaml"),
-		filepath.Join(projectRoot, ".eyebox"),
-		filepath.Join(projectRoot, ".eyebox", "sirtopham.db"),
-		filepath.Join(projectRoot, ".eyebox", "lancedb", "code"),
-		filepath.Join(projectRoot, ".eyebox", "lancedb", "brain"),
+		filepath.Join(projectRoot, "yard.yaml"),
+		filepath.Join(projectRoot, ".yard"),
+		filepath.Join(projectRoot, ".yard", "yard.db"),
+		filepath.Join(projectRoot, ".yard", "lancedb", "code"),
+		filepath.Join(projectRoot, ".yard", "lancedb", "brain"),
 		filepath.Join(projectRoot, ".brain", ".obsidian", "app.json"),
 		filepath.Join(projectRoot, ".brain", "notes"),
 	} {
@@ -52,16 +52,16 @@ func TestRunInitUsesProjectNamedArtifacts(t *testing.T) {
 		}
 	}
 
-	configData, err := os.ReadFile(filepath.Join(projectRoot, "eyebox.yaml"))
+	configData, err := os.ReadFile(filepath.Join(projectRoot, "yard.yaml"))
 	if err != nil {
-		t.Fatalf("ReadFile(eyebox.yaml): %v", err)
+		t.Fatalf("ReadFile(yard.yaml): %v", err)
 	}
-	if !strings.Contains(string(configData), "**/.eyebox/**") {
-		t.Fatalf("expected eyebox.yaml to exclude .eyebox, got:\n%s", string(configData))
+	if !strings.Contains(string(configData), "**/.yard/**") {
+		t.Fatalf("expected yard.yaml to exclude .yard, got:\n%s", string(configData))
 	}
 	for _, want := range []string{"local_services:", "compose_file: ./ops/llm/docker-compose.yml", "base_url: http://localhost:12434", "base_url: http://localhost:12435"} {
 		if !strings.Contains(string(configData), want) {
-			t.Fatalf("expected eyebox.yaml to contain %q, got:\n%s", want, string(configData))
+			t.Fatalf("expected yard.yaml to contain %q, got:\n%s", want, string(configData))
 		}
 	}
 
@@ -69,7 +69,7 @@ func TestRunInitUsesProjectNamedArtifacts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile(.gitignore): %v", err)
 	}
-	if !strings.Contains(string(gitignoreData), ".eyebox/") {
-		t.Fatalf("expected .gitignore to contain .eyebox/, got:\n%s", string(gitignoreData))
+	if !strings.Contains(string(gitignoreData), ".yard/") {
+		t.Fatalf("expected .gitignore to contain .yard/, got:\n%s", string(gitignoreData))
 	}
 }
