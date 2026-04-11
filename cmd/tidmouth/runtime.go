@@ -73,6 +73,13 @@ func buildAppRuntime(ctx context.Context, cfg *appconfig.Config) (*appRuntime, e
 		return nil, err
 	}
 
+	// Bootstrap the base schema if this is a fresh .yard/yard.db. Without
+	// this, `tidmouth run` against a project that has never been `init`ed
+	// fails inside the Ensure* schema-upgrade helpers because they try to
+	// ALTER tables that do not exist yet.
+	if _, err := appdb.InitIfNeeded(ctx, database); err != nil {
+		return closeOnError(fmt.Errorf("init database schema: %w", err))
+	}
 	if err := appdb.EnsureMessageSearchIndexesIncludeTools(ctx, database); err != nil {
 		return closeOnError(fmt.Errorf("upgrade message search indexes: %w", err))
 	}
