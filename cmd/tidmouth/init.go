@@ -34,8 +34,8 @@ func newInitCmd(configPath *string) *cobra.Command {
 		Use:   "init",
 		Short: "Initialize a project for use with tidmouth",
 		Long: `Bootstrap the current directory for tidmouth:
-  - Generate <project>.yaml config file
-  - Create .<project>/ directory with SQLite database and vectorstore roots
+  - Generate yard.yaml config file
+  - Create .yard/ directory with SQLite database and vectorstore roots
   - Create .brain/ vault with Obsidian structure
   - Update .gitignore
 

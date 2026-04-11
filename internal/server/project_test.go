@@ -215,11 +215,11 @@ func TestProjectTreeHonorsYamlExcludePatterns(t *testing.T) {
 	mustWriteTreeFile(t, dir, "src/main.go", "package main\n")
 	mustWriteTreeFile(t, dir, "web/node_modules/react/index.js", "export const x = 1\n")
 	mustWriteTreeFile(t, dir, ".brain/notes/hello.md", "hello\n")
-	mustWriteTreeFile(t, dir, ".sirtopham/lancedb/code/test.txt", "ignored\n")
+	mustWriteTreeFile(t, dir, ".yard/lancedb/code/test.txt", "ignored\n")
 
 	cfg := config.Default()
 	cfg.ProjectRoot = dir
-	cfg.Index.Exclude = []string{"**/.git/**", "**/.sirtopham/**", "**/.brain/**", "**/node_modules/**"}
+	cfg.Index.Exclude = []string{"**/.git/**", "**/.yard/**", "**/.brain/**", "**/node_modules/**"}
 	cfg.Brain.Enabled = false
 
 	srv := server.New(server.Config{Host: "127.0.0.1", Port: 0}, newTestLogger())
