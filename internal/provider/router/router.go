@@ -28,7 +28,7 @@ type RouteTarget struct {
 }
 
 // RouterConfig holds the routing configuration parsed from the routing section
-// of sirtopham.yaml.
+// of yard.yaml.
 type RouterConfig struct {
 	Default  RouteTarget `yaml:"default"`
 	Fallback RouteTarget `yaml:"fallback"`

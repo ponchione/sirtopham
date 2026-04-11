@@ -32,8 +32,9 @@ vendor/
 .claude
 .hermes
 .brain
-.sirtopham
-/sirtopham
+.yard/
+.sirtopham/
+.sodoryard/
 /ops/llm/models/*
 !/ops/llm/models/.gitignore
 /ops/llm/logs/*
