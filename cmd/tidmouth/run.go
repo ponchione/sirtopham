@@ -28,6 +28,18 @@ const (
 
 var buildRunRuntime = buildAppRuntime
 var buildRunRoleRegistry = role.BuildRegistry
+var createRunConversation = func(ctx context.Context, manager *conversation.Manager, projectRoot string, opts ...conversation.CreateOption) (*conversation.Conversation, error) {
+	return manager.Create(ctx, projectRoot, opts...)
+}
+
+type runAgentLoop interface {
+	RunTurn(ctx context.Context, req agent.RunTurnRequest) (*agent.TurnResult, error)
+	Close()
+}
+
+var newRunAgentLoop = func(deps agent.AgentLoopDeps) runAgentLoop {
+	return agent.NewAgentLoop(deps)
+}
 
 type exitCoder interface {
 	ExitCode() int
@@ -185,7 +197,7 @@ func runHeadless(cmd *cobra.Command, configPath string, flags runFlags) (*runExe
 	}
 
 	titleGen := conversation.NewTitleGen(runtimeBundle.ConversationManager, runtimeBundle.ProviderRouter, cfg.Routing.Default.Model, runtimeBundle.Logger)
-	agentLoop := agent.NewAgentLoop(agent.AgentLoopDeps{
+	agentLoop := newRunAgentLoop(agent.AgentLoopDeps{
 		ContextAssembler:    runtimeBundle.ContextAssembler,
 		ConversationManager: runtimeBundle.ConversationManager,
 		ProviderRouter:      runtimeBundle.ProviderRouter,
@@ -223,7 +235,7 @@ func runHeadless(cmd *cobra.Command, configPath string, flags runFlags) (*runExe
 	if cfg.Routing.Default.Model != "" {
 		convOpts = append(convOpts, conversation.WithModel(cfg.Routing.Default.Model))
 	}
-	conv, err := runtimeBundle.ConversationManager.Create(ctx, cfg.ProjectRoot, convOpts...)
+	conv, err := createRunConversation(ctx, runtimeBundle.ConversationManager, cfg.ProjectRoot, convOpts...)
 	if err != nil {
 		return nil, runExitError{code: runExitInfrastructure, err: fmt.Errorf("create conversation: %w", err)}
 	}

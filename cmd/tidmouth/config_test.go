@@ -8,6 +8,17 @@ import (
 	"testing"
 )
 
+func TestRootCommandDefaultsConfigPathToSirtophamYAML(t *testing.T) {
+	cmd := newRootCmd()
+	flag := cmd.PersistentFlags().Lookup("config")
+	if flag == nil {
+		t.Fatal("config flag missing")
+	}
+	if got := flag.DefValue; got != "sirtopham.yaml" {
+		t.Fatalf("config default = %q, want sirtopham.yaml", got)
+	}
+}
+
 func TestConfigCommandPrintsEffectiveConfig(t *testing.T) {
 	projectRoot := t.TempDir()
 	configPath := filepath.Join(t.TempDir(), "sirtopham.yaml")
