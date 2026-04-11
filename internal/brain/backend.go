@@ -1,6 +1,10 @@
 package brain
 
-import "context"
+import (
+	"context"
+	"path/filepath"
+	"strings"
+)
 
 // SearchHit is a keyword search result returned by a brain backend.
 type SearchHit struct {
@@ -16,4 +20,15 @@ type Backend interface {
 	PatchDocument(ctx context.Context, path string, operation string, content string) error
 	SearchKeyword(ctx context.Context, query string) ([]SearchHit, error)
 	ListDocuments(ctx context.Context, directory string) ([]string, error)
+}
+
+// IsOperationalDocument returns true for brain documents that are operational
+// bookkeeping (e.g. _log.md) rather than real knowledge notes. These should be
+// excluded from proactive retrieval and search results.
+func IsOperationalDocument(path string) bool {
+	cleaned := strings.Trim(filepath.ToSlash(strings.TrimSpace(path)), "/")
+	if cleaned == "" {
+		return false
+	}
+	return filepath.Base(cleaned) == "_log.md"
 }

@@ -1,0 +1,48 @@
+package tool
+
+import (
+	"fmt"
+	"path"
+	"strings"
+
+	"github.com/ponchione/sirtopham/internal/config"
+	"github.com/ponchione/sirtopham/internal/pathglob"
+)
+
+func normalizeBrainDocumentPath(raw string) (string, error) {
+	trimmed := strings.TrimSpace(strings.ReplaceAll(raw, "\\", "/"))
+	if trimmed == "" {
+		return "", fmt.Errorf("path is required")
+	}
+	if strings.HasPrefix(trimmed, "/") {
+		return "", fmt.Errorf("path must be vault-relative: %s", raw)
+	}
+	cleaned := path.Clean(trimmed)
+	cleaned = strings.TrimPrefix(cleaned, "./")
+	cleaned = strings.TrimPrefix(cleaned, ".brain/")
+	if cleaned == "." || cleaned == "" {
+		return "", fmt.Errorf("path is required")
+	}
+	if cleaned == ".." || strings.HasPrefix(cleaned, "../") {
+		return "", fmt.Errorf("path must stay within the brain vault: %s", raw)
+	}
+	return cleaned, nil
+}
+
+func ensureBrainWriteAllowed(cfg config.BrainConfig, rawPath string) (string, error) {
+	return ValidateBrainWritePath(cfg, rawPath)
+}
+
+func ValidateBrainWritePath(cfg config.BrainConfig, rawPath string) (string, error) {
+	normalizedPath, err := normalizeBrainDocumentPath(rawPath)
+	if err != nil {
+		return "", err
+	}
+	if pathglob.MatchAny(cfg.BrainDenyPaths, normalizedPath) {
+		return "", fmt.Errorf("brain write path is denied by policy: %s", normalizedPath)
+	}
+	if len(cfg.BrainWritePaths) > 0 && !pathglob.MatchAny(cfg.BrainWritePaths, normalizedPath) {
+		return "", fmt.Errorf("brain write path is not allowed by policy: %s", normalizedPath)
+	}
+	return normalizedPath, nil
+}

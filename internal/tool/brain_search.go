@@ -12,18 +12,30 @@ import (
 
 	"github.com/ponchione/sirtopham/internal/brain"
 	"github.com/ponchione/sirtopham/internal/config"
+	appcontext "github.com/ponchione/sirtopham/internal/context"
 )
 
 // BrainSearch implements the brain_search tool — keyword search against the
 // project brain backend.
+type BrainRuntimeSearcher interface {
+	Search(ctx context.Context, request appcontext.BrainSearchRequest) ([]appcontext.BrainSearchResult, error)
+}
+
 type BrainSearch struct {
-	client brain.Backend
-	config config.BrainConfig
+	client  brain.Backend
+	runtime BrainRuntimeSearcher
+	config  config.BrainConfig
 }
 
 // NewBrainSearch creates a brain_search tool backed by the given brain backend.
 func NewBrainSearch(client brain.Backend, cfg config.BrainConfig) *BrainSearch {
 	return &BrainSearch{client: client, config: cfg}
+}
+
+// NewBrainSearchWithRuntime creates a brain_search tool with an optional hybrid
+// runtime searcher used for semantic/auto modes.
+func NewBrainSearchWithRuntime(client brain.Backend, runtime BrainRuntimeSearcher, cfg config.BrainConfig) *BrainSearch {
+	return &BrainSearch{client: client, runtime: runtime, config: cfg}
 }
 
 type brainSearchInput struct {
@@ -47,7 +59,7 @@ func (b *BrainSearch) ToolPurity() Purity {
 func (b *BrainSearch) Schema() json.RawMessage {
 	return json.RawMessage(`{
 		"name": "brain_search",
-		"description": "Search the project brain (Obsidian knowledge vault) for documents by keyword. Use this when the prompt refers to brain notes like 'notes/...md' or '.brain/notes/...md', or when search_text found nothing but the content may live in the brain. Prefer brain_search/brain_read over search_text/file_read for vault-relative note paths, never use search_text for .brain paths, and do not double-check a successful brain hit with repo search tools. Returns matching document paths, titles, and relevant snippets. Use this to find architectural decisions, debugging journals, conventions, and other project knowledge. Keyword mode is the live runtime contract today; semantic/index-backed brain search is reserved future work unless explicitly landed.",
+		"description": "Search the project brain (Obsidian knowledge vault) for documents and derived knowledge matches. Use this when the prompt refers to brain notes like 'notes/...md' or '.brain/notes/...md', or when search_text found nothing but the content may live in the brain. Prefer brain_search/brain_read over search_text/file_read for vault-relative note paths, never use search_text for .brain paths, and do not double-check a successful brain hit with repo search tools. Returns matching document paths, titles, and relevant snippets. Use this to find architectural decisions, debugging journals, conventions, and other project knowledge. Keyword mode stays lexical-only; semantic and auto modes use the landed runtime search path when available and may also include graph/backlink expansion from derived brain links.",
 		"input_schema": {
 			"type": "object",
 			"properties": {
@@ -57,7 +69,7 @@ func (b *BrainSearch) Schema() json.RawMessage {
 				},
 				"mode": {
 					"type": "string",
-					"description": "Search mode: 'keyword' (default). 'semantic' and 'auto' are accepted for compatibility but currently fall back to keyword search because semantic/index-backed brain search is not a landed runtime path.",
+					"description": "Search mode: 'keyword' (default) for deterministic lexical search, 'semantic' for runtime semantic search when available, or 'auto' for hybrid runtime search that can combine keyword, semantic, and derived graph/backlink signals.",
 					"enum": ["keyword", "semantic", "auto"],
 					"default": "keyword"
 				},
@@ -81,6 +93,7 @@ func (b *BrainSearch) Execute(ctx context.Context, projectRoot string, input jso
 		return &ToolResult{
 			Success: false,
 			Content: "Project brain is not configured. See the project's YAML config brain section.",
+			Error:   "brain not configured",
 		}, nil
 	}
 
@@ -103,14 +116,18 @@ func (b *BrainSearch) Execute(ctx context.Context, projectRoot string, input jso
 		}, nil
 	}
 
-	// Semantic/auto mode falls through to keyword search with a notice.
-	semanticNotice := ""
-	mode := strings.ToLower(params.Mode)
-	if mode == "semantic" || mode == "auto" {
-		semanticNotice = "Semantic/index-backed brain search is not a landed runtime path yet. Using keyword search instead.\n\n"
+	mode := strings.ToLower(strings.TrimSpace(params.Mode))
+	if mode == "" {
+		mode = "keyword"
 	}
 
-	hits, err := b.searchHits(ctx, params.Query)
+	maxResults := 10
+	if params.MaxResults != nil && *params.MaxResults > 0 {
+		maxResults = *params.MaxResults
+	}
+
+	semanticNotice := ""
+	formatted, err := b.searchFormattedHits(ctx, params.Query, mode, normalizedTags, maxResults)
 	if err != nil {
 		return &ToolResult{
 			Success: false,
@@ -118,37 +135,12 @@ func (b *BrainSearch) Execute(ctx context.Context, projectRoot string, input jso
 			Error:   err.Error(),
 		}, nil
 	}
-	if len(normalizedTags) > 0 {
-		hits, err = b.filterHitsByTags(ctx, hits, normalizedTags)
-		if err != nil {
-			return &ToolResult{
-				Success: false,
-				Content: fmt.Sprintf("Brain search failed while filtering tags: %v", err),
-				Error:   err.Error(),
-			}, nil
-		}
-		if len(hits) == 0 && params.Query != "" {
-			hits, err = b.searchTaggedDocsByLooseQuery(ctx, params.Query, normalizedTags)
-			if err != nil {
-				return &ToolResult{
-					Success: false,
-					Content: fmt.Sprintf("Brain search failed while retrying tagged fallback: %v", err),
-					Error:   err.Error(),
-				}, nil
-			}
-		}
-	}
-
-	maxResults := 10
-	if params.MaxResults != nil && *params.MaxResults > 0 {
-		maxResults = *params.MaxResults
-	}
-	if len(hits) > maxResults {
-		hits = hits[:maxResults]
+	if (mode == "semantic" || mode == "auto") && b.runtime == nil {
+		semanticNotice = "Semantic/index-backed brain search is not a landed runtime path yet. Using keyword search instead.\n\n"
 	}
 
 	queryLabel := describeBrainSearchQuery(params.Query, normalizedTags)
-	if len(hits) == 0 {
+	if len(formatted) == 0 {
 		content := semanticNotice + fmt.Sprintf("No brain documents found for query: '%s'", queryLabel)
 		if err := b.appendQueryLog(ctx, queryLabel, 0); err != nil {
 			return &ToolResult{Success: false, Content: fmt.Sprintf("Brain search completed but failed to append query log: %v", err), Error: err.Error()}, nil
@@ -157,15 +149,6 @@ func (b *BrainSearch) Execute(ctx context.Context, projectRoot string, input jso
 			Success: true,
 			Content: content,
 		}, nil
-	}
-
-	formatted := make([]formattedSearchHit, 0, len(hits))
-	for _, hit := range hits {
-		formatted = append(formatted, formattedSearchHit{
-			Path:    hit.Path,
-			Title:   titleFromPath(hit.Path),
-			Snippet: compactSnippet(hit.Snippet),
-		})
 	}
 
 	content := formatBrainSearchResult(queryLabel, formatted)
@@ -188,7 +171,13 @@ func (b *BrainSearch) searchHits(ctx context.Context, query string) ([]brain.Sea
 		if err != nil {
 			return nil, err
 		}
-		return filterOperationalBrainSearchHits(hits), nil
+		filtered := make([]brain.SearchHit, 0, len(hits))
+		for _, hit := range hits {
+			if !brain.IsOperationalDocument(hit.Path) {
+				filtered = append(filtered, hit)
+			}
+		}
+		return filtered, nil
 	}
 
 	paths, err := b.client.ListDocuments(ctx, "")
@@ -197,7 +186,7 @@ func (b *BrainSearch) searchHits(ctx context.Context, query string) ([]brain.Sea
 	}
 	results := make([]brain.SearchHit, 0, len(paths))
 	for _, path := range paths {
-		if isOperationalBrainDocumentPath(path) {
+		if brain.IsOperationalDocument(path) {
 			continue
 		}
 		content, err := b.client.ReadDocument(ctx, path)
@@ -216,13 +205,81 @@ func (b *BrainSearch) searchHits(ctx context.Context, query string) ([]brain.Sea
 	return results, nil
 }
 
+func (b *BrainSearch) searchFormattedHits(ctx context.Context, query string, mode string, tags []string, maxResults int) ([]formattedSearchHit, error) {
+	if (mode == "semantic" || mode == "auto") && b.runtime != nil && strings.TrimSpace(query) != "" {
+		results, err := b.runtime.Search(ctx, appcontext.BrainSearchRequest{
+			Query:            query,
+			Mode:             mode,
+			MaxResults:       maxResults,
+			IncludeGraphHops: b.config.IncludeGraphHops,
+			GraphHopDepth:    b.config.GraphHopDepth,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if len(tags) > 0 {
+			results, err = b.filterRuntimeResultsByTags(ctx, results, tags)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if len(results) > maxResults {
+			results = results[:maxResults]
+		}
+		return formatRuntimeBrainSearchHits(results), nil
+	}
+
+	hits, err := b.searchHits(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	if len(tags) > 0 {
+		hits, err = b.filterHitsByTags(ctx, hits, tags)
+		if err != nil {
+			return nil, err
+		}
+		if len(hits) == 0 && query != "" {
+			hits, err = b.searchTaggedDocsByLooseQuery(ctx, query, tags)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	if len(hits) > maxResults {
+		hits = hits[:maxResults]
+	}
+	formatted := make([]formattedSearchHit, 0, len(hits))
+	for _, hit := range hits {
+		formatted = append(formatted, formattedSearchHit{Path: hit.Path, Title: titleFromPath(hit.Path), Snippet: compactSnippet(hit.Snippet)})
+	}
+	return formatted, nil
+}
+
 func (b *BrainSearch) filterHitsByTags(ctx context.Context, hits []brain.SearchHit, tags []string) ([]brain.SearchHit, error) {
 	filtered := make([]brain.SearchHit, 0, len(hits))
 	for _, hit := range hits {
-		if isOperationalBrainDocumentPath(hit.Path) {
+		if brain.IsOperationalDocument(hit.Path) {
 			continue
 		}
 		content, err := b.client.ReadDocument(ctx, hit.Path)
+		if err != nil {
+			return nil, err
+		}
+		if brainDocumentHasAllTags(content, tags) {
+			filtered = append(filtered, hit)
+		}
+	}
+	return filtered, nil
+}
+
+func (b *BrainSearch) filterRuntimeResultsByTags(ctx context.Context, hits []appcontext.BrainSearchResult, tags []string) ([]appcontext.BrainSearchResult, error) {
+	filtered := make([]appcontext.BrainSearchResult, 0, len(hits))
+	for _, hit := range hits {
+		if len(hit.Tags) > 0 && stringSliceHasAllFolded(hit.Tags, tags) {
+			filtered = append(filtered, hit)
+			continue
+		}
+		content, err := b.client.ReadDocument(ctx, hit.DocumentPath)
 		if err != nil {
 			return nil, err
 		}
@@ -239,9 +296,12 @@ func (b *BrainSearch) searchTaggedDocsByLooseQuery(ctx context.Context, query st
 		return nil, err
 	}
 	queryTokens := strings.Fields(normalizeBrainSearchText(query))
+	if len(queryTokens) == 0 {
+		return nil, nil
+	}
 	results := make([]brain.SearchHit, 0, len(paths))
 	for _, path := range paths {
-		if isOperationalBrainDocumentPath(path) {
+		if brain.IsOperationalDocument(path) {
 			continue
 		}
 		content, err := b.client.ReadDocument(ctx, path)
@@ -258,7 +318,7 @@ func (b *BrainSearch) searchTaggedDocsByLooseQuery(ctx context.Context, query st
 				matched++
 			}
 		}
-		if matched != len(queryTokens) || matched == 0 {
+		if matched != len(queryTokens) {
 			continue
 		}
 		results = append(results, brain.SearchHit{
@@ -276,19 +336,51 @@ func (b *BrainSearch) searchTaggedDocsByLooseQuery(ctx context.Context, query st
 	return results, nil
 }
 
-func filterOperationalBrainSearchHits(hits []brain.SearchHit) []brain.SearchHit {
-	filtered := make([]brain.SearchHit, 0, len(hits))
+func formatRuntimeBrainSearchHits(hits []appcontext.BrainSearchResult) []formattedSearchHit {
+	formatted := make([]formattedSearchHit, 0, len(hits))
 	for _, hit := range hits {
-		if isOperationalBrainDocumentPath(hit.Path) {
-			continue
+		label := strings.TrimSpace(hit.MatchMode)
+		if label == "" {
+			label = strings.Join(hit.MatchSources, "+")
 		}
-		filtered = append(filtered, hit)
+		title := strings.TrimSpace(hit.Title)
+		if title == "" {
+			title = titleFromPath(hit.DocumentPath)
+		}
+		if label != "" && label != "keyword" {
+			title = fmt.Sprintf("%s [%s]", title, label)
+		}
+		formatted = append(formatted, formattedSearchHit{
+			Path:    hit.DocumentPath,
+			Title:   title,
+			Snippet: compactSnippet(hit.Snippet),
+		})
 	}
-	return filtered
+	return formatted
 }
 
-func isOperationalBrainDocumentPath(path string) bool {
-	return filepath.Base(strings.Trim(filepath.ToSlash(strings.TrimSpace(path)), "/")) == "_log.md"
+func stringSliceHasAllFolded(values []string, required []string) bool {
+	if len(required) == 0 {
+		return true
+	}
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = strings.ToLower(strings.TrimSpace(value))
+		if value == "" {
+			continue
+		}
+		seen[value] = struct{}{}
+	}
+	for _, want := range required {
+		want = strings.ToLower(strings.TrimSpace(want))
+		if want == "" {
+			continue
+		}
+		if _, ok := seen[want]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func normalizeBrainSearchTags(tags []string) []string {

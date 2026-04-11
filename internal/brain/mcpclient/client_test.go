@@ -3,6 +3,7 @@ package mcpclient
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -52,7 +53,7 @@ func TestConnectProvidesBackendOperations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadDocument after patch: %v", err)
 	}
-	if want := "## Appendix\n\nMore notes."; !contains(got, want) {
+	if want := "## Appendix\n\nMore notes."; !strings.Contains(got, want) {
 		t.Fatalf("patched document missing %q:\n%s", want, got)
 	}
 }
@@ -64,15 +65,3 @@ func TestConnectRejectsMissingVaultPath(t *testing.T) {
 	}
 }
 
-func contains(s, sub string) bool {
-	return len(sub) == 0 || (len(s) >= len(sub) && (func() bool { return indexOf(s, sub) >= 0 })())
-}
-
-func indexOf(s, sub string) int {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return i
-		}
-	}
-	return -1
-}

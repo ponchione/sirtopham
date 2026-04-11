@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ponchione/sirtopham/internal/brain"
 	"github.com/ponchione/sirtopham/internal/codeintel"
 	"github.com/ponchione/sirtopham/internal/config"
 )
@@ -220,7 +221,7 @@ func (o *RetrievalOrchestrator) Retrieve(ctx stdctx.Context, needs *ContextNeeds
 			defer wg.Done()
 			pathCtx, cancel := o.pathContext(ctx)
 			defer cancel()
-			hits, err := o.retrieveBrainSearch(pathCtx, queries)
+			hits, err := o.retrieveBrainSearch(pathCtx, queries, cfg)
 			if err != nil {
 				slog.Warn("context retrieval brain search failed", "error", err)
 				return
@@ -332,7 +333,7 @@ func (o *RetrievalOrchestrator) retrieveSemanticSearch(ctx stdctx.Context, queri
 	return hits, nil
 }
 
-func (o *RetrievalOrchestrator) retrieveBrainSearch(ctx stdctx.Context, queries []string) ([]BrainHit, error) {
+func (o *RetrievalOrchestrator) retrieveBrainSearch(ctx stdctx.Context, queries []string, cfg config.ContextConfig) ([]BrainHit, error) {
 	if o.brain == nil || len(queries) == 0 {
 		return nil, nil
 	}
@@ -345,23 +346,37 @@ func (o *RetrievalOrchestrator) retrieveBrainSearch(ctx stdctx.Context, queries 
 			continue
 		}
 		for _, candidateQuery := range candidates {
-			hits, err := o.brain.SearchKeyword(ctx, candidateQuery)
+			hits, err := o.brain.Search(ctx, BrainSearchRequest{
+				Query:            candidateQuery,
+				Mode:             "auto",
+				MaxResults:       retrievalMaxResults(cfg),
+				IncludeGraphHops: o.brainCfg.IncludeGraphHops,
+				GraphHopDepth:    o.brainCfg.GraphHopDepth,
+			})
 			o.traceBrainQuery("proactive brain search result", "candidate", candidateQuery, "hit_count", len(hits), "err", err)
 			if err != nil {
 				return nil, err
 			}
+
 			keptAny := false
 			for _, hit := range hits {
-				path := strings.TrimSpace(hit.Path)
-				if path == "" || isOperationalBrainDocument(path) || hit.Score < brainRelevanceThreshold(o.brainCfg) {
+				path := strings.TrimSpace(hit.DocumentPath)
+				if path == "" || brain.IsOperationalDocument(path) || hit.FinalScore < brainRelevanceThreshold(o.brainCfg) {
 					continue
 				}
 				candidate := BrainHit{
-					DocumentPath: path,
-					Title:        filepath.Base(path),
-					Snippet:      strings.TrimSpace(hit.Snippet),
-					MatchScore:   hit.Score,
-					MatchMode:    "keyword",
+					DocumentPath:    path,
+					Title:           firstNonEmpty(hit.Title, filepath.Base(path)),
+					SectionHeading:  strings.TrimSpace(hit.SectionHeading),
+					Snippet:         strings.TrimSpace(hit.Snippet),
+					LexicalScore:    hit.LexicalScore,
+					SemanticScore:   hit.SemanticScore,
+					MatchScore:      hit.FinalScore,
+					MatchMode:       hit.MatchMode,
+					MatchSources:    append([]string(nil), hit.MatchSources...),
+					GraphSourcePath: strings.TrimSpace(hit.GraphSourcePath),
+					GraphHopDepth:   hit.GraphHopDepth,
+					Tags:            append([]string(nil), hit.Tags...),
 				}
 				existing, ok := seen[path]
 				if !ok || candidate.MatchScore > existing.MatchScore {
@@ -404,9 +419,11 @@ func (o *RetrievalOrchestrator) retrieveBrainSearch(ctx stdctx.Context, queries 
 //     phrase built from the top-N longest content words. This handles cases
 //     where the full stopword-stripped query cannot substring-match a note
 //     because of punctuation, hyphens, or list formatting in the note body.
+const defaultBrainRelevanceThreshold = 0.30
+
 func brainRelevanceThreshold(cfg config.BrainConfig) float64 {
 	if cfg.BrainRelevanceThreshold <= 0 {
-		return 0
+		return defaultBrainRelevanceThreshold
 	}
 	return cfg.BrainRelevanceThreshold
 }
@@ -469,12 +486,14 @@ func brainKeywordDistinctiveFallback(filtered []string) string {
 	return best
 }
 
-func isOperationalBrainDocument(path string) bool {
-	cleaned := strings.Trim(filepath.ToSlash(strings.TrimSpace(path)), "/")
-	if cleaned == "" {
-		return false
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			return value
+		}
 	}
-	return filepath.Base(cleaned) == "_log.md"
+	return ""
 }
 
 func (o *RetrievalOrchestrator) retrieveExplicitFiles(ctx stdctx.Context, explicitFiles []string, cfg config.ContextConfig) ([]FileResult, error) {

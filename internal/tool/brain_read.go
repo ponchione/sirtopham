@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/ponchione/sirtopham/internal/brain"
 	"github.com/ponchione/sirtopham/internal/config"
+	appdb "github.com/ponchione/sirtopham/internal/db"
 )
 
 var wikilinkRegexp = regexp.MustCompile(`\[\[([^\]]+)\]\]`)
@@ -17,13 +19,20 @@ var wikilinkRegexp = regexp.MustCompile(`\[\[([^\]]+)\]\]`)
 // BrainRead implements the brain_read tool — read a specific brain document
 // by its vault-relative path.
 type BrainRead struct {
-	client brain.Backend
-	config config.BrainConfig
+	client    brain.Backend
+	config    config.BrainConfig
+	queries   *appdb.Queries
+	projectID string
 }
 
 // NewBrainRead creates a brain_read tool backed by the given brain backend.
 func NewBrainRead(client brain.Backend, cfg config.BrainConfig) *BrainRead {
 	return &BrainRead{client: client, config: cfg}
+}
+
+// NewBrainReadWithIndex creates a brain_read tool with optional derived graph metadata.
+func NewBrainReadWithIndex(client brain.Backend, cfg config.BrainConfig, queries *appdb.Queries, projectID string) *BrainRead {
+	return &BrainRead{client: client, config: cfg, queries: queries, projectID: strings.TrimSpace(projectID)}
 }
 
 type brainReadInput struct {
@@ -63,6 +72,7 @@ func (b *BrainRead) Execute(ctx context.Context, projectRoot string, input json.
 		return &ToolResult{
 			Success: false,
 			Content: "Project brain is not configured. See the project's YAML config brain section.",
+			Error:   "brain not configured",
 		}, nil
 	}
 
@@ -100,18 +110,9 @@ func (b *BrainRead) Execute(ctx context.Context, projectRoot string, input json.
 	frontmatter, bodyContent := extractFrontmatter(content)
 	wikilinks := extractWikilinks(content)
 
-	// Backlinks via heuristic keyword search.
 	backlinks := []string{}
 	if params.IncludeBacklinks {
-		basename := strings.TrimSuffix(filepath.Base(params.Path), filepath.Ext(params.Path))
-		hits, searchErr := b.client.SearchKeyword(ctx, basename)
-		if searchErr == nil && len(hits) > 0 {
-			for _, hit := range hits {
-				if hit.Path != params.Path {
-					backlinks = append(backlinks, hit.Path)
-				}
-			}
-		}
+		backlinks = b.lookupBacklinks(ctx, params.Path)
 	}
 
 	contentOut := formatBrainReadDocument(params.Path, frontmatter, wikilinks, bodyContent)
@@ -163,4 +164,65 @@ func extractWikilinks(content string) []string {
 		links = append(links, link)
 	}
 	return links
+}
+
+func (b *BrainRead) lookupBacklinks(ctx context.Context, path string) []string {
+	if backlinks := b.lookupIndexedBacklinks(ctx, path); len(backlinks) > 0 {
+		return backlinks
+	}
+	return b.lookupHeuristicBacklinks(ctx, path)
+}
+
+func (b *BrainRead) lookupIndexedBacklinks(ctx context.Context, path string) []string {
+	if b == nil || b.queries == nil || strings.TrimSpace(b.projectID) == "" || strings.TrimSpace(path) == "" {
+		return nil
+	}
+	links, err := b.queries.ListBrainLinksByTarget(ctx, appdb.ListBrainLinksByTargetParams{
+		ProjectID:  b.projectID,
+		TargetPath: path,
+	})
+	if err != nil || len(links) == 0 {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	backlinks := make([]string, 0, len(links))
+	for _, link := range links {
+		sourcePath := strings.TrimSpace(link.SourcePath)
+		if sourcePath == "" || sourcePath == path {
+			continue
+		}
+		if _, ok := seen[sourcePath]; ok {
+			continue
+		}
+		seen[sourcePath] = struct{}{}
+		backlinks = append(backlinks, sourcePath)
+	}
+	sort.Strings(backlinks)
+	return backlinks
+}
+
+func (b *BrainRead) lookupHeuristicBacklinks(ctx context.Context, path string) []string {
+	if b == nil || b.client == nil {
+		return nil
+	}
+	basename := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	hits, err := b.client.SearchKeyword(ctx, basename)
+	if err != nil || len(hits) == 0 {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	backlinks := make([]string, 0, len(hits))
+	for _, hit := range hits {
+		hitPath := strings.TrimSpace(hit.Path)
+		if hitPath == "" || hitPath == path {
+			continue
+		}
+		if _, ok := seen[hitPath]; ok {
+			continue
+		}
+		seen[hitPath] = struct{}{}
+		backlinks = append(backlinks, hitPath)
+	}
+	sort.Strings(backlinks)
+	return backlinks
 }

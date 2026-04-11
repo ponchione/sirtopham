@@ -108,6 +108,26 @@ func TestRegisterFileTools(t *testing.T) {
 	}
 }
 
+func TestRegisterFileReadTools(t *testing.T) {
+	reg := NewRegistry()
+	RegisterFileReadTools(reg)
+
+	if _, ok := reg.Get("file_read"); !ok {
+		t.Fatal("file_read not registered")
+	}
+	if _, ok := reg.Get("file_write"); ok {
+		t.Fatal("file_write unexpectedly registered")
+	}
+	if _, ok := reg.Get("file_edit"); ok {
+		t.Fatal("file_edit unexpectedly registered")
+	}
+
+	all := reg.All()
+	if len(all) != 1 {
+		t.Fatalf("expected 1 tool, got %d", len(all))
+	}
+}
+
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsStr(s, substr))
 }

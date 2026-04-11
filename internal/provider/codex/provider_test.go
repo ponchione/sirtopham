@@ -27,8 +27,8 @@ func TestModels(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(models) != 8 {
-		t.Fatalf("expected 8 models, got %d", len(models))
+	if len(models) != 5 {
+		t.Fatalf("expected 5 models, got %d", len(models))
 	}
 
 	expectedModels := []struct {
@@ -39,10 +39,7 @@ func TestModels(t *testing.T) {
 		{"gpt-5.4-mini", 400000},
 		{"gpt-5.3-codex", 400000},
 		{"gpt-5.3-codex-spark", 400000},
-		{"gpt-5.2-codex", 400000},
 		{"gpt-5.2", 400000},
-		{"gpt-5.1-codex-max", 400000},
-		{"gpt-5.1-codex-mini", 400000},
 	}
 
 	for i, exp := range expectedModels {

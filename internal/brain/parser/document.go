@@ -303,10 +303,14 @@ func normalizeLinkTarget(target string) string {
 	if idx := strings.Index(target, "#"); idx >= 0 {
 		target = target[:idx]
 	}
+	hasMarkdownSuffix := strings.HasSuffix(strings.ToLower(target), ".md")
 	target = strings.TrimSpace(strings.ReplaceAll(target, `\`, "/"))
 	target = path.Clean(target)
 	if target == "." {
 		return ""
+	}
+	if hasMarkdownSuffix {
+		return target
 	}
 	return strings.TrimSuffix(target, ".md")
 }

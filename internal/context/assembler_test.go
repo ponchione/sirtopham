@@ -148,11 +148,14 @@ func TestContextAssemblerAssemblePersistsReportAndReturnsFrozenPackage(t *testin
 	retriever := &assemblerRetrieverStub{result: &RetrievalResults{
 		RAGHits: []RAGHit{{ChunkID: "chunk-1", FilePath: "internal/auth/service.go", Name: "ValidateToken", Description: "Validates tokens.", Body: "func ValidateToken() error { return nil }"}},
 		BrainHits: []BrainHit{{
-			DocumentPath: "notes/auth-decisions.md",
-			Title:        "Auth decisions",
-			Snippet:      "Auth rationale belongs in the project brain.",
-			MatchMode:    "keyword",
-			MatchScore:   0.92,
+			DocumentPath:    "notes/auth-decisions.md",
+			Title:           "Auth decisions",
+			Snippet:         "Auth rationale belongs in the project brain.",
+			MatchMode:       "backlink",
+			MatchSources:    []string{"backlink"},
+			GraphSourcePath: "notes/runtime-cache.md",
+			GraphHopDepth:   1,
+			MatchScore:      0.92,
 		}},
 		GraphHits:   []GraphHit{{ChunkID: "graph-1", FilePath: "internal/auth/handler.go", SymbolName: "AuthHandler", RelationshipType: "upstream"}},
 		FileResults: []FileResult{{FilePath: "internal/auth/middleware.go", Content: "package auth"}},
@@ -160,12 +163,15 @@ func TestContextAssemblerAssemblePersistsReportAndReturnsFrozenPackage(t *testin
 	budgeter := &assemblerBudgetManagerStub{result: &BudgetResult{
 		SelectedRAGHits: []RAGHit{{ChunkID: "chunk-1", FilePath: "internal/auth/service.go", Name: "ValidateToken", Description: "Validates tokens.", Body: "func ValidateToken() error { return nil }"}},
 		SelectedBrainHits: []BrainHit{{
-			DocumentPath: "notes/auth-decisions.md",
-			Title:        "Auth decisions",
-			Snippet:      "Auth rationale belongs in the project brain.",
-			MatchMode:    "keyword",
-			MatchScore:   0.92,
-			Included:     true,
+			DocumentPath:    "notes/auth-decisions.md",
+			Title:           "Auth decisions",
+			Snippet:         "Auth rationale belongs in the project brain.",
+			MatchMode:       "backlink",
+			MatchSources:    []string{"backlink"},
+			GraphSourcePath: "notes/runtime-cache.md",
+			GraphHopDepth:   1,
+			MatchScore:      0.92,
+			Included:        true,
 		}},
 		SelectedFileResults: []FileResult{{FilePath: "internal/auth/middleware.go", Content: "package auth"}},
 		BudgetTotal:         1200,
@@ -269,6 +275,9 @@ func TestContextAssemblerAssemblePersistsReportAndReturnsFrozenPackage(t *testin
 	}
 	if len(brainResults) != 1 || !brainResults[0].Included || brainResults[0].DocumentPath != "notes/auth-decisions.md" {
 		t.Fatalf("persisted brain results = %+v, want included auth brain hit", brainResults)
+	}
+	if brainResults[0].GraphSourcePath != "notes/runtime-cache.md" || brainResults[0].GraphHopDepth != 1 || brainResults[0].MatchMode != "backlink" {
+		t.Fatalf("persisted brain graph metadata = %+v, want backlink source/runtime-cache depth=1", brainResults[0])
 	}
 }
 

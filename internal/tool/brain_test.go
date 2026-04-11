@@ -2,14 +2,18 @@ package tool
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ponchione/sirtopham/internal/brain"
 	"github.com/ponchione/sirtopham/internal/config"
+	appcontext "github.com/ponchione/sirtopham/internal/context"
+	appdb "github.com/ponchione/sirtopham/internal/db"
 	"github.com/ponchione/sirtopham/internal/provider"
 )
 
@@ -202,6 +206,23 @@ func firstHeadingLine(content string) string {
 	return ""
 }
 
+type fakeRuntimeBrainSearcher struct {
+	resultsByMode map[string][]appcontext.BrainSearchResult
+	gotRequests   []appcontext.BrainSearchRequest
+	err           error
+}
+
+func (f *fakeRuntimeBrainSearcher) Search(ctx context.Context, request appcontext.BrainSearchRequest) ([]appcontext.BrainSearchResult, error) {
+	f.gotRequests = append(f.gotRequests, request)
+	if f.err != nil {
+		return nil, f.err
+	}
+	if f.resultsByMode != nil {
+		return append([]appcontext.BrainSearchResult(nil), f.resultsByMode[request.Mode]...), nil
+	}
+	return nil, nil
+}
+
 // ── brain_search tests ──────────────────────────────────────────────
 
 func TestBrainSearchDisabled(t *testing.T) {
@@ -335,6 +356,84 @@ func TestBrainSearchSemanticFallback(t *testing.T) {
 	}
 }
 
+func TestBrainSearchAutoPassesGraphExpansionConfigToRuntime(t *testing.T) {
+	backend := newFakeBackend(map[string]string{})
+	runtime := &fakeRuntimeBrainSearcher{resultsByMode: map[string][]appcontext.BrainSearchResult{
+		"auto": {{
+			DocumentPath:    "notes/runtime-rationale.md",
+			Title:           "Runtime Cache Rationale",
+			Snippet:         "Backlinks to runtime cache notes.",
+			MatchMode:       "backlink",
+			MatchSources:    []string{"backlink"},
+			GraphHopDepth:   1,
+			GraphSourcePath: "notes/runtime-cache.md",
+		}},
+	}}
+	cfg := brainConfig(true)
+	cfg.IncludeGraphHops = true
+	cfg.GraphHopDepth = 2
+	tool := NewBrainSearchWithRuntime(backend, runtime, cfg)
+	result, err := tool.Execute(context.Background(), "/tmp", json.RawMessage(`{"query":"runtime cache","mode":"auto"}`))
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("Success = false, content = %q", result.Content)
+	}
+	if len(runtime.gotRequests) != 1 {
+		t.Fatalf("runtime requests = %+v, want one request", runtime.gotRequests)
+	}
+	if !runtime.gotRequests[0].IncludeGraphHops || runtime.gotRequests[0].GraphHopDepth != 2 {
+		t.Fatalf("runtime request = %+v, want graph expansion enabled with depth 2", runtime.gotRequests[0])
+	}
+	if !strings.Contains(result.Content, "Runtime Cache Rationale [backlink]") {
+		t.Fatalf("content = %q, want backlink marker in title", result.Content)
+	}
+}
+
+func TestBrainSearchFormatsMultiHopGraphAndHybridGraphLabels(t *testing.T) {
+	backend := newFakeBackend(map[string]string{})
+	runtime := &fakeRuntimeBrainSearcher{resultsByMode: map[string][]appcontext.BrainSearchResult{
+		"auto": {
+			{
+				DocumentPath:    "notes/ops-checklist.md",
+				Title:           "Ops Checklist",
+				Snippet:         "Graph-related to runtime-rationale.md via 2 graph hops.",
+				MatchMode:       "graph",
+				MatchSources:    []string{"backlink"},
+				GraphHopDepth:   2,
+				GraphSourcePath: "notes/runtime-rationale.md",
+			},
+			{
+				DocumentPath:    "notes/cache-playbook.md",
+				Title:           "Cache Playbook",
+				Snippet:         "Hybrid graph expansion result.",
+				MatchMode:       "hybrid-graph",
+				MatchSources:    []string{"semantic", "graph"},
+				GraphHopDepth:   2,
+				GraphSourcePath: "notes/runtime-cache.md",
+			},
+		},
+	}}
+	cfg := brainConfig(true)
+	cfg.IncludeGraphHops = true
+	cfg.GraphHopDepth = 2
+	tool := NewBrainSearchWithRuntime(backend, runtime, cfg)
+	result, err := tool.Execute(context.Background(), "/tmp", json.RawMessage(`{"query":"runtime cache","mode":"auto"}`))
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("Success = false, content = %q", result.Content)
+	}
+	if !strings.Contains(result.Content, "Ops Checklist [graph]") {
+		t.Fatalf("content = %q, want graph marker in title", result.Content)
+	}
+	if !strings.Contains(result.Content, "Cache Playbook [hybrid-graph]") {
+		t.Fatalf("content = %q, want hybrid-graph marker in title", result.Content)
+	}
+}
+
 func TestBrainSearchWithTagsFiltersHitsByTag(t *testing.T) {
 	docs := map[string]string{
 		"_log.md":                "## [2026-04-07T16:41:44Z] query | vite rebuild loop fix (tags: debug history) Returned 0 results via keyword search.",
@@ -376,6 +475,28 @@ func TestBrainSearchWithTagsFallsBackToLooseMatchWithinTaggedDocs(t *testing.T) 
 	}
 	if !strings.Contains(result.Content, "notes/debug-loop.md") {
 		t.Fatalf("content = %q, want loose tagged match", result.Content)
+	}
+}
+
+func TestBrainSearchWithTagsSkipsLooseFallbackForPunctuationOnlyQuery(t *testing.T) {
+	docs := map[string]string{
+		"notes/debug-loop.md":  "---\ntags: [debug-history]\n---\n# Debug Loop\nMoved the generated barrel out of src.",
+		"notes/debug-cache.md": "---\ntags: [debug-history]\n---\n# Debug Cache\nReset the runtime cache after retries.",
+	}
+	backend := newFakeBackend(docs)
+	tool := NewBrainSearch(backend, brainConfig(true))
+	result, err := tool.Execute(context.Background(), "/tmp", json.RawMessage(`{"query":"!!! ---,","tags":["debug-history"]}`))
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("Success = false, content = %q", result.Content)
+	}
+	if !strings.Contains(result.Content, "No brain documents found") {
+		t.Fatalf("content = %q, want no-results message when normalized query has no tokens", result.Content)
+	}
+	if strings.Contains(result.Content, "notes/debug-loop.md") || strings.Contains(result.Content, "notes/debug-cache.md") {
+		t.Fatalf("content = %q, should not broad-match all tagged docs for punctuation-only query", result.Content)
 	}
 }
 
@@ -619,6 +740,80 @@ func TestBrainReadWithBacklinks(t *testing.T) {
 	}
 }
 
+func TestBrainReadWithIndexedBacklinksPrefersBrainLinks(t *testing.T) {
+	database, err := appdb.OpenDB(context.Background(), t.TempDir()+"/brain.db")
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer database.Close()
+	if err := appdb.Init(context.Background(), database); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	projectID := "/tmp/project"
+	if _, err := database.ExecContext(context.Background(), `
+INSERT INTO projects(id, name, root_path, language, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?)
+`, projectID, "project", projectID, "markdown", "2026-04-09T00:00:00Z", "2026-04-09T00:00:00Z"); err != nil {
+		t.Fatalf("insert project: %v", err)
+	}
+	queries := appdb.New(database)
+	for _, path := range []string{"arch/design.md", "notes/session.md", "notes/review.md"} {
+		if err := queries.UpsertBrainDocument(context.Background(), appdb.UpsertBrainDocumentParams{
+			ProjectID:   projectID,
+			Path:        path,
+			Title:       sql.NullString{String: path, Valid: true},
+			ContentHash: "hash-" + path,
+			CreatedAt:   time.Date(2026, 4, 9, 0, 0, 0, 0, time.UTC).Format(time.RFC3339),
+			UpdatedAt:   time.Date(2026, 4, 9, 0, 0, 0, 0, time.UTC).Format(time.RFC3339),
+		}); err != nil {
+			t.Fatalf("UpsertBrainDocument(%s): %v", path, err)
+		}
+	}
+	for _, link := range []appdb.InsertBrainLinkParams{
+		{ProjectID: projectID, SourcePath: "notes/session.md", TargetPath: "arch/design.md"},
+		{ProjectID: projectID, SourcePath: "notes/review.md", TargetPath: "arch/design.md"},
+	} {
+		if err := queries.InsertBrainLink(context.Background(), link); err != nil {
+			t.Fatalf("InsertBrainLink(%s -> %s): %v", link.SourcePath, link.TargetPath, err)
+		}
+	}
+
+	backend := newFakeBackend(map[string]string{
+		"arch/design.md":   "# Design\nCore design document.",
+		"notes/session.md": "This text does not mention the basename.",
+		"notes/review.md":  "This text also avoids basename fallback.",
+	})
+	tool := NewBrainReadWithIndex(backend, brainConfig(true), queries, projectID)
+	result, err := tool.Execute(context.Background(), "/tmp", json.RawMessage(`{"path":"arch/design.md","include_backlinks":true}`))
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("Success = false, content = %q", result.Content)
+	}
+	if !strings.Contains(result.Content, "- notes/review.md") || !strings.Contains(result.Content, "- notes/session.md") {
+		t.Fatalf("content = %q, want indexed backlinks", result.Content)
+	}
+}
+
+func TestBrainReadBacklinksFallbacksToHeuristicWhenNoBrainLinksExist(t *testing.T) {
+	backend := newFakeBackend(map[string]string{
+		"arch/design.md":   "# Design\nCore design document.",
+		"notes/session.md": "Working on design today.",
+	})
+	tool := NewBrainReadWithIndex(backend, brainConfig(true), nil, "/tmp/project")
+	result, err := tool.Execute(context.Background(), "/tmp", json.RawMessage(`{"path":"arch/design.md","include_backlinks":true}`))
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("Success = false, content = %q", result.Content)
+	}
+	if !strings.Contains(result.Content, "- notes/session.md") {
+		t.Fatalf("content = %q, want heuristic fallback backlink", result.Content)
+	}
+}
+
 // ── brain_write tests ───────────────────────────────────────────────
 
 func TestBrainWriteDisabled(t *testing.T) {
@@ -648,7 +843,7 @@ func TestBrainWriteSuccess(t *testing.T) {
 	if !strings.Contains(result.Content, "Wrote brain document: notes/new.md") {
 		t.Fatalf("content = %q, want write success message", result.Content)
 	}
-	if !strings.Contains(result.Content, "Derived brain index is now stale") {
+	if !strings.Contains(result.Content, "Derived brain metadata and semantic chunks are now stale") {
 		t.Fatalf("content = %q, want explicit stale-index reminder", result.Content)
 	}
 	if !strings.Contains(result.Content, "sirtopham index brain") {
@@ -737,6 +932,61 @@ func TestBrainWriteEmptyContent(t *testing.T) {
 	}
 	if result.Success {
 		t.Fatal("expected Success=false for empty content")
+	}
+}
+
+func TestBrainWriteNormalizesPathAndAllowsScopedWrite(t *testing.T) {
+	backend := newFakeBackend(map[string]string{})
+	cfg := brainConfig(true)
+	cfg.BrainWritePaths = []string{"receipts/**"}
+	tool := NewBrainWrite(backend, cfg)
+
+	result, err := tool.Execute(context.Background(), "/tmp", json.RawMessage(`{"path":".brain/receipts/reviewer/run.md","content":"---\nagent: reviewer\n---\n# Receipt"}`))
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("Success = false, content = %q", result.Content)
+	}
+	if _, ok := backend.docs["receipts/reviewer/run.md"]; !ok {
+		t.Fatalf("docs = %#v, want normalized receipts/reviewer/run.md", backend.docs)
+	}
+}
+
+func TestBrainWriteRejectsDeniedPathEvenWhenAllowed(t *testing.T) {
+	backend := newFakeBackend(map[string]string{})
+	cfg := brainConfig(true)
+	cfg.BrainWritePaths = []string{"receipts/**"}
+	cfg.BrainDenyPaths = []string{"receipts/private/**"}
+	tool := NewBrainWrite(backend, cfg)
+
+	result, err := tool.Execute(context.Background(), "/tmp", json.RawMessage(`{"path":"receipts/private/run.md","content":"---\nagent: reviewer\n---\n# Receipt"}`))
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if result.Success {
+		t.Fatal("expected Success=false for denied path")
+	}
+	if !strings.Contains(result.Content, "denied by policy") {
+		t.Fatalf("content = %q, want denied-by-policy message", result.Content)
+	}
+}
+
+func TestBrainWriteRejectsPathOutsideAllowlist(t *testing.T) {
+	backend := newFakeBackend(map[string]string{})
+	cfg := brainConfig(true)
+	cfg.BrainWritePaths = []string{"receipts/**"}
+	tool := NewBrainWrite(backend, cfg)
+
+	result, err := tool.Execute(context.Background(), "/tmp", json.RawMessage(`{"path":"notes/run.md","content":"---\nagent: reviewer\n---\n# Receipt"}`))
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if result.Success {
+		t.Fatal("expected Success=false for path outside allowlist")
+	}
+	if !strings.Contains(result.Content, "not allowed by policy") {
+		t.Fatalf("content = %q, want allowlist message", result.Content)
 	}
 }
 
@@ -856,7 +1106,7 @@ func TestBrainUpdateAppend(t *testing.T) {
 	if !strings.Contains(result.Content, "Updated brain document: notes/journal.md (append)") {
 		t.Fatalf("content = %q, want update success message", result.Content)
 	}
-	if !strings.Contains(result.Content, "Derived brain index is now stale") {
+	if !strings.Contains(result.Content, "Derived brain metadata and semantic chunks are now stale") {
 		t.Fatalf("content = %q, want explicit stale-index reminder", result.Content)
 	}
 	if !strings.Contains(result.Content, "sirtopham index brain") {
@@ -1031,6 +1281,45 @@ func TestBrainUpdateDocumentNotFound(t *testing.T) {
 	}
 	if !strings.Contains(result.Content, "Document not found") {
 		t.Fatalf("content = %q, want not found message", result.Content)
+	}
+}
+
+func TestBrainUpdateRejectsDeniedPathPolicy(t *testing.T) {
+	backend := newFakeBackend(map[string]string{
+		"receipts/private/run.md": "# Receipt\n\nOriginal.",
+	})
+	cfg := brainConfig(true)
+	cfg.BrainWritePaths = []string{"receipts/**"}
+	cfg.BrainDenyPaths = []string{"receipts/private/**"}
+	tool := NewBrainUpdate(backend, cfg)
+
+	result, err := tool.Execute(context.Background(), "/tmp", json.RawMessage(`{"path":"receipts/private/run.md","operation":"append","content":"More"}`))
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if result.Success {
+		t.Fatal("expected Success=false for denied path")
+	}
+	if !strings.Contains(result.Content, "denied by policy") {
+		t.Fatalf("content = %q, want denied-by-policy message", result.Content)
+	}
+}
+
+func TestBrainUpdateUnrestrictedWhenAllowlistEmpty(t *testing.T) {
+	backend := newFakeBackend(map[string]string{
+		"notes/design.md": "# Design\n\nOriginal.",
+	})
+	tool := NewBrainUpdate(backend, brainConfig(true))
+
+	result, err := tool.Execute(context.Background(), "/tmp", json.RawMessage(`{"path":"notes/design.md","operation":"append","content":"More"}`))
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("Success = false, content = %q", result.Content)
+	}
+	if !strings.Contains(backend.docs["notes/design.md"], "More") {
+		t.Fatalf("updated doc = %q, want appended content", backend.docs["notes/design.md"])
 	}
 }
 
@@ -1278,6 +1567,107 @@ func TestExtractFrontmatter(t *testing.T) {
 			}
 		})
 	}
+}
+
+// ── test helpers for fake PatchDocument ────────────────────────────
+
+func appendContent(current, addition string) string {
+	if !strings.HasSuffix(current, "\n") {
+		current += "\n"
+	}
+	return current + "\n" + addition
+}
+
+func prependContent(current, addition string) string {
+	if !strings.HasPrefix(current, "---") {
+		return addition + "\n\n" + current
+	}
+	rest := current[3:]
+	idx := strings.Index(rest, "\n---")
+	if idx < 0 {
+		return addition + "\n\n" + current
+	}
+	fmEnd := 3 + idx + 4
+	fm := current[:fmEnd]
+	body := strings.TrimLeft(current[fmEnd:], "\n")
+	return fm + "\n\n" + addition + "\n\n" + body
+}
+
+func replaceSectionContent(current, section, newContent string) (string, error) {
+	lines := strings.Split(current, "\n")
+	targetLevel, targetText := parseHeading(section)
+	if targetLevel == 0 {
+		targetText = section
+	}
+	targetIdx := -1
+	for i, line := range lines {
+		level, text := parseHeading(line)
+		if level == 0 {
+			continue
+		}
+		if targetLevel > 0 && level == targetLevel && strings.TrimSpace(text) == strings.TrimSpace(targetText) {
+			targetIdx = i
+			break
+		}
+		if targetLevel == 0 && strings.TrimSpace(text) == strings.TrimSpace(targetText) {
+			targetIdx = i
+			targetLevel = level
+			break
+		}
+	}
+	if targetIdx < 0 {
+		headings := listHeadings(lines)
+		if len(headings) > 0 {
+			return "", fmt.Errorf("Section '%s' not found. Available headings: %s",
+				section, strings.Join(headings, ", "))
+		}
+		return "", fmt.Errorf("Section '%s' not found. The document has no headings.", section)
+	}
+	endIdx := len(lines)
+	for i := targetIdx + 1; i < len(lines); i++ {
+		level, _ := parseHeading(lines[i])
+		if level > 0 && level <= targetLevel {
+			endIdx = i
+			break
+		}
+	}
+	var parts []string
+	parts = append(parts, lines[:targetIdx+1]...)
+	parts = append(parts, newContent)
+	if endIdx < len(lines) {
+		parts = append(parts, lines[endIdx:]...)
+	}
+	return strings.Join(parts, "\n"), nil
+}
+
+func parseHeading(line string) (int, string) {
+	trimmed := strings.TrimSpace(line)
+	if !strings.HasPrefix(trimmed, "#") {
+		return 0, ""
+	}
+	level := 0
+	for _, ch := range trimmed {
+		if ch == '#' {
+			level++
+		} else {
+			break
+		}
+	}
+	if level > 6 || level == 0 {
+		return 0, ""
+	}
+	return level, strings.TrimSpace(trimmed[level:])
+}
+
+func listHeadings(lines []string) []string {
+	var headings []string
+	for _, line := range lines {
+		level, text := parseHeading(line)
+		if level > 0 {
+			headings = append(headings, strings.Repeat("#", level)+" "+text)
+		}
+	}
+	return headings
 }
 
 // ── section replacement unit tests ──────────────────────────────────

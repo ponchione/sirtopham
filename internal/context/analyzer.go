@@ -1,7 +1,6 @@
 package context
 
 import (
-	"database/sql"
 	"path"
 	"regexp"
 	"strconv"
@@ -234,6 +233,15 @@ var brainSeekingRationalePatterns = []string{
 	"why are we",
 }
 
+// brainSeekingLayoutPatterns describes non-explicit prompt shapes that read as
+// requests for layout/navigation rationale or graph-linked layout note recall
+// rather than fresh code lookup. The list stays narrow so generic UI/code
+// questions like "how does the sidebar layout work" do not get hijacked.
+var brainSeekingLayoutPatterns = []string{
+	"layout graph notes",
+	"layout rationale notes",
+}
+
 // brainSeekingConventionPatterns describes non-explicit prompt shapes that
 // strongly imply the user is asking about how-we-usually-do-things — a team
 // convention, policy, or established practice — rather than how a specific
@@ -312,6 +320,7 @@ func (RuleBasedAnalyzer) AnalyzeTurn(message string, recentHistory []db.Message)
 	applyQuestionIntent(message, needs)
 	applyBrainIntent(message, needs)
 	applyBrainSeekingRationaleIntent(message, needs)
+	applyBrainSeekingLayoutIntent(message, needs)
 	applyBrainSeekingConventionIntent(message, needs)
 	applyBrainSeekingHistoryIntent(message, needs)
 	applyDebuggingHints(message, needs)
@@ -658,6 +667,27 @@ func applyBrainSeekingRationaleIntent(message string, needs *ContextNeeds) {
 	})
 }
 
+// applyBrainSeekingLayoutIntent flags turns whose natural-language shape
+// reads as a request for layout or structural design information. It prefers
+// brain context for those turns so that the retrieval orchestrator skips
+// generic code RAG when no explicit file or symbol references are present.
+func applyBrainSeekingLayoutIntent(message string, needs *ContextNeeds) {
+	if needs.PreferBrainContext {
+		return
+	}
+	source, _ := findPhrase(message, brainSeekingLayoutPatterns)
+	if source == "" {
+		return
+	}
+
+	needs.PreferBrainContext = true
+	needs.Signals = append(needs.Signals, Signal{
+		Type:   "brain_seeking_intent",
+		Source: source,
+		Value:  "layout",
+	})
+}
+
 // applyBrainSeekingConventionIntent flags turns whose natural-language shape
 // reads as a request for a team convention, policy, or established practice.
 // It prefers brain context for those turns so that the retrieval orchestrator
@@ -797,9 +827,3 @@ func appendUnique(values *[]string, value string) bool {
 	return true
 }
 
-func contentString(content sql.NullString) string {
-	if !content.Valid {
-		return ""
-	}
-	return content.String
-}

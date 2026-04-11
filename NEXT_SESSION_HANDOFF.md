@@ -3,10 +3,19 @@
      3|Date: 2026-04-09
      4|Repo: /home/gernsback/source/sirtopham
      5|Branch: main
-     6|Status: brain-system rebuild work is now in progress. Phase 0 contract/alignment slices, Phase 1 Tasks 1.1-1.4, the first narrow Phase 2 freshness-contract follow-through, Phase 2 Task 2.1 brain chunk modeling, Phase 2 Task 2.2 semantic brain indexing orchestration, Phase 2 Task 2.3 explicit freshness/reporting, Phase 3 Task 3.1 proactive hybrid runtime brain retrieval, Phase 3 Task 3.2 reactive hybrid `brain_search` parity, Phase 3 Task 3.3 graph/backlink expansion, `brain_read` derived-backlink follow-through, and the first ranking/explainability label + report/inspector follow-through are landed locally but not yet committed.
-     7|
-     8|## Read this first next session
-     9|Start with these files in this order:
+Status: brain-system rebuild work is now in progress. Phase 0 contract/alignment slices, Phase 1 Tasks 1.1-1.4, the first narrow Phase 2 freshness-contract follow-through, Phase 2 Task 2.1 brain chunk modeling, Phase 2 Task 2.2 semantic brain indexing orchestration, Phase 2 Task 2.3 explicit freshness/reporting, Phase 3 Task 3.1 proactive hybrid runtime brain retrieval, Phase 3 Task 3.2 reactive hybrid `brain_search` parity, Phase 3 Task 3.3 graph/backlink expansion, `brain_read` derived-backlink follow-through, and the first ranking/explainability label + report/inspector follow-through are landed locally but not yet committed.
+
+Audit follow-up note:
+- A later independent audit found one real regression in `internal/tool/brain_search.go`: tagged loose-query fallback could broad-match all tagged docs when the raw query normalized to zero tokens (for example punctuation-only input). That is now fixed by explicitly skipping the loose fallback when `normalizeBrainSearchText(query)` yields no tokens, with regression coverage in `internal/tool/brain_test.go`.
+- The same audit also flagged several broader landed deltas as being absent from a narrower fix-summary. Those deltas were intentional rebuild work, not reverted here:
+  - `cmd/sirtopham/index.go` marks brain index state fresh after `index brain`
+  - `cmd/sirtopham/serve.go` wires the hybrid runtime brain searcher and brain vectorstore
+  - `internal/tool/brain_read.go` prefers indexed backlinks when available
+  - `internal/server/project.go` exposes `brain_index`
+  - `internal/brain/parser/document.go` preserves explicit `.md` wikilink targets
+
+## Read this first next session
+
     10|1. `BRAIN_SYSTEM_AUDIT_AND_REBUILD.md`
     11|2. `docs/plans/2026-04-09-brain-system-rebuild-implementation-plan.md`
     12|3. `NEXT_SESSION_HANDOFF.md`

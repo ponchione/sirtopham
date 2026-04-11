@@ -57,3 +57,17 @@ INSERT INTO brain_links (
 ) VALUES (
     ?, ?, ?, ?
 );
+
+-- name: ListBrainLinksBySource :many
+SELECT id, project_id, source_path, target_path, link_text
+FROM brain_links
+WHERE project_id = ?
+  AND source_path = ?
+ORDER BY target_path;
+
+-- name: ListBrainLinksByTarget :many
+SELECT id, project_id, source_path, target_path, link_text
+FROM brain_links
+WHERE project_id = ?
+  AND target_path = ?
+ORDER BY source_path;

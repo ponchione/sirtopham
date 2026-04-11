@@ -11,6 +11,19 @@ function formatTimestamp(value?: string): string {
   return date.toLocaleString();
 }
 
+function formatBrainIndexStatus(status?: string): string {
+  switch (status) {
+    case "clean":
+      return "Clean";
+    case "stale":
+      return "Stale";
+    case "never_indexed":
+      return "Never indexed";
+    default:
+      return status ?? "Unknown";
+  }
+}
+
 function modelOptionValue(provider: string, model: string): string {
   return `${provider}::${model}`;
 }
@@ -151,6 +164,32 @@ export function SettingsPage() {
                 <span className="text-muted-foreground">Indexed commit</span>
                 <span className="text-right text-xs font-mono">{project.last_indexed_commit ?? "Unknown"}</span>
               </div>
+              {project.brain_index && (
+                <>
+                  <div className="flex justify-between gap-3">
+                    <span className="text-muted-foreground">Brain index</span>
+                    <span className={`text-right text-xs ${project.brain_index.status === "stale" ? "text-destructive" : project.brain_index.status === "clean" ? "text-accent" : "text-muted-foreground"}`}>
+                      {formatBrainIndexStatus(project.brain_index.status)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between gap-3">
+                    <span className="text-muted-foreground">Brain indexed</span>
+                    <span className="text-right text-xs">{formatTimestamp(project.brain_index.last_indexed_at)}</span>
+                  </div>
+                  {project.brain_index.status === "stale" && (
+                    <>
+                      <div className="flex justify-between gap-3">
+                        <span className="text-muted-foreground">Brain stale since</span>
+                        <span className="text-right text-xs">{formatTimestamp(project.brain_index.stale_since)}</span>
+                      </div>
+                      <div className="flex justify-between gap-3">
+                        <span className="text-muted-foreground">Brain stale reason</span>
+                        <span className="text-right text-xs font-mono">{project.brain_index.stale_reason ?? "Unknown"}</span>
+                      </div>
+                    </>
+                  )}
+                </>
+              )}
             </div>
           ) : (
             <p className="text-xs text-muted-foreground">No project info available</p>

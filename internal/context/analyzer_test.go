@@ -288,6 +288,41 @@ func TestBrainSeekingRationaleIntentDoesNotDuplicateBrainIntentSignal(t *testing
 	}
 }
 
+func TestBrainSeekingLayoutIntentPrefersBrainContext(t *testing.T) {
+	analyzer := RuleBasedAnalyzer{}
+
+	needs := analyzer.AnalyzeTurn(
+		"From our layout graph notes, what linked layout canary phrase sits behind SATURN RAIL?",
+		nil,
+	)
+
+	if !needs.PreferBrainContext {
+		t.Fatal("PreferBrainContext = false, want true for layout graph note prompt")
+	}
+	requireSignal(t, needs.Signals, "brain_seeking_intent", "layout graph notes", "layout")
+}
+
+func TestBrainSeekingLayoutIntentIgnoresGenericLayoutCodeQuestions(t *testing.T) {
+	analyzer := RuleBasedAnalyzer{}
+
+	cases := []string{
+		"How does the sidebar layout work in src/components/SideNav.tsx?",
+		"Explain the layout transition code in web/src/main.tsx.",
+	}
+
+	for _, prompt := range cases {
+		needs := analyzer.AnalyzeTurn(prompt, nil)
+		if needs.PreferBrainContext {
+			t.Fatalf("PreferBrainContext = true for %q, want false", prompt)
+		}
+		for _, signal := range needs.Signals {
+			if signal.Type == "brain_seeking_intent" && signal.Value == "layout" {
+				t.Fatalf("unexpected layout brain_seeking_intent for %q: %+v", prompt, signal)
+			}
+		}
+	}
+}
+
 func TestBrainSeekingConventionIntentPrefersBrainContext(t *testing.T) {
 	analyzer := RuleBasedAnalyzer{}
 

@@ -152,6 +152,47 @@ func TestContextReportStoreRoundTripsPersistedTokenBudget(t *testing.T) {
 	}
 }
 
+func TestContextReportEndpointReturnsBrainGraphExplainabilityFields(t *testing.T) {
+	database := newMetricsTestDB(t)
+	queries := appdb.New(database)
+	conversationID := seedMetricsTestConversation(t, database)
+	createdAt := time.Now().UTC().Format(time.RFC3339)
+	brainResultsJSON := `[{"document_path":"notes/runtime-rationale.md","title":"Runtime Cache Rationale","match_score":0.72,"match_mode":"backlink","match_sources":["backlink"],"graph_source_path":"notes/runtime-cache.md","graph_hop_depth":1,"included":true}]`
+
+	mustExecMetrics(t, database, `INSERT INTO context_reports(conversation_id, turn_number, analysis_latency_ms, retrieval_latency_ms, total_latency_ms,
+		needs_json, signals_json, rag_results_json, brain_results_json, graph_results_json, explicit_files_json,
+		budget_total, budget_used, budget_breakdown_json, included_count, excluded_count,
+		agent_used_search_tool, agent_read_files_json, context_hit_rate, created_at)
+		VALUES (?, 1, 1, 2, 3, '{}', '[]', '[]', ?, '[]', '[]', 1000, 250, '{"brain":125}', 1, 0, 0, '[]', 1.0, ?)`, conversationID, brainResultsJSON, createdAt)
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	srv := New(Config{}, logger)
+	NewMetricsHandler(srv, queries, logger)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/metrics/conversation/"+conversationID+"/context/1", nil)
+	rec := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+
+	var resp contextReportResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	var brainResults []contextpkg.BrainHit
+	if err := json.Unmarshal(resp.BrainResults, &brainResults); err != nil {
+		t.Fatalf("decode brain results: %v", err)
+	}
+	if len(brainResults) != 1 {
+		t.Fatalf("len(brainResults) = %d, want 1", len(brainResults))
+	}
+	if brainResults[0].GraphSourcePath != "notes/runtime-cache.md" || brainResults[0].GraphHopDepth != 1 || brainResults[0].MatchMode != "backlink" {
+		t.Fatalf("brainResults[0] = %+v, want graph explainability fields", brainResults[0])
+	}
+}
+
 func assertSignalStreamEntry(t *testing.T, got contextSignalStreamEntry, wantIndex int, wantKind string, wantType string, wantSource string, wantValue string) {
 	t.Helper()
 	if got.Index != wantIndex || got.Kind != wantKind || got.Type != wantType || got.Source != wantSource || got.Value != wantValue {

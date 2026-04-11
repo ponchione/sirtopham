@@ -3,8 +3,25 @@ package tool
 import (
 	"github.com/ponchione/sirtopham/internal/brain"
 	"github.com/ponchione/sirtopham/internal/config"
+	appcontext "github.com/ponchione/sirtopham/internal/context"
+	appdb "github.com/ponchione/sirtopham/internal/db"
 	"github.com/ponchione/sirtopham/internal/provider"
 )
+
+// RegisterFileReadTools registers the read-only file tools in the given
+// registry.
+func RegisterFileReadTools(r *Registry) {
+	store := newMemoryReadStateStore()
+	r.Register(NewFileRead(store))
+}
+
+// RegisterFileWriteTools registers the mutating file tools in the given
+// registry.
+func RegisterFileWriteTools(r *Registry) {
+	store := newMemoryReadStateStore()
+	r.Register(NewFileWrite(store))
+	r.Register(NewFileEdit(store))
+}
 
 // RegisterFileTools registers all file tools (file_read, file_write, file_edit)
 // in the given registry.
@@ -42,14 +59,20 @@ func RegisterSearchTools(r *Registry, searcher SemanticSearcher) {
 // the configured brain backend — pass nil if brain is disabled (tools will
 // return guidance messages when invoked).
 func RegisterBrainTools(r *Registry, client brain.Backend, cfg config.BrainConfig) {
-	RegisterBrainToolsWithProvider(r, client, cfg, nil)
+	RegisterBrainToolsWithProviderRuntimeAndIndex(r, client, nil, cfg, nil, nil, "")
 }
 
 // RegisterBrainToolsWithProvider registers brain tools with an optional
 // model provider for the explicit opt-in contradictions check in brain_lint.
 func RegisterBrainToolsWithProvider(r *Registry, client brain.Backend, cfg config.BrainConfig, llm provider.Provider) {
-	r.Register(NewBrainSearch(client, cfg))
-	r.Register(NewBrainRead(client, cfg))
+	RegisterBrainToolsWithProviderRuntimeAndIndex(r, client, nil, cfg, llm, nil, "")
+}
+
+// RegisterBrainToolsWithProviderRuntimeAndIndex registers brain tools with an
+// optional runtime searcher and derived brain metadata/index helpers.
+func RegisterBrainToolsWithProviderRuntimeAndIndex(r *Registry, client brain.Backend, runtime appcontext.BrainSearcher, cfg config.BrainConfig, llm provider.Provider, queries *appdb.Queries, projectID string) {
+	r.Register(NewBrainSearchWithRuntime(client, runtime, cfg))
+	r.Register(NewBrainReadWithIndex(client, cfg, queries, projectID))
 	r.Register(NewBrainWrite(client, cfg))
 	r.Register(NewBrainUpdate(client, cfg))
 	r.Register(NewBrainLintWithProvider(client, cfg, llm))

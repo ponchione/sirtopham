@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 
+	brainindexstate "github.com/ponchione/sirtopham/internal/brain/indexstate"
 	"github.com/ponchione/sirtopham/internal/config"
 	appdb "github.com/ponchione/sirtopham/internal/db"
 	"github.com/ponchione/sirtopham/internal/langutil"
@@ -40,12 +41,20 @@ func NewProjectHandler(s *Server, cfg *config.Config, logger *slog.Logger) *Proj
 // ── GET /api/project ─────────────────────────────────────────────────
 
 type projectInfoResponse struct {
-	ID                string `json:"id"`
-	RootPath          string `json:"root_path"`
-	Language          string `json:"language,omitempty"`
-	Name              string `json:"name"`
-	LastIndexedAt     string `json:"last_indexed_at,omitempty"`
-	LastIndexedCommit string `json:"last_indexed_commit,omitempty"`
+	ID                string              `json:"id"`
+	RootPath          string              `json:"root_path"`
+	Language          string              `json:"language,omitempty"`
+	Name              string              `json:"name"`
+	LastIndexedAt     string              `json:"last_indexed_at,omitempty"`
+	LastIndexedCommit string              `json:"last_indexed_commit,omitempty"`
+	BrainIndex        *brainIndexResponse `json:"brain_index,omitempty"`
+}
+
+type brainIndexResponse struct {
+	Status        string `json:"status"`
+	LastIndexedAt string `json:"last_indexed_at,omitempty"`
+	StaleSince    string `json:"stale_since,omitempty"`
+	StaleReason   string `json:"stale_reason,omitempty"`
 }
 
 func (h *ProjectHandler) handleProject(w http.ResponseWriter, _ *http.Request) {
@@ -57,6 +66,7 @@ func (h *ProjectHandler) handleProject(w http.ResponseWriter, _ *http.Request) {
 	})
 
 	lastIndexedAt, lastIndexedCommit := h.loadProjectIndexMetadata(context.Background())
+	brainIndex := h.loadBrainIndexState()
 
 	writeJSON(w, http.StatusOK, projectInfoResponse{
 		ID:                h.cfg.ProjectRoot,
@@ -65,6 +75,7 @@ func (h *ProjectHandler) handleProject(w http.ResponseWriter, _ *http.Request) {
 		Name:              name,
 		LastIndexedAt:     lastIndexedAt,
 		LastIndexedCommit: lastIndexedCommit,
+		BrainIndex:        brainIndex,
 	})
 }
 
@@ -195,6 +206,23 @@ func (h *ProjectHandler) loadProjectIndexMetadata(ctx context.Context) (lastInde
 		lastIndexedCommit = commit.String
 	}
 	return lastIndexedAt, lastIndexedCommit
+}
+
+func (h *ProjectHandler) loadBrainIndexState() *brainIndexResponse {
+	if h.cfg == nil || !h.cfg.Brain.Enabled {
+		return nil
+	}
+	state, err := brainindexstate.Load(h.cfg.ProjectRoot)
+	if err != nil {
+		h.logger.Debug("load brain index state", "error", err, "project_root", h.cfg.ProjectRoot)
+		return &brainIndexResponse{Status: brainindexstate.StatusNeverIndexed}
+	}
+	return &brainIndexResponse{
+		Status:        state.Status,
+		LastIndexedAt: state.LastIndexedAt,
+		StaleSince:    state.StaleSince,
+		StaleReason:   state.StaleReason,
+	}
 }
 
 func buildTree(root, dir string, excludes []string, depth, maxDepth int) treeNode {

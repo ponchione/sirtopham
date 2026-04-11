@@ -2,13 +2,11 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
 	"os/signal"
-	"path/filepath"
 	"runtime"
 	"syscall"
 	"time"
@@ -16,23 +14,12 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/ponchione/sirtopham/internal/agent"
-	"github.com/ponchione/sirtopham/internal/brain"
-	"github.com/ponchione/sirtopham/internal/brain/mcpclient"
-	"github.com/ponchione/sirtopham/internal/codeintel/embedder"
-	codegraph "github.com/ponchione/sirtopham/internal/codeintel/graph"
-	codesearcher "github.com/ponchione/sirtopham/internal/codeintel/searcher"
-	"github.com/ponchione/sirtopham/internal/codestore"
 	appconfig "github.com/ponchione/sirtopham/internal/config"
-	contextpkg "github.com/ponchione/sirtopham/internal/context"
 	"github.com/ponchione/sirtopham/internal/conversation"
-	appdb "github.com/ponchione/sirtopham/internal/db"
-	"github.com/ponchione/sirtopham/internal/logging"
 	"github.com/ponchione/sirtopham/internal/provider"
 	"github.com/ponchione/sirtopham/internal/provider/anthropic"
 	"github.com/ponchione/sirtopham/internal/provider/codex"
 	"github.com/ponchione/sirtopham/internal/provider/openai"
-	"github.com/ponchione/sirtopham/internal/provider/router"
-	"github.com/ponchione/sirtopham/internal/provider/tracking"
 	"github.com/ponchione/sirtopham/internal/server"
 	"github.com/ponchione/sirtopham/internal/tool"
 	"github.com/ponchione/sirtopham/webfs"
@@ -60,41 +47,11 @@ func newServeCmd(configPath *string) *cobra.Command {
 	return cmd
 }
 
-func buildBrainBackend(ctx context.Context, cfg appconfig.BrainConfig, logger *slog.Logger) (brain.Backend, func(), error) {
-	if !cfg.Enabled {
-		return nil, func() {}, nil
-	}
-	client, err := mcpclient.Connect(ctx, cfg.VaultPath)
-	if err != nil {
-		return nil, func() {}, err
-	}
-	logger.Info("brain backend: MCP (in-process)", "vault", cfg.VaultPath)
-	return client, func() { _ = client.Close() }, nil
-}
-
-func buildGraphStore(cfg *appconfig.Config) (*codegraph.Store, func(), error) {
-	if err := os.MkdirAll(filepath.Dir(cfg.GraphDBPath()), 0o755); err != nil {
-		return nil, func() {}, err
-	}
-	store, err := codegraph.NewStore(cfg.GraphDBPath())
-	if err != nil {
-		return nil, func() {}, err
-	}
-	return store, func() { _ = store.Close() }, nil
-}
-
-func buildConventionSource(cfg *appconfig.Config) contextpkg.ConventionSource {
-	return contextpkg.NewBrainConventionSource(cfg.BrainVaultPath())
-}
-
 func runServe(cmd *cobra.Command, configPath string, portOverride int, hostOverride string, devMode bool) error {
-	// ── 1. Load configuration ──────────────────────────────────────────
 	cfg, err := appconfig.Load(configPath)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
-
-	// Apply flag overrides.
 	if portOverride > 0 {
 		cfg.Server.Port = portOverride
 	}
@@ -105,32 +62,14 @@ func runServe(cmd *cobra.Command, configPath string, portOverride int, hostOverr
 		cfg.Server.DevMode = true
 	}
 
-	// ── 2. Set up structured logger ────────────────────────────────────
-	logger, err := logging.Init(cfg.LogLevel, cfg.LogFormat)
+	runtimeBundle, err := buildAppRuntime(cmd.Context(), cfg)
 	if err != nil {
-		return fmt.Errorf("init logging: %w", err)
+		return err
 	}
+	defer runtimeBundle.Cleanup()
 
-	// ── 3. Open database ───────────────────────────────────────────────
-	database, err := appdb.OpenDB(cmd.Context(), cfg.DatabasePath())
-	if err != nil {
-		return fmt.Errorf("open database: %w", err)
-	}
-	defer database.Close()
-	if err := appdb.EnsureMessageSearchIndexesIncludeTools(cmd.Context(), database); err != nil {
-		return fmt.Errorf("upgrade message search indexes: %w", err)
-	}
-	if err := appdb.EnsureContextReportsIncludeTokenBudget(cmd.Context(), database); err != nil {
-		return fmt.Errorf("upgrade context report token budget storage: %w", err)
-	}
-	queries := appdb.New(database)
-
-	// Project ID is the project root path.
+	logger := runtimeBundle.Logger
 	projectID := cfg.ProjectRoot
-	if err := ensureProjectRecord(cmd.Context(), database, cfg); err != nil {
-		return fmt.Errorf("ensure project record: %w", err)
-	}
-
 	logger.Info("sirtopham starting",
 		"version", version,
 		"project", cfg.ProjectRoot,
@@ -138,68 +77,6 @@ func runServe(cmd *cobra.Command, configPath string, portOverride int, hostOverr
 		"dev_mode", cfg.Server.DevMode,
 	)
 
-	// ── 4. Build provider router ───────────────────────────────────────
-	routerCfg := router.RouterConfig{
-		Default: router.RouteTarget{
-			Provider: cfg.Routing.Default.Provider,
-			Model:    cfg.Routing.Default.Model,
-		},
-		Fallback: router.RouteTarget{
-			Provider: cfg.Routing.Fallback.Provider,
-			Model:    cfg.Routing.Fallback.Model,
-		},
-	}
-
-	subCallStore := tracking.NewSQLiteSubCallStore(queries)
-	provRouter, err := router.NewRouter(routerCfg, subCallStore, logger)
-	if err != nil {
-		return fmt.Errorf("create router: %w", err)
-	}
-
-	// Register configured providers.
-	for name, provCfg := range cfg.Providers {
-		p, err := buildProvider(name, provCfg)
-		if err != nil {
-			return fmt.Errorf("build provider %q: %w", name, err)
-		}
-		if err := provRouter.RegisterProvider(p); err != nil {
-			return fmt.Errorf("register provider %q: %w", name, err)
-		}
-		logProviderAuthStatus(cmd.Context(), logger, name, provCfg, p)
-	}
-	if err := provRouter.Validate(cmd.Context()); err != nil {
-		return fmt.Errorf("validate providers: %w", err)
-	}
-
-	// ── 5. Build semantic retrieval runtime ────────────────────────────
-	codeStore, err := codestore.Open(cmd.Context(), cfg.CodeLanceDBPath())
-	if err != nil {
-		return fmt.Errorf("open code vectorstore: %w", err)
-	}
-	defer codeStore.Close()
-	semanticEmbedder := embedder.New(cfg.Embedding)
-	semanticSearcher := codesearcher.New(codeStore, semanticEmbedder)
-
-	brainBackend, closeBrainBackend, err := buildBrainBackend(cmd.Context(), cfg.Brain, logger)
-	if err != nil {
-		return fmt.Errorf("build brain backend: %w", err)
-	}
-	defer closeBrainBackend()
-
-	graphStore, closeGraphStore, err := buildGraphStore(cfg)
-	if err != nil {
-		return fmt.Errorf("build graph store: %w", err)
-	}
-	defer closeGraphStore()
-
-	conventionSource := buildConventionSource(cfg)
-	retrievalOrchestrator := contextpkg.NewRetrievalOrchestrator(semanticSearcher, graphStore, conventionSource, brainBackend, cfg.ProjectRoot)
-	retrievalOrchestrator.SetLogBrainQueries(cfg.Brain.LogBrainQueries)
-	retrievalOrchestrator.SetBrainConfig(cfg.Brain)
-	budgetManager := contextpkg.PriorityBudgetManager{}
-	budgetManager.SetBrainConfig(cfg.Brain)
-
-	// ── 6. Build tool registry + executor ──────────────────────────────
 	registry := tool.NewRegistry()
 	tool.RegisterFileTools(registry)
 	tool.RegisterGitTools(registry)
@@ -207,47 +84,21 @@ func runServe(cmd *cobra.Command, configPath string, portOverride int, hostOverr
 		TimeoutSeconds: cfg.Agent.ShellTimeoutSeconds,
 		Denylist:       cfg.Agent.ShellDenylist,
 	})
-	tool.RegisterBrainToolsWithProvider(registry, brainBackend, cfg.Brain, provRouter)
-	tool.RegisterSearchTools(registry, semanticSearcher)
+	tool.RegisterBrainToolsWithProviderRuntimeAndIndex(registry, runtimeBundle.BrainBackend, runtimeBundle.BrainSearcher, cfg.Brain, runtimeBundle.ProviderRouter, runtimeBundle.Queries, cfg.ProjectRoot)
+	tool.RegisterSearchTools(registry, runtimeBundle.SemanticSearcher)
 
 	executor := tool.NewExecutor(registry, tool.ExecutorConfig{
 		MaxOutputTokens: cfg.Agent.ToolOutputMaxTokens,
 		ProjectRoot:     cfg.ProjectRoot,
 	}, logger)
-
-	toolRecorder := tool.NewToolExecutionRecorder(queries)
-	executor.SetRecorder(toolRecorder)
-
+	executor.SetRecorder(tool.NewToolExecutionRecorder(runtimeBundle.Queries))
 	adapter := tool.NewAgentLoopAdapter(executor)
+	titleGen := conversation.NewTitleGen(runtimeBundle.ConversationManager, runtimeBundle.ProviderRouter, cfg.Routing.Default.Model, logger)
 
-	// ── 7. Build conversation manager ──────────────────────────────────
-	convManager := conversation.NewManager(database, nil, logger)
-
-	// ── 8. Build context assembler ─────────────────────────────────────
-	contextAssembler := contextpkg.NewContextAssembler(
-		contextpkg.RuleBasedAnalyzer{},
-		contextpkg.HeuristicQueryExtractor{},
-		contextpkg.HistoryMomentumTracker{},
-		retrievalOrchestrator,
-		budgetManager,
-		contextpkg.MarkdownSerializer{},
-		cfg.Context,
-		database,
-	)
-
-	// ── 9. Build title generator ───────────────────────────────────────
-	titleGen := conversation.NewTitleGen(
-		convManager,
-		provRouter,
-		cfg.Routing.Default.Model,
-		logger,
-	)
-
-	// ── 10. Build agent loop ───────────────────────────────────────────
 	agentLoop := agent.NewAgentLoop(agent.AgentLoopDeps{
-		ContextAssembler:    contextAssembler,
-		ConversationManager: convManager,
-		ProviderRouter:      provRouter,
+		ContextAssembler:    runtimeBundle.ContextAssembler,
+		ConversationManager: runtimeBundle.ConversationManager,
+		ProviderRouter:      runtimeBundle.ProviderRouter,
 		ToolExecutor:        adapter,
 		ToolDefinitions:     registry.ToolDefinitions(),
 		PromptBuilder:       agent.NewPromptBuilder(logger),
@@ -273,14 +124,7 @@ func runServe(cmd *cobra.Command, configPath string, portOverride int, hostOverr
 	})
 	defer agentLoop.Close()
 
-	// ── 11. Build HTTP server ──────────────────────────────────────────
-	serverCfg := server.Config{
-		Host:    cfg.Server.Host,
-		Port:    cfg.Server.Port,
-		DevMode: cfg.Server.DevMode,
-	}
-
-	// In production mode, embed the frontend built by `make build`.
+	serverCfg := server.Config{Host: cfg.Server.Host, Port: cfg.Server.Port, DevMode: cfg.Server.DevMode}
 	if !cfg.Server.DevMode {
 		frontendFS, err := webfs.FS()
 		if err != nil {
@@ -291,34 +135,24 @@ func runServe(cmd *cobra.Command, configPath string, portOverride int, hostOverr
 	}
 
 	srv := server.New(serverCfg, logger)
-
-	// Register handlers.
 	runtimeDefaults := server.NewRuntimeDefaults(cfg)
-	server.NewConversationHandler(srv, convManager, projectID, logger)
-	server.NewWebSocketHandler(srv, agentLoop, convManager, cfg, runtimeDefaults, logger)
+	server.NewConversationHandler(srv, runtimeBundle.ConversationManager, projectID, logger)
+	server.NewWebSocketHandler(srv, agentLoop, runtimeBundle.ConversationManager, cfg, runtimeDefaults, logger)
 	server.NewProjectHandler(srv, cfg, logger)
-	server.NewConfigHandler(srv, cfg, provRouter, runtimeDefaults, logger)
-	server.NewMetricsHandler(srv, queries, logger)
+	server.NewConfigHandler(srv, cfg, runtimeBundle.ProviderRouter, runtimeDefaults, logger)
+	server.NewMetricsHandler(srv, runtimeBundle.Queries, logger)
 
-	// ── 12. Signal handling + graceful shutdown ────────────────────────
 	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-
-	// Browser launch (non-blocking, best-effort).
 	if cfg.Server.OpenBrowser && !cfg.Server.DevMode {
 		go launchBrowser(fmt.Sprintf("http://%s:%d", cfg.Server.Host, cfg.Server.Port), logger)
 	}
-
-	// Start server — blocks until context is cancelled.
 	if err := srv.Start(ctx); err != nil {
 		return fmt.Errorf("server: %w", err)
 	}
-
-	// Ordered teardown (database.Close is handled by defer above).
 	logger.Info("shutting down")
 	agentLoop.Cancel()
 	logger.Info("shutdown complete")
-
 	return nil
 }
 
@@ -421,23 +255,6 @@ func (p aliasedProvider) AuthStatus(ctx context.Context) (*provider.AuthStatus, 
 	cloned := *status
 	cloned.Provider = p.name
 	return &cloned, nil
-}
-
-func ensureProjectRecord(ctx context.Context, database *sql.DB, cfg *appconfig.Config) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	now := time.Now().UTC().Format(time.RFC3339)
-	name := filepath.Base(cfg.ProjectRoot)
-	_, err := database.ExecContext(ctx, `
-INSERT INTO projects(id, name, root_path, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?)
-ON CONFLICT(id) DO UPDATE SET
-	name = excluded.name,
-	root_path = excluded.root_path,
-	updated_at = excluded.updated_at
-`, cfg.ProjectRoot, name, cfg.ProjectRoot, now, now)
-	return err
 }
 
 func launchBrowser(url string, logger *slog.Logger) {

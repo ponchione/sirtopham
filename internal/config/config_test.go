@@ -466,3 +466,221 @@ func TestLoadAppliesEnvironmentVariableOverrides(t *testing.T) {
 		t.Fatalf("openrouter API key = %q, want env-openrouter", got)
 	}
 }
+
+func TestLoadParsesAgentRolesAndBrainWritePolicies(t *testing.T) {
+	projectRoot := t.TempDir()
+	ensureDir(t, filepath.Join(projectRoot, ".brain"))
+	configPath := filepath.Join(t.TempDir(), "sirtopham.yaml")
+	content := "project_root: \"" + projectRoot + "\"\n" +
+		"brain:\n" +
+		"  vault_path: \"" + filepath.Join(projectRoot, ".brain") + "\"\n" +
+		"agent_roles:\n" +
+		"  reviewer:\n" +
+		"    system_prompt: prompts/reviewer.md\n" +
+		"    tools:\n" +
+		"      - file\n" +
+		"      - git\n" +
+		"    custom_tools:\n" +
+		"      - external.reviewer\n" +
+		"    brain_write_paths:\n" +
+		"      - receipts/**\n" +
+		"    brain_deny_paths:\n" +
+		"      - secrets/**\n" +
+		"    max_turns: 3\n" +
+		"    max_tokens: 1200\n"
+
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+
+	role, ok := cfg.AgentRoles["reviewer"]
+	if !ok {
+		t.Fatalf("AgentRoles = %#v, want reviewer role", cfg.AgentRoles)
+	}
+	if role.SystemPrompt != "prompts/reviewer.md" {
+		t.Fatalf("role.SystemPrompt = %q, want prompts/reviewer.md", role.SystemPrompt)
+	}
+	if !slices.Equal(role.Tools, []string{"file", "git"}) {
+		t.Fatalf("role.Tools = %#v, want [file git]", role.Tools)
+	}
+	if !slices.Equal(role.CustomTools, []string{"external.reviewer"}) {
+		t.Fatalf("role.CustomTools = %#v, want [external.reviewer]", role.CustomTools)
+	}
+	if !slices.Equal(role.BrainWritePaths, []string{"receipts/**"}) {
+		t.Fatalf("role.BrainWritePaths = %#v, want [receipts/**]", role.BrainWritePaths)
+	}
+	if !slices.Equal(role.BrainDenyPaths, []string{"secrets/**"}) {
+		t.Fatalf("role.BrainDenyPaths = %#v, want [secrets/**]", role.BrainDenyPaths)
+	}
+	if role.MaxTurns != 3 {
+		t.Fatalf("role.MaxTurns = %d, want 3", role.MaxTurns)
+	}
+	if role.MaxTokens != 1200 {
+		t.Fatalf("role.MaxTokens = %d, want 1200", role.MaxTokens)
+	}
+}
+
+func TestLoadAcceptsFileReadAgentRoleToolGroup(t *testing.T) {
+	projectRoot := t.TempDir()
+	ensureDir(t, filepath.Join(projectRoot, ".brain"))
+	configPath := filepath.Join(t.TempDir(), "sirtopham.yaml")
+	content := "project_root: \"" + projectRoot + "\"\n" +
+		"brain:\n" +
+		"  vault_path: \"" + filepath.Join(projectRoot, ".brain") + "\"\n" +
+		"agent_roles:\n" +
+		"  auditor:\n" +
+		"    system_prompt: prompts/auditor.md\n" +
+		"    tools:\n" +
+		"      - brain\n" +
+		"      - file:read\n" +
+		"      - git\n"
+
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+
+	role, ok := cfg.AgentRoles["auditor"]
+	if !ok {
+		t.Fatalf("AgentRoles = %#v, want auditor role", cfg.AgentRoles)
+	}
+	if !slices.Equal(role.Tools, []string{"brain", "file:read", "git"}) {
+		t.Fatalf("role.Tools = %#v, want [brain file:read git]", role.Tools)
+	}
+}
+
+func TestLoadParsesReadOnlyFileRoleAndCustomTools(t *testing.T) {
+	projectRoot := t.TempDir()
+	ensureDir(t, filepath.Join(projectRoot, ".brain"))
+	configPath := filepath.Join(t.TempDir(), "sirtopham.yaml")
+	content := "project_root: \"" + projectRoot + "\"\n" +
+		"brain:\n" +
+		"  vault_path: \"" + filepath.Join(projectRoot, ".brain") + "\"\n" +
+		"agent_roles:\n" +
+		"  correctness-auditor:\n" +
+		"    system_prompt: agents/correctness-auditor.md\n" +
+		"    tools:\n" +
+		"      - brain\n" +
+		"      - file:read\n" +
+		"      - git\n" +
+		"    brain_write_paths:\n" +
+		"      - receipts/correctness/**\n" +
+		"    brain_deny_paths:\n" +
+		"      - plans/**\n" +
+		"  orchestrator:\n" +
+		"    system_prompt: agents/orchestrator.md\n" +
+		"    tools:\n" +
+		"      - brain\n" +
+		"    custom_tools:\n" +
+		"      - spawn_agent\n" +
+		"      - chain_complete\n"
+
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+
+	auditorRole, ok := cfg.AgentRoles["correctness-auditor"]
+	if !ok {
+		t.Fatalf("AgentRoles = %#v, want correctness-auditor role", cfg.AgentRoles)
+	}
+	if !slices.Equal(auditorRole.Tools, []string{"brain", "file:read", "git"}) {
+		t.Fatalf("auditorRole.Tools = %#v, want [brain file:read git]", auditorRole.Tools)
+	}
+	if !slices.Equal(auditorRole.BrainWritePaths, []string{"receipts/correctness/**"}) {
+		t.Fatalf("auditorRole.BrainWritePaths = %#v, want [receipts/correctness/**]", auditorRole.BrainWritePaths)
+	}
+	if !slices.Equal(auditorRole.BrainDenyPaths, []string{"plans/**"}) {
+		t.Fatalf("auditorRole.BrainDenyPaths = %#v, want [plans/**]", auditorRole.BrainDenyPaths)
+	}
+
+	orchestratorRole, ok := cfg.AgentRoles["orchestrator"]
+	if !ok {
+		t.Fatalf("AgentRoles = %#v, want orchestrator role", cfg.AgentRoles)
+	}
+	if !slices.Equal(orchestratorRole.CustomTools, []string{"spawn_agent", "chain_complete"}) {
+		t.Fatalf("orchestratorRole.CustomTools = %#v, want [spawn_agent chain_complete]", orchestratorRole.CustomTools)
+	}
+}
+
+func TestLoadRejectsInvalidAgentRoles(t *testing.T) {
+	projectRoot := t.TempDir()
+	ensureDir(t, filepath.Join(projectRoot, ".brain"))
+
+	tests := []struct {
+		name       string
+		yaml       string
+		wantSubstr string
+	}{
+		{
+			name: "empty system prompt",
+			yaml: "project_root: \"" + projectRoot + "\"\n" +
+				"brain:\n  vault_path: \"" + filepath.Join(projectRoot, ".brain") + "\"\n" +
+				"agent_roles:\n  reviewer:\n    system_prompt: \"\"\n",
+			wantSubstr: "agent_roles.reviewer.system_prompt",
+		},
+		{
+			name: "invalid tool group",
+			yaml: "project_root: \"" + projectRoot + "\"\n" +
+				"brain:\n  vault_path: \"" + filepath.Join(projectRoot, ".brain") + "\"\n" +
+				"agent_roles:\n  reviewer:\n    system_prompt: prompts/reviewer.md\n    tools:\n      - browser\n",
+			wantSubstr: "unsupported tool group \"browser\"; expected brain, file, file:read, git, shell, or search",
+		},
+		{
+			name: "negative max turns",
+			yaml: "project_root: \"" + projectRoot + "\"\n" +
+				"brain:\n  vault_path: \"" + filepath.Join(projectRoot, ".brain") + "\"\n" +
+				"agent_roles:\n  reviewer:\n    system_prompt: prompts/reviewer.md\n    max_turns: -1\n",
+			wantSubstr: "agent_roles.reviewer.max_turns=-1",
+		},
+		{
+			name: "negative max tokens",
+			yaml: "project_root: \"" + projectRoot + "\"\n" +
+				"brain:\n  vault_path: \"" + filepath.Join(projectRoot, ".brain") + "\"\n" +
+				"agent_roles:\n  reviewer:\n    system_prompt: prompts/reviewer.md\n    max_tokens: -1\n",
+			wantSubstr: "agent_roles.reviewer.max_tokens=-1",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			configPath := filepath.Join(t.TempDir(), "sirtopham.yaml")
+			if err := os.WriteFile(configPath, []byte(tt.yaml), 0o644); err != nil {
+				t.Fatalf("WriteFile returned error: %v", err)
+			}
+
+			_, err := Load(configPath)
+			if err == nil {
+				t.Fatal("expected validation error, got nil")
+			}
+			if !strings.Contains(err.Error(), tt.wantSubstr) {
+				t.Fatalf("error %q does not contain %q", err.Error(), tt.wantSubstr)
+			}
+		})
+	}
+}
+
+func TestResolveAgentRoleSystemPromptPathUsesProjectRoot(t *testing.T) {
+	projectRoot := filepath.Join(string(filepath.Separator), "tmp", "sirtopham-project")
+	cfg := &Config{ProjectRoot: projectRoot}
+
+	if got := cfg.ResolveAgentRoleSystemPromptPath("prompts/reviewer.md"); got != filepath.Join(projectRoot, "prompts", "reviewer.md") {
+		t.Fatalf("ResolveAgentRoleSystemPromptPath(relative) = %q", got)
+	}
+	if got := cfg.ResolveAgentRoleSystemPromptPath(filepath.Join(string(filepath.Separator), "abs", "prompt.md")); got != filepath.Join(string(filepath.Separator), "abs", "prompt.md") {
+		t.Fatalf("ResolveAgentRoleSystemPromptPath(abs) = %q", got)
+	}
+}

@@ -147,6 +147,90 @@ func (q *Queries) ListBrainDocumentsByProject(ctx context.Context, projectID str
 	return items, nil
 }
 
+const listBrainLinksBySource = `-- name: ListBrainLinksBySource :many
+SELECT id, project_id, source_path, target_path, link_text
+FROM brain_links
+WHERE project_id = ?
+  AND source_path = ?
+ORDER BY target_path
+`
+
+type ListBrainLinksBySourceParams struct {
+	ProjectID  string `json:"project_id"`
+	SourcePath string `json:"source_path"`
+}
+
+func (q *Queries) ListBrainLinksBySource(ctx context.Context, arg ListBrainLinksBySourceParams) ([]BrainLink, error) {
+	rows, err := q.db.QueryContext(ctx, listBrainLinksBySource, arg.ProjectID, arg.SourcePath)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []BrainLink
+	for rows.Next() {
+		var i BrainLink
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProjectID,
+			&i.SourcePath,
+			&i.TargetPath,
+			&i.LinkText,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listBrainLinksByTarget = `-- name: ListBrainLinksByTarget :many
+SELECT id, project_id, source_path, target_path, link_text
+FROM brain_links
+WHERE project_id = ?
+  AND target_path = ?
+ORDER BY source_path
+`
+
+type ListBrainLinksByTargetParams struct {
+	ProjectID  string `json:"project_id"`
+	TargetPath string `json:"target_path"`
+}
+
+func (q *Queries) ListBrainLinksByTarget(ctx context.Context, arg ListBrainLinksByTargetParams) ([]BrainLink, error) {
+	rows, err := q.db.QueryContext(ctx, listBrainLinksByTarget, arg.ProjectID, arg.TargetPath)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []BrainLink
+	for rows.Next() {
+		var i BrainLink
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProjectID,
+			&i.SourcePath,
+			&i.TargetPath,
+			&i.LinkText,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const upsertBrainDocument = `-- name: UpsertBrainDocument :exec
 INSERT INTO brain_documents (
     project_id,
