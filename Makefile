@@ -1,6 +1,6 @@
-BINARY              := sirtopham
+BINARY              := tidmouth
 BIN_DIR             := bin
-CMD_PKG             := ./cmd/sirtopham
+CMD_PKG             := ./cmd/tidmouth
 WEB_DIR             := web
 WEBFS_DIST          := webfs/dist
 GO_TAGS             := sqlite_fts5

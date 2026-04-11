@@ -32,8 +32,8 @@ var obsidianCorePluginsJSON = []string{
 func newInitCmd(configPath *string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "init",
-		Short: "Initialize a project for use with sirtopham",
-		Long: `Bootstrap the current directory for sirtopham:
+		Short: "Initialize a project for use with tidmouth",
+		Long: `Bootstrap the current directory for tidmouth:
   - Generate <project>.yaml config file
   - Create .<project>/ directory with SQLite database and vectorstore roots
   - Create .brain/ vault with Obsidian structure
@@ -57,7 +57,7 @@ func runInit(ctx context.Context, configPath string) error {
 	if configPath == "" {
 		configPath = appconfig.DefaultConfigFilename(projectRoot)
 	}
-	fmt.Printf("Initializing sirtopham in %s\n\n", projectRoot)
+	fmt.Printf("Initializing tidmouth in %s\n\n", projectRoot)
 
 	// ── 1. Generate project config ────────────────────────────────────
 	if err := initConfig(projectRoot, projectName, configPath); err != nil {
@@ -98,9 +98,9 @@ func runInit(ctx context.Context, configPath string) error {
 	fmt.Printf("Next steps:\n")
 	fmt.Printf("  1. Review %s and configure at least one provider.\n", filepath.Base(configPath))
 	fmt.Printf("  2. Place or symlink GGUF models into ops/llm/models/.\n")
-	fmt.Printf("  3. Run 'sirtopham llm status' (or 'sirtopham llm up' if you switch local_services.mode to auto).\n")
-	fmt.Printf("  4. Run 'sirtopham index'.\n")
-	fmt.Printf("  5. Run 'sirtopham serve'.\n")
+	fmt.Printf("  3. Run 'tidmouth llm status' (or 'tidmouth llm up' if you switch local_services.mode to auto).\n")
+	fmt.Printf("  4. Run 'tidmouth index'.\n")
+	fmt.Printf("  5. Run 'tidmouth serve'.\n")
 	return nil
 }
 
@@ -126,7 +126,7 @@ func initConfig(projectRoot, projectName, configPath string) error {
 // generateConfigYAML builds a starter project config YAML.
 func generateConfigYAML(projectRoot, projectName string) string {
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("# sirtopham config for %s\n", projectName))
+	b.WriteString(fmt.Sprintf("# tidmouth config for %s\n", projectName))
 	b.WriteString(fmt.Sprintf("project_root: %s\n", projectRoot))
 	b.WriteString("log_level: info\n")
 	b.WriteString("log_format: text\n")
@@ -329,7 +329,7 @@ func patchGitignore(projectRoot, projectName string) error {
 		}
 	}
 
-	if _, err := f.WriteString("\n# sirtopham (auto-generated)\n"); err != nil {
+	if _, err := f.WriteString("\n# tidmouth (auto-generated)\n"); err != nil {
 		return err
 	}
 	for _, entry := range toAdd {

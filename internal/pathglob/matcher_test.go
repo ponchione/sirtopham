@@ -30,7 +30,7 @@ func TestMatchAny_UsesYamlStyleRules(t *testing.T) {
 	includes := []string{"**/*.go", "**/*.sql", "**/*.md", "**/*.yaml", "**/*.yml"}
 	excludes := []string{"**/.git/**", "**/.sirtopham/**", "**/.brain/**", "**/node_modules/**", "**/vendor/**", "**/dist/**", "**/*.min.js"}
 
-	if !MatchAny(includes, "cmd/sirtopham/serve.go") {
+	if !MatchAny(includes, "cmd/tidmouth/serve.go") {
 		t.Fatal("expected serve.go to be included")
 	}
 	if !MatchAny(excludes, "web/node_modules/react/index.js") {

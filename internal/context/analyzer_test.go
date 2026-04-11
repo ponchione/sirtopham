@@ -12,12 +12,12 @@ import (
 func TestRuleBasedAnalyzerExtractsFileReferences(t *testing.T) {
 	analyzer := RuleBasedAnalyzer{}
 
-	needs := analyzer.AnalyzeTurn("Check internal/auth/ and cmd/sirtopham/main.go", nil)
+	needs := analyzer.AnalyzeTurn("Check internal/auth/ and cmd/tidmouth/main.go", nil)
 
 	requireStringsContain(t, needs.ExplicitFiles, "internal/auth")
-	requireStringsContain(t, needs.ExplicitFiles, "cmd/sirtopham/main.go")
+	requireStringsContain(t, needs.ExplicitFiles, "cmd/tidmouth/main.go")
 	requireSignal(t, needs.Signals, "file_ref", "internal/auth", "internal/auth")
-	requireSignal(t, needs.Signals, "file_ref", "cmd/sirtopham/main.go", "cmd/sirtopham/main.go")
+	requireSignal(t, needs.Signals, "file_ref", "cmd/tidmouth/main.go", "cmd/tidmouth/main.go")
 }
 
 func TestRuleBasedAnalyzerExtractsSymbolReferences(t *testing.T) {

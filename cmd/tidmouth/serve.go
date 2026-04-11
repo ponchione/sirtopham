@@ -34,7 +34,7 @@ func newServeCmd(configPath *string) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "serve",
-		Short: "Start the sirtopham server",
+		Short: "Start the tidmouth server",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runServe(cmd, *configPath, portOverride, hostOverride, devMode)
 		},
@@ -70,7 +70,7 @@ func runServe(cmd *cobra.Command, configPath string, portOverride int, hostOverr
 
 	logger := runtimeBundle.Logger
 	projectID := cfg.ProjectRoot
-	logger.Info("sirtopham starting",
+	logger.Info("tidmouth starting",
 		"version", version,
 		"project", cfg.ProjectRoot,
 		"listen", fmt.Sprintf("http://%s:%d", cfg.Server.Host, cfg.Server.Port),

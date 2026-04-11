@@ -846,7 +846,7 @@ func TestBrainWriteSuccess(t *testing.T) {
 	if !strings.Contains(result.Content, "Derived brain metadata and semantic chunks are now stale") {
 		t.Fatalf("content = %q, want explicit stale-index reminder", result.Content)
 	}
-	if !strings.Contains(result.Content, "sirtopham index brain") {
+	if !strings.Contains(result.Content, "tidmouth index brain") {
 		t.Fatalf("content = %q, want explicit reindex command", result.Content)
 	}
 	// Verify the doc was actually stored.
@@ -1109,7 +1109,7 @@ func TestBrainUpdateAppend(t *testing.T) {
 	if !strings.Contains(result.Content, "Derived brain metadata and semantic chunks are now stale") {
 		t.Fatalf("content = %q, want explicit stale-index reminder", result.Content)
 	}
-	if !strings.Contains(result.Content, "sirtopham index brain") {
+	if !strings.Contains(result.Content, "tidmouth index brain") {
 		t.Fatalf("content = %q, want explicit reindex command", result.Content)
 	}
 	if !strings.Contains(result.Content, "Content preview:\n```md\n---\ntags: [debug]\n---\n# Journal\n\nFirst entry.\n\n## Second Entry\nMore notes here.\n```") {

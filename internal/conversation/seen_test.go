@@ -35,13 +35,13 @@ func TestSeenFilesPathsAndCountReturnNormalizedUniquePaths(t *testing.T) {
 
 	seen.Add("./internal/auth/service.go", 2)
 	seen.Add("internal/auth/service.go/", 3)
-	seen.Add("cmd/sirtopham/./main.go", 4)
+	seen.Add("cmd/tidmouth/./main.go", 4)
 
 	if got := seen.Count(); got != 2 {
 		t.Fatalf("Count returned %d, want 2", got)
 	}
 
-	want := []string{"cmd/sirtopham/main.go", "internal/auth/service.go"}
+	want := []string{"cmd/tidmouth/main.go", "internal/auth/service.go"}
 	if got := seen.Paths(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("Paths returned %v, want %v", got, want)
 	}
@@ -53,7 +53,7 @@ func TestSeenFilesConcurrentAccess(t *testing.T) {
 	paths := []string{
 		"./internal/auth/service.go",
 		"internal/auth/middleware.go",
-		"cmd/sirtopham/main.go",
+		"cmd/tidmouth/main.go",
 	}
 
 	var wg sync.WaitGroup
