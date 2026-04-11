@@ -78,7 +78,9 @@ Other required reading:
 ## Repo state at handoff
 
 ```
-HEAD  c080551 fix(runtime): bootstrap db schema before running upgrade helpers   ← tag v0.2.1-yard-paths
+HEAD  8949c84 chore(phase5a): post-review cleanup for search_text and stale docs
+      3913236 docs: point handoff at phase 3 and document phase 5a completion
+      c080551 fix(runtime): bootstrap db schema before running upgrade helpers   ← tag v0.2.1-yard-paths
       b5ed4d4 chore: update gitignore and comment references to yard paths
       88e453e refactor: rename repo config files to yard.yaml
       3cf5239 refactor(init): generate canonical .yard/yard.db and yard.yaml
@@ -104,7 +106,21 @@ HEAD  c080551 fix(runtime): bootstrap db schema before running upgrade helpers  
 
 ## Bugs fixed / debt paid across sessions — read before starting Phase 3
 
-### 0. Runtime DB schema bootstrap (phase 5a task 7)
+### 0a. `search_text` tool now excludes `.yard/` (phase 5a post-review cleanup)
+
+File: `internal/tool/search_text.go`, commit `8949c84`.
+
+The `search_text` tool (used by agents during headless runs to grep across
+project files via ripgrep) had hardcoded `.sirtopham` in its `defaultExcludes`
+list and `hiddenStateSearchExcludes` map. After the phase 5a rename, agents
+running against a post-rename project would have seen `.yard/` contents
+(LanceDB chunks, `graph.db`, internal logs) in their search results. Fix
+adds `.yard` and `.sodoryard` to both collections while keeping `.sirtopham`
+as a defensive entry for legacy projects. **Surfaced by the phase 5a final
+code review.** If you add new state directory concepts, remember to update
+both collections here.
+
+### 0b. Runtime DB schema bootstrap (phase 5a task 7)
 
 File: `cmd/tidmouth/runtime.go`, commit `c080551`.
 
