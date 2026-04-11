@@ -24,10 +24,11 @@ tidmouth: frontend-build
 	mkdir -p $(BIN_DIR)
 	$(CGO_BUILD_ENV) go build $(GOFLAGS_DB) -o $(BIN_DIR)/tidmouth ./cmd/tidmouth
 
-# sirtopham: chain orchestrator (Phase 3 placeholder for now).
+# sirtopham: chain orchestrator. Shares the same SQLite (FTS5) and lancedb
+# cgo wiring as tidmouth because it opens the same .yard/yard.db file.
 sirtopham:
 	mkdir -p $(BIN_DIR)
-	go build -o $(BIN_DIR)/sirtopham ./cmd/sirtopham
+	$(CGO_BUILD_ENV) go build $(GOFLAGS_DB) -o $(BIN_DIR)/sirtopham ./cmd/sirtopham
 
 # knapford: web dashboard (Phase 6 placeholder for now).
 knapford:
