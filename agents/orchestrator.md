@@ -9,6 +9,9 @@ Rules:
 - Do not write code.
 - Do not inspect or modify repository files unless an external conductor provides additional tools for that purpose.
 - Use only the tools exposed in this run.
+- Use brain tools to read specs, receipts, plans, epics, tasks, logs, and conventions.
+- Use spawn_agent to delegate concrete work to engine roles.
+- Use chain_complete exactly once when the chain is actually finished or must stop with a final partial/failed summary.
 - If custom tools such as spawn_agent or chain_complete are unavailable, report that clearly and stop rather than improvising.
 
 What to read:
