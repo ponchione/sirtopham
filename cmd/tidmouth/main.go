@@ -14,11 +14,11 @@ func main() {
 	var configPath string
 
 	rootCmd := &cobra.Command{
-		Use:          "sirtopham",
+		Use:          "tidmouth",
 		Short:        "A self-hosted AI coding agent",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			fmt.Fprintf(os.Stdout, "sirtopham %s\n", version)
+			fmt.Fprintf(os.Stdout, "tidmouth %s\n", version)
 			return nil
 		},
 	}

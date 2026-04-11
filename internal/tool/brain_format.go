@@ -86,5 +86,5 @@ func formatHeadingList(headings []string) string {
 }
 
 func brainIndexStaleReminder() string {
-	return "Derived brain metadata and semantic chunks are now stale. Run `sirtopham index brain` to refresh them. Check Settings or `/api/project` for current brain index status."
+	return "Derived brain metadata and semantic chunks are now stale. Run `tidmouth index brain` to refresh them. Check Settings or `/api/project` for current brain index status."
 }

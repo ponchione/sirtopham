@@ -108,7 +108,7 @@ func TestSearchSemanticIndexNotInitialized(t *testing.T) {
 	if result.Success {
 		t.Fatal("expected failure for not-initialized index")
 	}
-	if !strings.Contains(result.Content, "sirtopham index") {
+	if !strings.Contains(result.Content, "tidmouth index") {
 		t.Fatalf("expected guidance to run index, got: %s", result.Content)
 	}
 }
