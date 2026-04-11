@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/ponchione/sirtopham/internal/brain"
@@ -72,6 +73,9 @@ func (c *Client) ReadDocument(ctx context.Context, path string) (string, error) 
 	if err != nil {
 		return "", err
 	}
+	if toolErr := toolResultError(res); toolErr != nil {
+		return "", toolErr
+	}
 	var out readResult
 	if err := decodeStructured(res.StructuredContent, &out); err != nil {
 		return "", err
@@ -80,19 +84,28 @@ func (c *Client) ReadDocument(ctx context.Context, path string) (string, error) 
 }
 
 func (c *Client) WriteDocument(ctx context.Context, path string, content string) error {
-	_, err := c.session.CallTool(ctx, &mcp.CallToolParams{Name: "vault_write", Arguments: map[string]any{"path": path, "content": content}})
-	return err
+	res, err := c.session.CallTool(ctx, &mcp.CallToolParams{Name: "vault_write", Arguments: map[string]any{"path": path, "content": content}})
+	if err != nil {
+		return err
+	}
+	return toolResultError(res)
 }
 
 func (c *Client) PatchDocument(ctx context.Context, path string, operation string, content string) error {
-	_, err := c.session.CallTool(ctx, &mcp.CallToolParams{Name: "vault_patch", Arguments: map[string]any{"path": path, "operation": operation, "content": content}})
-	return err
+	res, err := c.session.CallTool(ctx, &mcp.CallToolParams{Name: "vault_patch", Arguments: map[string]any{"path": path, "operation": operation, "content": content}})
+	if err != nil {
+		return err
+	}
+	return toolResultError(res)
 }
 
 func (c *Client) SearchKeyword(ctx context.Context, query string) ([]brain.SearchHit, error) {
 	res, err := c.session.CallTool(ctx, &mcp.CallToolParams{Name: "vault_search", Arguments: map[string]any{"query": query, "max_results": 10}})
 	if err != nil {
 		return nil, err
+	}
+	if toolErr := toolResultError(res); toolErr != nil {
+		return nil, toolErr
 	}
 	var out searchResult
 	if err := decodeStructured(res.StructuredContent, &out); err != nil {
@@ -106,11 +119,35 @@ func (c *Client) ListDocuments(ctx context.Context, directory string) ([]string,
 	if err != nil {
 		return nil, err
 	}
+	if toolErr := toolResultError(res); toolErr != nil {
+		return nil, toolErr
+	}
 	var out listResult
 	if err := decodeStructured(res.StructuredContent, &out); err != nil {
 		return nil, err
 	}
 	return out.Paths, nil
+}
+
+// toolResultError converts an MCP tool result carrying IsError=true into a Go
+// error containing the handler-supplied message. Returns nil if the result
+// reports no error (or is nil). The handler-side text content is preserved so
+// callers that inspect error substrings (for example, "Document not found")
+// continue to work.
+func toolResultError(res *mcp.CallToolResult) error {
+	if res == nil || !res.IsError {
+		return nil
+	}
+	var parts []string
+	for _, c := range res.Content {
+		if tc, ok := c.(*mcp.TextContent); ok && tc.Text != "" {
+			parts = append(parts, tc.Text)
+		}
+	}
+	if len(parts) == 0 {
+		return fmt.Errorf("mcp tool call returned error result")
+	}
+	return fmt.Errorf("%s", strings.Join(parts, "\n"))
 }
 
 func decodeStructured(src any, dst any) error {
