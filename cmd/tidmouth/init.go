@@ -53,9 +53,9 @@ func runInit(ctx context.Context, configPath string) error {
 		return fmt.Errorf("get working directory: %w", err)
 	}
 	projectName := appconfig.DefaultProjectName(projectRoot)
-	stateDir := filepath.Join(projectRoot, "."+projectName)
+	stateDir := filepath.Join(projectRoot, appconfig.StateDirName)
 	if configPath == "" {
-		configPath = appconfig.DefaultConfigFilename(projectRoot)
+		configPath = appconfig.ConfigFilename
 	}
 	fmt.Printf("Initializing tidmouth in %s\n\n", projectRoot)
 
@@ -90,7 +90,7 @@ func runInit(ctx context.Context, configPath string) error {
 	}
 
 	// ── 6. Update .gitignore ──────────────────────────────────────────
-	if err := patchGitignore(projectRoot, projectName); err != nil {
+	if err := patchGitignore(projectRoot); err != nil {
 		return err
 	}
 
@@ -164,7 +164,7 @@ func generateConfigYAML(projectRoot, projectName string) string {
 	b.WriteString("    - \"**/*.json\"\n")
 	b.WriteString("  exclude:\n")
 	b.WriteString("    - \"**/.git/**\"\n")
-	b.WriteString(fmt.Sprintf("    - \"**/.%s/**\"\n", projectName))
+	b.WriteString("    - \"**/.yard/**\"\n")
 	b.WriteString("    - \"**/.brain/**\"\n")
 	b.WriteString("    - \"**/node_modules/**\"\n")
 	b.WriteString("    - \"**/vendor/**\"\n")
@@ -208,7 +208,7 @@ func generateConfigYAML(projectRoot, projectName string) string {
 
 // initDatabase opens the SQLite database and creates the schema if needed.
 func initDatabase(ctx context.Context, projectRoot, projectName, stateDir string) error {
-	dbPath := filepath.Join(stateDir, "sirtopham.db")
+	dbPath := filepath.Join(stateDir, appconfig.StateDBName)
 
 	database, err := appdb.OpenDB(ctx, dbPath)
 	if err != nil {
@@ -227,7 +227,7 @@ func initDatabase(ctx context.Context, projectRoot, projectName, stateDir string
 		return fmt.Errorf("upgrade context report token budget storage: %w", err)
 	}
 
-	dbRelPath := filepath.Join("."+projectName, "sirtopham.db")
+	dbRelPath := filepath.Join(appconfig.StateDirName, appconfig.StateDBName)
 	if created {
 		fmt.Printf("  database   %s (schema created)\n", dbRelPath)
 	} else {
@@ -295,7 +295,7 @@ func initBrainVault(projectRoot string) error {
 }
 
 // patchGitignore appends the project state dir and .brain to .gitignore if not present.
-func patchGitignore(projectRoot, projectName string) error {
+func patchGitignore(projectRoot string) error {
 	gitignorePath := filepath.Join(projectRoot, ".gitignore")
 
 	existing := ""
@@ -303,7 +303,7 @@ func patchGitignore(projectRoot, projectName string) error {
 		existing = string(data)
 	}
 
-	entries := []string{"." + projectName + "/", ".brain/"}
+	entries := []string{appconfig.StateDirName + "/", ".brain/"}
 	var toAdd []string
 	for _, entry := range entries {
 		if !gitignoreContains(existing, entry) {
