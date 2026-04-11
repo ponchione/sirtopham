@@ -31,7 +31,7 @@ index:
     - "**/*.yml"
   exclude:
     - "**/.git/**"
-    - "**/.sirtopham/**"
+    - "**/.yard/**"
     - "**/.brain/**"
     - "**/.hermes/**"
     - "**/.claude/**"
