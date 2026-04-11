@@ -38,6 +38,19 @@ type appRuntime struct {
 	Cleanup             func()
 }
 
+// chainCleanup extends a teardown chain without falling into the closure
+// capture-by-reference trap. Each call captures `prev` as a value parameter,
+// so later extensions get a fresh copy rather than sharing one variable that
+// eventually points at the final extension and self-recurses.
+func chainCleanup(prev func(), next func()) func() {
+	return func() {
+		next()
+		if prev != nil {
+			prev()
+		}
+	}
+}
+
 func buildAppRuntime(ctx context.Context, cfg *appconfig.Config) (*appRuntime, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("runtime config is required")
@@ -103,11 +116,7 @@ func buildAppRuntime(ctx context.Context, cfg *appconfig.Config) (*appRuntime, e
 	if err != nil {
 		return closeOnError(fmt.Errorf("open code vectorstore: %w", err))
 	}
-	prevCleanup := cleanup
-	cleanup = func() {
-		_ = codeStore.Close()
-		prevCleanup()
-	}
+	cleanup = chainCleanup(cleanup, func() { _ = codeStore.Close() })
 	semanticEmbedder := embedder.New(cfg.Embedding)
 	semanticSearcher := codesearcher.New(codeStore, semanticEmbedder)
 
@@ -115,31 +124,19 @@ func buildAppRuntime(ctx context.Context, cfg *appconfig.Config) (*appRuntime, e
 	if err != nil {
 		return closeOnError(fmt.Errorf("open brain vectorstore: %w", err))
 	}
-	prevCleanup = cleanup
-	cleanup = func() {
-		_ = brainStore.Close()
-		prevCleanup()
-	}
+	cleanup = chainCleanup(cleanup, func() { _ = brainStore.Close() })
 
 	brainBackend, closeBrainBackend, err := buildBrainBackend(ctx, cfg.Brain, logger)
 	if err != nil {
 		return closeOnError(fmt.Errorf("build brain backend: %w", err))
 	}
-	prevCleanup = cleanup
-	cleanup = func() {
-		closeBrainBackend()
-		prevCleanup()
-	}
+	cleanup = chainCleanup(cleanup, closeBrainBackend)
 
 	graphStore, closeGraphStore, err := buildGraphStore(cfg)
 	if err != nil {
 		return closeOnError(fmt.Errorf("build graph store: %w", err))
 	}
-	prevCleanup = cleanup
-	cleanup = func() {
-		closeGraphStore()
-		prevCleanup()
-	}
+	cleanup = chainCleanup(cleanup, closeGraphStore)
 
 	conventionSource := buildConventionSource(cfg)
 	brainSearcher := contextpkg.NewHybridBrainSearcher(brainBackend, brainStore, semanticEmbedder, queries, cfg.ProjectRoot)
