@@ -32,8 +32,7 @@ func Path(projectRoot string) string {
 	if root == "" {
 		root = "."
 	}
-	projectName := appconfig.DefaultProjectName(root)
-	return filepath.Join(root, "."+projectName, stateFilename)
+	return filepath.Join(root, appconfig.StateDirName, stateFilename)
 }
 
 func Load(projectRoot string) (State, error) {
