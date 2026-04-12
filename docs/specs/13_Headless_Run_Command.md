@@ -6,9 +6,9 @@
 
 ## Overview
 
-The `sirtopham run` subcommand executes a single agent session headlessly — no web UI, no HTTP server. It receives a task, runs the agent loop to completion, and exits. The primary consumer is the orchestration layer (conductor v2), but it is also useful for manual scripting and testing.
+The `tidmouth run` subcommand executes a single agent session headlessly — no web UI, no HTTP server. It receives a task, runs the agent loop to completion, and exits. The primary consumer is the orchestration layer (SirTopham), but it is also useful for manual scripting and testing.
 
-This is the interface contract between SirTopham (the harness) and any external orchestrator. The harness remains responsible for context assembly, tool dispatch, brain access, and LLM interaction. The orchestrator is responsible for deciding *what* to run and *what to do* with the result.
+This is the interface contract between Tidmouth (the harness) and any external orchestrator. The harness remains responsible for context assembly, tool dispatch, brain access, and LLM interaction. The orchestrator is responsible for deciding *what* to run and *what to do* with the result.
 
 ---
 
@@ -35,7 +35,7 @@ A headless run is configured with a role that determines which tools are availab
 ## CLI Interface
 
 ```
-sirtopham run [flags]
+tidmouth run [flags]
 ```
 
 ### Required Flags
@@ -73,7 +73,7 @@ sirtopham run [flags]
 On successful exit (code 0 or 2), the last line of stdout is the brain-relative path to the receipt document. This allows simple scripting:
 
 ```bash
-receipt=$(sirtopham run --role coder --task "implement auth middleware" 2>/dev/null | tail -1)
+receipt=$(tidmouth run --role coder --task "implement auth middleware" 2>/dev/null | tail -1)
 ```
 
 In non-quiet mode, progress information (turn count, tool calls, token usage) streams to stderr.
@@ -82,7 +82,7 @@ In non-quiet mode, progress information (turn count, tool calls, token usage) st
 
 ## Agent Role Configuration
 
-Roles are defined in `sirtopham.yaml` under a new `agent_roles` section:
+Roles are defined in `yard.yaml` under a new `agent_roles` section:
 
 ```yaml
 agent_roles:
@@ -174,7 +174,7 @@ Brain read operations (`brain_read`, `brain_search`, `brain_list`) are never res
 ### 1. Initialization
 
 ```
-sirtopham run --role coder --task "implement JWT auth" --chain-id auth-2026-04-11
+tidmouth run --role coder --task "implement JWT auth" --chain-id auth-2026-04-11
     │
     ├─ Load config, resolve brain vault path
     ├─ Validate role exists in agent_roles config
@@ -298,7 +298,7 @@ What the agent recommends the next agent (or human) should do.
 
 5. **Fallback receipt writer** — If agent completes without writing a receipt, the harness writes one with `completed_no_receipt` verdict containing the agent's final text response and session metrics.
 
-6. **Config schema update** — Add `agent_roles` section to `sirtopham.yaml` parsing.
+6. **Config schema update** — Add `agent_roles` section to `yard.yaml` parsing.
 
 ### What Does NOT Need Built
 
