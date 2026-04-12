@@ -56,10 +56,15 @@ FROM debian:trixie-slim AS runtime
 
 # ca-certificates: needed for HTTPS calls to provider APIs (codex,
 # anthropic). tini: PID 1 init for clean signal handling.
+# nodejs + npm: needed for the codex CLI (@openai/codex) which the
+# codex provider shells out to for auth token management.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
         tini \
+        nodejs \
+        npm \
+    && npm install -g @openai/codex \
     && rm -rf /var/lib/apt/lists/*
 
 # Stage liblancedb_go.so at the standard site-installed library path.
