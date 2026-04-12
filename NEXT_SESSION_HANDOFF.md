@@ -1,553 +1,214 @@
-# Session handoff — sodoryard migration, start of Phase 3
+# Session handoff — sodoryard migration
 
-Date: 2026-04-11
-Branch: main
-Cwd: /home/gernsback/source/sodoryard
+**Date:** 2026-04-11
+**Branch:** main
+**Cwd:** /home/gernsback/source/sodoryard
 
-> Read this cold. Everything you need to orient yourself is in here. If anything
-> in this doc disagrees with current repo state, trust the repo and update this
-> doc before acting.
-
-> **Phase 5a (yard paths rename) landed this session.** See the "Phase 5a
-> complete" section below. The next task is Phase 3 — SirTopham orchestrator —
-> per `docs/specs/15-chain-orchestrator.md`.
+> Read this cold. Everything you need to orient yourself is in here. If anything in this doc disagrees with current repo state, trust the repo and update this doc before acting.
 
 ---
 
 ## What this project is
 
-Migrating `ponchione/sirtopham` (single-binary coding harness) into the
-`ponchione/sodoryard` monorepo. GitHub repo has been renamed; local dir is now
-`/home/gernsback/source/sodoryard`; git remote already points at
-`git@github.com:ponchione/sodoryard.git`.
+Migrating `ponchione/sirtopham` (single-binary coding harness) into the `ponchione/sodoryard` monorepo. The GitHub repo has been renamed; the local directory is `/home/gernsback/source/sodoryard`; the git remote points at `git@github.com:ponchione/sodoryard.git`.
 
-Target monorepo layout:
+Target monorepo layout (all in place as of this handoff):
 
-- **Tidmouth** — headless engine harness (`cmd/tidmouth/`, renamed from current `cmd/sirtopham/`)
-- **SirTopham** — orchestrator binary that runs chains (future `cmd/sirtopham/main.go`, not yet implemented)
-- **Knapford** — web dashboard (future `cmd/knapford/main.go`, not yet implemented)
+- **Tidmouth** — headless engine harness (`cmd/tidmouth/`)
+- **SirTopham** — chain orchestrator (`cmd/sirtopham/`)
+- **Yard** — operator-facing CLI for project bootstrap (`cmd/yard/`, partial — see "Phase 5b ready" below)
+- **Knapford** — web dashboard (`cmd/knapford/`, placeholder until Phase 6)
 
-**Full plan: `sodor-migration-roadmap.md`.** Read phases 0–7 before touching code.
-
-Other required reading:
-
-- `conductor-v1-extraction.md` — what to lift from the archived conductor repo
-- `docs/specs/13_Headless_Run_Command.md` — spec for the landed `run` command
-- `docs/specs/14_Agent_Roles_and_Brain_Conventions.md` — spec for role config + brain write scoping
-- `docs/specs/15-chain-orchestrator.md` — spec for the future SirTopham orchestrator (Phase 3)
-- `docs/plans/2026-04-11-headless-run-command-implementation-plan.md` — plan that drove the run command
-- `docs/plans/2026-04-11-agent-roles-and-brain-conventions-implementation-plan.md` — plan that drove the role/brain-scoping work
-- `docs/agent-roles-and-brain-conventions.md` + `docs/agent-role-conductor-boundary.md` — operator-facing boundary docs
+The full migration roadmap is `sodor-migration-roadmap.md`. Read phases 0–7 before touching code.
 
 ---
 
-## Milestones reached
+## Current state of all phases
 
-- **Phase 0 — complete.** Tag `v0.1-pre-sodor` at commit `1338611` marks the
-  state before any sodoryard migration or brain-rebuild work.
-- **Brain system rebuild — complete.** Canonical parser, derived-state indexer,
-  heading-aware brain chunks, hybrid runtime brain searcher (keyword + semantic
-  + graph/backlink), layout-intent routing, explicit `sirtopham index brain`
-  path. Six maintained validation scenarios stay green live on the rebuilt
-  runtime. Narrative preserved in git at commits `4a63ad8` and `1338611`.
-- **Phase 2 spec-13 headless run command — landed and smoke-tested end to
-  end.** The "Phase 2 acceptance items verified live" section below lists
-  what the live smoke test proved. Test-only gaps (custom-tools rejection,
-  exit-code paths, `--task-file`) were later closed in commit `447bf5e` —
-  see "Bugs fixed / debt paid this session" below.
-- **Phase 2 spec-14 agent roles and brain conventions — landed.**
-  `file:read` tool group split, `internal/role/builder.go`, brain write path
-  enforcement, agent prompt stubs in `agents/`, role set wired into
-  `yard.yaml` (formerly `sirtopham.yaml`), boundary docs. Prompt stubs are
-  operational but minimal — production prompts are Phase 4, not this session.
-- **Phase 1 monorepo restructure — complete.** Tag `v0.2-monorepo-structure`
-  marks the final Phase 1 commit. Module path is `github.com/ponchione/sodoryard`,
-  `cmd/tidmouth/` hosts the headless engine, `cmd/sirtopham/` and `cmd/knapford/`
-  are placeholder binaries awaiting Phase 3 and Phase 6, `templates/init/` has
-  the scaffold for `yard init`, and the Makefile builds all three binaries.
-- **Phase 5a yard paths rename — complete.** Tag `v0.2.1-yard-paths` at the
-  most recent Phase 5a commit. Every project now uses the canonical `.yard/`
-  state directory with `yard.yaml` config and `yard.db` SQLite file, regardless
-  of project basename. The codeintel chunk-label derivation (`ProjectName()`)
-  is intentionally kept basename-derived — that concern is split from the
-  state dir name. See `docs/plans/2026-04-11-yard-paths-rename-implementation-plan.md`
-  for the task-by-task plan that drove this work.
+| Phase | Status | Tag |
+|---|---|---|
+| 0 — prep | ✅ done | `v0.1-pre-sodor` |
+| 1 — monorepo restructure | ✅ done | `v0.2-monorepo-structure` |
+| 2 — headless run command | ✅ done | (no separate tag) |
+| 3 — SirTopham orchestrator | ✅ done | `v0.4-orchestrator` |
+| 4 — system prompts | 🛠 deferred (handled out-of-band) | — |
+| 5a — yard paths rename | ✅ done | `v0.2.1-yard-paths` |
+| **5b — yard init** | 📋 spec + plan ready, NOT executed | (will be `v0.5-yard-init`) |
+| 6 — Knapford dashboard | 🛠 deferred (waiting on Phase 4) | — |
+| **7 — yard containerization** | 📋 spec + plan ready, NOT executed | (will be `v0.7-containerization`) |
+
+Phases 5b and 7 both have committed specs and committed implementation plans. They are ready to execute task-by-task with no further design work needed.
 
 ---
 
-## Repo state at handoff
+## Phase 5b — ready to execute
+
+**Spec:** `docs/specs/16-yard-init.md` (386 lines)
+**Plan:** `docs/plans/2026-04-11-phase-5b-yard-init-implementation-plan.md` (2365 lines)
+
+**What it ships:**
+- New `cmd/yard/` top-level binary (`yard init` subcommand only)
+- New `internal/initializer/` package — embedded `templates/init/` via `//go:embed all:templates/init`, substitution helpers, the moved Obsidian config writer / gitignore patcher / database bootstrap from `cmd/tidmouth/init.go`, the `Run()` orchestrator
+- Rewritten `templates/init/yard.yaml.example` with all 13 `agent_roles` entries seeded with `{{SODORYARD_AGENTS_DIR}}` placeholders
+- Deletion of `cmd/tidmouth/init.go` and `cmd/tidmouth/init_test.go` (the existing init logic moves wholesale to the new package)
+- Makefile `yard:` target with the same FTS5/lancedb cgo wiring as `tidmouth:` and `sirtopham:`
+
+**Locked decisions** (do not re-litigate during execution):
+1. New top-level `cmd/yard` binary (not a Tidmouth subcommand)
+2. All 13 agent roles seeded with `{{SODORYARD_AGENTS_DIR}}` placeholders
+3. `templates/init/` is canonical source of truth, embedded via `go:embed`
+4. Default provider: `codex` / `gpt-5.4-mini`
+5. `cmd/tidmouth/init.go` deleted outright (no deprecation alias)
+6. Exactly two substitutions at copy time: `{{PROJECT_ROOT}}` and `{{PROJECT_NAME}}`
+7. Idempotent re-run is a no-op
+
+**Smoke verification:** plan task 12 runs `yard init` against a fresh `/tmp/yard-init-smoke-*` directory, confirms the file tree, hand-substitutes `{{SODORYARD_AGENTS_DIR}}` via `sed`, and runs a real `sirtopham chain` against the freshly initialized project end-to-end.
+
+---
+
+## Phase 7 — ready to execute
+
+**Spec:** `docs/specs/17-yard-containerization.md` (407 lines)
+**Plan:** `docs/plans/2026-04-11-phase-7-yard-containerization-implementation-plan.md` (1288 lines)
+
+**Depends on:** Phase 5b must be fully landed and tagged `v0.5-yard-init` first. Phase 7's plan assumes `cmd/yard/main.go`, `cmd/yard/init.go`, and `internal/initializer/` already exist.
+
+**What it ships:**
+- New `cmd/yard/install.go` subcommand — substitutes `{{SODORYARD_AGENTS_DIR}}` in `yard.yaml` (the placeholder Phase 5b's `yard init` deliberately leaves manual). Reads `--sodoryard-agents-dir` flag or `SODORYARD_AGENTS_DIR` env var. Idempotent.
+- New `internal/initializer/install.go` + tests — the substitution function (testable in isolation).
+- New `Dockerfile` — three-stage build: `node:20-bookworm-slim` (frontend) → `golang:1.22-bookworm` (binaries with corrected lancedb rpath) → `debian:bookworm-slim` (runtime with `liblancedb_go.so` at `/usr/local/lib/` + `ldconfig` + agent prompts at `/opt/yard/agents/`).
+- New `docker-compose.yaml` at the repo root — `yard` service plus a profile-gated `knapford` placeholder. Both share the existing external `llm-net` network with `ops/llm/docker-compose.yml`.
+- New `.dockerignore` — keeps host artifacts out of the build context. **Intentionally does NOT exclude `templates/init/`** (the Go builder embeds it via `go:embed`).
+
+**Locked decisions** (do not re-litigate during execution):
+1. Headless-only Phase 7 — Knapford service is a profile-gated placeholder until Phase 6
+2. `yard install` is the only command that performs the agents-dir substitution; `yard init` stays unchanged
+3. `debian:bookworm-slim` runtime base (no alpine, no distroless, no scratch — hard glibc constraint from lancedb)
+4. amd64 only (no `linux_arm64` lancedb library exists)
+5. Two compose files, share `llm-net` external network — `ops/llm/docker-compose.yml` is NOT modified
+6. `liblancedb_go.so` staged at `/usr/local/lib/` + `ldconfig` + builder rpath rebuild (belt-and-suspenders)
+7. Image filesystem: binaries at `/usr/local/bin/`, agent prompts at `/opt/yard/agents/`, project bind-mounted at `/project`
+8. Tag is `v0.7-containerization`, NOT `v1.0-sodor` (`v1.0-sodor` is reserved for Phase 6 + Phase 7 shipped together)
+
+**Smoke verification:** plan task 11 runs a real `sirtopham chain` inside the container against a `/tmp/yard-container-smoke-*` host bind mount, with `~/.sirtopham/auth.json` mounted read-only as `/root/.sirtopham/auth.json`. Confirms the container can talk to the codex API, the bind mount works in both directions, the lancedb cgo binary loads, and a freshly `yard init`'d + `yard install`'d project is immediately usable end-to-end.
+
+---
+
+## Deferred (not in this session)
+
+### Phase 4 — system prompts
+
+The 13 agent prompt files in `agents/` are operational stubs (13–27 lines each) inherited from earlier phases. Phase 4 expands them into production prompts: identity & boundaries, brain interaction protocol, tool usage guidance, quality criteria, output expectations.
+
+**Status:** the user is handling Phase 4 out-of-band with a dedicated prompt agent. Do NOT touch `agents/` files in this repo unless the user explicitly asks. Phase 4 may have landed by the time the next session starts.
+
+### Phase 6 — Knapford dashboard
+
+Web dashboard that consumes `.brain/`, `.yard/yard.db`, and the chain state to render conversations, chain timelines, brain explorer, review queue, agent drilldown, analytics. Roadmap calls this the largest phase; needs decomposition into per-epic specs.
+
+**Status:** deferred until Phase 4 prompts are ready for dogfooding. Phase 6 is the natural dogfooding target for the railway — once chains produce useful artifacts, Knapford gives them a place to display.
+
+The Phase 7 docker-compose.yaml has a profile-gated `knapford` service slot waiting for Phase 6 to fill in. Once Phase 6 ships, the profile gate gets removed and `knapford` becomes a default-on service.
+
+---
+
+## Recent commits
 
 ```
-HEAD  8949c84 chore(phase5a): post-review cleanup for search_text and stale docs
-      3913236 docs: point handoff at phase 3 and document phase 5a completion
-      c080551 fix(runtime): bootstrap db schema before running upgrade helpers   ← tag v0.2.1-yard-paths
-      b5ed4d4 chore: update gitignore and comment references to yard paths
-      88e453e refactor: rename repo config files to yard.yaml
-      3cf5239 refactor(init): generate canonical .yard/yard.db and yard.yaml
-      d12b69c refactor(cli): default --config flag to yard.yaml
-      afdb951 refactor(indexstate): resolve state file under canonical .yard dir
-      23cb30e docs(config): document DefaultConfigFilename unused parameter
-      1d37c9c refactor(config): hardcode yard state dir and database name
-      b092dc0 docs: add phase 5a yard paths rename implementation plan
-      8f4b12d docs: refine rename debt notes and phase 1 smoke test phrasing
-      2ed9fe8 refactor(config): derive state-dir exclude pattern per project
-      447bf5e refactor(tidmouth): extract newRootCmd and cover run headless gaps
-      fedd1e1 build: rework Makefile for three-binary monorepo   ← tag v0.2-monorepo-structure
-      1338611 docs: refresh brain validation handoff   ← tag v0.1-pre-sodor
+HEAD  6c08d0f  chore(plans): delete audit fix followup plan, bug already fixed
+      6e2851b  chore(docs): delete historical layer0-6 build epic docs (360 files)
+      108021c  chore(docs): delete stale operator boundary docs
+      3e3049f  chore(plans): delete completed-phase implementation plans
+      4733d25  chore: remove empty README.md
+      87e84c4  docs(plans): add Phase 7 yard containerization implementation plan
+      898aab1  docs(spec17): add Phase 7 yard containerization design spec
+      aeeb2ae  docs(plans): add Phase 5b yard init implementation plan
+      4b9ff35  docs(spec16): add Phase 5b yard init design spec
+      ee685a1  docs(tech-debt): log three orchestrator follow-ups surfaced by phase 3 verification
+      103e491  fix(build): give sirtopham the same FTS5 and lancedb cgo flags as tidmouth
+      a259c3f  docs(plans): land phase 3 sirtopham orchestrator implementation plan and handoff
+      5f9809e  docs(spec15): align chain orchestrator spec with shipped phase 3 implementation
+      e71cd26  docs(agents): expand orchestrator system prompt for phase 3 smoke test
+      a5aebe0  feat(sirtopham): wire orchestrator CLI on top of chain store and spawn tools
+      b0ffeca  feat(spawn): add spawn_agent and chain_complete tools with subprocess driver
+      48078d4  feat(role,tool,agent): add custom-tool factory and ErrChainComplete sentinel
+      d93e5f0  feat(chain): add chain store with state transitions and limits
+      fd2b82b  feat(db): add chains/steps/events schema and sqlc bindings
+      ac5e9ad  feat(receipt): add shared brain receipt parser package   ← v0.4-orchestrator starts here
+      619f5a7  docs: add phase 5a post-review cleanup to handoff commit stack
 ```
 
 - Working tree: clean
-- `make test`: green
-- `make build`: green
-- Tags: `v0.1-pre-sodor`, `v0.2-monorepo-structure`, `v0.2.1-yard-paths`
+- `make test`: green (42 packages)
+- `make all`: green (4 binaries: tidmouth, sirtopham, yard, knapford — wait, **yard does not build yet** because Phase 5b hasn't been executed; `make all` produces 3 binaries: tidmouth, sirtopham, knapford)
+- Tags: `v0.1-pre-sodor`, `v0.2-monorepo-structure`, `v0.2.1-yard-paths`, `v0.4-orchestrator`
 - **Not pushed.** User pushes manually.
 
 ---
 
-## Bugs fixed / debt paid across sessions — read before starting Phase 3
+## Operational notes
 
-### 0a. `search_text` tool now excludes `.yard/` (phase 5a post-review cleanup)
+### Hard rules
 
-File: `internal/tool/search_text.go`, commit `8949c84`.
+- **Per-step commits** — don't batch multi-task work into one mega-commit.
+- **Do not push** — the user pushes manually.
+- **Do not skip git hooks** unless the user explicitly asks.
+- **Do not touch `agents/`** — Phase 4 prompts are being handled out-of-band.
+- **Do not touch `cmd/sirtopham/` or `internal/{chain,spawn,receipt}/`** beyond the TECH-DEBT items unless the user explicitly asks — Phase 3 just shipped and is stable.
+- **Do not modify `ops/llm/docker-compose.yml`** in Phase 7 — it's an independent compose file with its own lifecycle.
 
-The `search_text` tool (used by agents during headless runs to grep across
-project files via ripgrep) had hardcoded `.sirtopham` in its `defaultExcludes`
-list and `hiddenStateSearchExcludes` map. After the phase 5a rename, agents
-running against a post-rename project would have seen `.yard/` contents
-(LanceDB chunks, `graph.db`, internal logs) in their search results. Fix
-adds `.yard` and `.sodoryard` to both collections while keeping `.sirtopham`
-as a defensive entry for legacy projects. **Surfaced by the phase 5a final
-code review.** If you add new state directory concepts, remember to update
-both collections here.
+### Pre-flight checks before any smoke test
 
-### 0b. Runtime DB schema bootstrap (phase 5a task 7)
-
-File: `cmd/tidmouth/runtime.go`, commit `c080551`.
-
-`buildAppRuntime` opened the database and immediately called
-`EnsureMessageSearchIndexesIncludeTools` + `EnsureContextReportsIncludeTokenBudget`,
-which assume the base schema already exists. Against a pre-initialized state
-dir this worked fine, but against a fresh `.yard/yard.db` — the common case
-after the phase 5a rename — it failed at the second helper with
-`no such table: context_reports`. `OpenDB` creates the file via `MkdirAll` but
-does not create any tables.
-
-Fix: call `appdb.InitIfNeeded` right after `OpenDB`. That helper is a no-op
-when the schema already exists, so this is safe for initialized projects and
-correct for uninitialized ones. **If you add new schema-upgrade helpers in
-`buildAppRuntime`, they must run AFTER `InitIfNeeded`.**
-
-Surfaced by the phase 5a task 7 regression smoke test against `my-website`.
-
-### Phase 2 era bugs (preserved from earlier handoff)
-
-
-### 1. Closure capture-by-reference in cleanup chains
-
-File: `cmd/sirtopham/runtime.go` (→ `cmd/tidmouth/runtime.go` after Step 1.2).
-
-`buildAppRuntime` used a single `prevCleanup` variable that was reassigned four
-times and captured by four closures. At teardown the shared variable held the
-last extension (`func5`, the brainBackend cleanup closure), so `func5` called
-itself recursively until the goroutine stack hit 1 GB. The bug had been latent
-for weeks because `sirtopham serve` is SIGINT-terminated and never runs the
-deferred cleanup chain; `sirtopham run` is the first command with a normal exit
-path that exercises it.
-
-Fix: `chainCleanup(prev, next)` helper that takes `prev` as a value parameter,
-giving each extension a fresh copy. **If you extend the cleanup chain again,
-use `chainCleanup` — never reassign a shared `prev` variable.**
-
-### 2. IsError silently swallowed by mcpclient
-
-File: `internal/brain/mcpclient/client.go`.
-
-Vault methods (`ReadDocument`, `WriteDocument`, `PatchDocument`, `SearchKeyword`,
-`ListDocuments`) ignored `res.IsError`. When a handler returned a Go error
-(e.g. `vault.ReadDocument` returning `"Document not found: <path>"`), MCP
-packaged it as `CallToolResult{IsError: true, Content: [TextContent{...}]}`
-and returned it as an RPC success. Our client ran `decodeStructured` on empty
-`StructuredContent` and returned `("", nil)` — silently. This made `receipt.go`
-believe a nonexistent receipt file existed with empty content and fail the
-"missing YAML frontmatter" check instead of taking the fallback-receipt path.
-It would also have hidden any handler-side write/patch error.
-
-Fix: `toolResultError(res)` helper called after every `session.CallTool` in the
-vault methods. The vault's exact phrase `"Document not found: <path>"` is
-preserved in the resulting Go error, so `receipt.go`'s
-`strings.Contains(err.Error(), "Document not found")` check keeps working.
-**Don't add new vault methods without that check.**
-
-### 3. Role receipt/logs allow-list convention
-
-File: `sirtopham.yaml`.
-
-The default receipt path is `receipts/{role}/{chain-id}.md`. Seven role
-allow-lists used shortened directory names (`receipts/correctness/**`,
-`receipts/tests/**`, `receipts/arbiter/**`, etc.) that did not match the
-default. Fallback receipts would have been rejected by the brain write policy.
-Fix applied for all seven mismatched roles. **Every role's `brain_write_paths`
-must include `receipts/{full-role-name}/**` and `logs/{full-role-name}/**`.
-Enforce this convention on every future role config edit.**
-
-### 4. Stale `project_root` in sirtopham.yaml
-
-`project_root:` pointed at the old `/home/gernsback/source/sirtopham` dir and
-config loading failed on `brain.vault_path` resolution. Fixed as a one-line
-commit. Phase 1 will rename the file itself.
-
----
-
-## Phase 2 acceptance items verified live
-
-The smoke test proved:
-
-- `sirtopham run` exists and is CLI-registered
-- `--role` selects a config-defined role
-- Role `system_prompt` path resolves (absolute + project-root-relative both work)
-- Role-scoped tool registry is enforced
-- Brain write allow/deny policy is enforced on writes/updates only
-- Command runs one headless turn via existing `AgentLoop`
-- Receipt validated if present
-- Last stdout line is the receipt path on exit 0
-- `make test` passes
-- `make build` passes
-
-Not verified live (lower risk; should be covered by `cmd/sirtopham/run_test.go`):
-
-- `--quiet` suppresses stderr progress
-- Exit 2 (safety limit: timeout / max-turns / max-tokens)
-- Exit 3 (explicit escalation verdict)
-- `custom_tools` runtime rejection
-- `--task-file` variant
-- Hard `--max-tokens` enforcement mid-turn
-
----
-
-## Next task: Phase 3 — SirTopham orchestrator
-
-**Goal:** Build `cmd/sirtopham/` into the real chain orchestrator binary per
-`docs/specs/15-chain-orchestrator.md`. Today it is a stub `main.go` that
-prints a placeholder.
-
-**Design is already written.** Read `docs/specs/15-chain-orchestrator.md`
-before touching code. Key pieces Phase 3 introduces:
-
-1. `internal/receipt/` — frontmatter parser. Pure, no upstream deps. Ship first.
-2. `internal/chain/` — SQLite schema (`chains`, `steps`, `events` tables),
-   migrations, state transitions, limit enforcement, event logging. Schema
-   patterns adapted from conductor v1 per `conductor-v1-extraction.md`.
-3. `internal/spawn/` — `spawn_engine` tool implementation. Execs `tidmouth run`
-   as a subprocess, waits, reads receipt from brain, updates chain state.
-4. `chain_complete` tool + headless driver termination signal — small, but has
-   to hook into the existing `AgentLoop` cleanly. Watch out for the closure
-   capture-by-reference bug pattern from the Phase 2 fix (use `chainCleanup`).
-5. `cmd/sirtopham/` CLI — `chain`, `status`, `logs`, `receipt`, `pause`,
-   `resume`, `cancel` subcommands. Boot the orchestrator as a headless Tidmouth
-   session with the custom tool registry.
-6. `agents/orchestrator.md` — enough to run a minimal chain end-to-end.
-   NOT the production prompt; that iteration is Phase 4.
-7. Reindex hooks (`reindex_before` boolean on `spawn_engine`) — last, because
-   you need the rest working before you can prove the hook is useful.
-
-**Database path:** `.yard/yard.db` is the Tidmouth database. Spec 15 also
-references `.yard/sirtopham.db` but the user locked the decision at
-`.yard/yard.db` (single shared DB for now — reevaluate only if concurrent
-writers become a problem). Update spec 15 on first Phase 3 touch.
-
-**User-chosen constraints (do not deviate without asking):**
-
-- Per-step commits as needed — not one big commit
-- Do NOT auto-push — the user pushes manually
-- Phase 3 work happens on `main` directly (same pattern as Phases 1 and 5a)
-- Regression smoke test (see below) must still pass as the final gate
-  before tagging `v0.4-orchestrator`
-- The Phase 4 production prompts are OUT OF SCOPE for Phase 3 — stub prompts
-  in `agents/orchestrator.md` are fine for the first smoke test
-
-**Where Phase 5b and Phase 4 sit:** Phase 5b (`yard init` CLI) lands after
-Phase 3 because its smoke test exercises a real chain. Phase 4 (prompt
-engineering) happens during/after Phase 3 and is mostly human work with LLM
-assistance, not autonomous agent work. See `sodor-migration-roadmap.md` for
-the full phase layout.
-
----
-
-## Historical: Phase 1 step plan (for archaeology)
-
-The Phase 1 step plan below was the plan that drove the monorepo restructure.
-Phase 1 is complete as of tag `v0.2-monorepo-structure` at commit `fedd1e1`,
-and Phase 5a is complete as of tag `v0.2.1-yard-paths` at commit `c080551`.
-Everything below this line is preserved as reference.
-
-### Step 1.1 — `go.mod` module path rename
-
-- Change `module github.com/ponchione/sirtopham` → `module github.com/ponchione/sodoryard`
-- Sweep-rewrite every `github.com/ponchione/sirtopham/...` import to
-  `github.com/ponchione/sodoryard/...` (use `gofmt -r` or a sed pass; verify
-  with `grep -r 'ponchione/sirtopham' --include '*.go'`)
-- `make build` + `make test` must stay green
-- Commit: `refactor: rename module to github.com/ponchione/sodoryard`
-
-### Step 1.2 — move `cmd/sirtopham/` → `cmd/tidmouth/`
-
-- Use `git mv` to preserve history for every file in `cmd/sirtopham/`:
-  `main.go`, `serve.go`, `run.go`, `runtime.go`, `receipt.go`, `run_progress.go`,
-  `index.go`, `init.go`, `auth.go`, `config.go`, `llm.go`, `doctor.go`,
-  `brain_serve.go`, plus all `*_test.go` siblings
-- Leave `cmd/sirtopham/` to be re-created in Step 1.5 as the orchestrator
-  placeholder
-- Makefile will still point at `./cmd/sirtopham` briefly — Step 1.8 fixes that
-- `make build` (may need a one-line Makefile tweak first) + `make test`
-- Commit: `refactor: move cmd/sirtopham to cmd/tidmouth`
-
-### Step 1.3 — `internal/` packages
-
-- Stay in place. Import-path fix was done in Step 1.1.
-- No action. Verify.
-
-### Step 1.4 — supporting files
-
-- `web/`, `webfs/`, `ops/`, `scripts/`, `docs/specs/`, `.brain/` all stay.
-- No action. Verify.
-
-### Step 1.5 — placeholder `cmd/sirtopham/` (orchestrator) and `cmd/knapford/` (dashboard)
-
-- Create minimal `main.go` in each — e.g. `package main; func main() { fmt.Println("sirtopham orchestrator placeholder") }` and similar for knapford
-- These compile and produce binaries that print a stub message
-- Commit: `feat: add sirtopham and knapford binary placeholders`
-
-### Step 1.6 — `agents/` directory
-
-- Already exists with 13 operational stubs. No action. Verify.
-
-### Step 1.7 — `templates/init/` (in scope per user)
-
-- Create `templates/init/sodor.yaml.example` (a minimal example config)
-- Create `templates/init/brain/{specs,architecture,epics,tasks,plans,receipts,logs,conventions}/.gitkeep`
-- This template is what `sodor init` will copy into new projects in Phase 5
-- Commit: `feat: add templates/init scaffold for sodor init`
-
-### Step 1.8 — Makefile updates
-
-- Rename the `make sirtopham` target to `make tidmouth` → builds `./cmd/tidmouth`
-- Add `make sirtopham` → builds `./cmd/sirtopham` (new placeholder)
-- Add `make knapford` → builds `./cmd/knapford` (new placeholder)
-- `make all` builds all three
-- `make test` / `make build` / `make dev-frontend` / `make dev-backend` still work
-- The `dev-backend` target currently runs `sirtopham serve --dev`; rename to
-  `tidmouth serve --dev` for now (serve gets removed entirely later in Phase 6)
-- Commit: `build: rename make targets for monorepo binaries`
-
-### Step 1.9 — verify and tag
-
-- `make build` produces `bin/tidmouth`, `bin/sirtopham`, `bin/knapford`
-- `make test` green
-- `./bin/tidmouth run --help` works
-- **Regression smoke test (see below) passes end to end on `./bin/tidmouth run`**
-- Tag `v0.2-monorepo-structure` on the final Phase 1 commit
-- Do not push
-
-### Rename debt deferred out of Phase 1
-
-The user decision on 2026-04-11 to use `yard` as the operator-facing CLI
-prefix (rather than `sodor` or `sodoryard`) reshapes these items — they
-move from "derive filename from project dir name" to "hardcoded `yard`
-constant", which lands them closer to Phase 5 (`yard init`) scaffolding
-than to Phase 1 mechanical restructuring. Phase 1 now stays minimal.
-
-- `internal/config/config.go:484` — `DatabasePath()` currently returns
-  `filepath.Join(c.StateDir(), "sirtopham.db")`, and `StateDir()` returns
-  `.<ProjectName()>/` which resolves to `.sodoryard/` in practice. Eventually
-  this becomes `.yard/yard.db` (hardcoded). Deferred to Phase 5.
-- Config filename `sirtopham.yaml` → `yard.yaml` (hardcoded, not derived
-  from project dir name). The Tidmouth CLI currently keeps its explicit default
-  at `sirtopham.yaml` so Phase 1/2 behavior stays aligned with the checked-in
-  config; the broader filename model still gets replaced rather than reconciled
-  in Phase 5. Phase 1 leaves `sirtopham.yaml` in place.
-- Review whether `project_root:` in the config should stay absolute or move
-  to relative / derived. Non-blocking; defer.
-
-### What NOT to rename in Phase 1
-
-At this point there is zero `sodor` CLI prefix in Go code — the `yard`
-decision is currently a docs-only alignment. Proper nouns that stay
-unchanged in Phase 1 (and, per user, forever):
-
-- Repo name: `sodoryard` / `ponchione/sodoryard`
-- Module path: `github.com/ponchione/sodoryard` (target of Step 1.1)
-- Binary names: `tidmouth`, `sirtopham`, `knapford`
-- Historical / projected tag names: `v0.1-pre-sodor`, `v1.0-sodor`
-- "Sodor" as project concept in prose (the island theming that gave us
-  Tidmouth, Knapford, SirTopham)
-
-The actual `yard` scaffolding (`yard init` CLI, `.yard/` state dir,
-`yard.yaml` config, `YARD_PROJECT` env var, `yard` compose service) lives
-in Phase 5, not Phase 1.
-
----
-
-## Regression smoke test — run after major Phase 1 steps and at the end
-
-### Pre-flight
-
-Local llama.cpp services must be up:
+Local llama.cpp services (only needed if dogfooding against local LLM):
 
 ```bash
 curl -s --max-time 3 http://localhost:12434/v1/models | head -c 80
 curl -s --max-time 3 http://localhost:12435/v1/models | head -c 80
 ```
 
-Both should return a `{"models":[...]}` JSON response. If they're down:
-`cd ops/llm && docker compose up -d` (or ask the user).
+Both should return `{"models":[...]}`. If down: `cd ops/llm && docker compose up -d`.
 
-Codex auth must be healthy:
-
-```bash
-./bin/sirtopham auth status    # or ./bin/tidmouth auth status after Step 1.2
-```
-
-Should show `codex (codex): healthy` with non-expired tokens.
-
-### Throwaway config
-
-Write `/tmp/my-website-smoke.yaml`:
-
-```yaml
-project_root: /home/gernsback/source/my-website
-log_level: info
-log_format: text
-
-server:
-  host: localhost
-  port: 8093
-  dev_mode: false
-  open_browser: false
-
-routing:
-  default:
-    provider: codex
-    model: gpt-5.4-mini
-
-providers:
-  codex:
-    type: codex
-    model: gpt-5.4-mini
-
-index:
-  include:
-    - "**/*.ts"
-    - "**/*.tsx"
-    - "**/*.js"
-    - "**/*.jsx"
-    - "**/*.json"
-    - "**/*.html"
-    - "**/*.css"
-    - "**/*.md"
-  exclude:
-    - "**/.git/**"
-    - "**/.my-website/**"
-    - "**/.brain/**"
-    - "**/node_modules/**"
-    - "**/dist/**"
-    - "**/build/**"
-    - "**/.next/**"
-
-brain:
-  enabled: true
-  vault_path: .brain
-  log_brain_queries: true
-
-agent_roles:
-  correctness-auditor:
-    system_prompt: /home/gernsback/source/sodoryard/agents/correctness-auditor.md
-    tools:
-      - brain
-      - file:read
-    brain_write_paths:
-      - "receipts/correctness-auditor/**"
-      - "logs/correctness-auditor/**"
-    max_turns: 10
-    max_tokens: 50000
-
-local_services:
-  enabled: false
-
-embedding:
-  base_url: http://localhost:12435
-  model: nomic-embed-code
-  batch_size: 32
-  timeout_seconds: 30
-  query_prefix: "Represent this query for searching relevant code: "
-```
-
-### The command
+Codex auth:
 
 ```bash
-./bin/tidmouth run \
-  --config /tmp/my-website-smoke.yaml \
-  --role correctness-auditor \
-  --task "Use brain_search to list the notes in the vault. Then use brain_write to create a receipt at receipts/correctness-auditor/smoke-test-p1.md. The receipt must use valid spec-13 YAML frontmatter with exactly these fields: agent, chain_id, step, verdict, timestamp, turns_used, tokens_used, duration_seconds. Set step to the integer 1. Set verdict to completed. After writing the receipt, stop." \
-  --chain-id smoke-test-p1 \
-  --max-turns 6 \
-  --timeout 3m
+./bin/tidmouth auth status
 ```
 
-(Before Step 1.2 finishes, use `./bin/sirtopham run` instead of `./bin/tidmouth run`.)
+Should show `codex (codex): healthy` with non-expired tokens. As of 2026-04-11 the tokens expire 2026-04-13 — re-auth via `codex auth` if needed.
 
-Note: `step` must be the integer `1`; the receipt validator enforces spec-13 field types and will reject string values like `final`.
+### Where to find things
 
-### Pass criteria
+- **Current product specs:** `docs/specs/01-15` (numbered) plus `docs/specs/16-yard-init.md` and `docs/specs/17-yard-containerization.md`. The `00-index.md` in the same directory is stale (only references 01–09) and should be either updated or deleted in a future session.
+- **Ready-to-execute implementation plans:** `docs/plans/2026-04-11-phase-5b-yard-init-implementation-plan.md` and `docs/plans/2026-04-11-phase-7-yard-containerization-implementation-plan.md`. Older plans for completed phases were deleted during this session's cleanup; recover from git history if needed (`git log --all --diff-filter=D -- docs/plans/`).
+- **Roadmap:** `sodor-migration-roadmap.md` (overall phase plan, still authoritative).
+- **Tech debt:** `TECH-DEBT.md` (R5/R6/R7 are open Phase 3 follow-ups; R1–R4 are pre-existing).
+- **Operator boundary docs:** previously at `docs/agent-role-conductor-boundary.md` and `docs/agent-roles-and-brain-conventions.md` — both deleted as stale this session. The current truth is in `docs/specs/14_Agent_Roles_and_Brain_Conventions.md` and `docs/specs/15-chain-orchestrator.md`.
+- **Conductor v1 reference:** `conductor-v1-extraction.md` at the repo root — historical reference for what was migrated from the archived `ponchione/agent-conductor` repo. Useful background for understanding why Phase 3 looks the way it does.
+- **Live validation procedures:** `MANUAL_LIVE_VALIDATION.md` at the repo root — referenced by TECH-DEBT R1.
 
-- Exit code: `0`
-- Final stdout line: `receipts/correctness-auditor/smoke-test-p1.md`
-- File exists on disk:
-  `/home/gernsback/source/my-website/.brain/receipts/correctness-auditor/smoke-test-p1.md`
-- File has valid spec-13 YAML frontmatter
+### Tools and services this project uses
 
-**If the smoke test fails after a Phase 1 step, STOP and diagnose before
-continuing.** Use a new chain-id each time (`smoke-test-p1-a`, `-p1-b`, …) so
-previous invalid-receipt artifacts don't interfere.
+- **llama.cpp** at `localhost:12434` (qwen-coder-7b, code completion) and `localhost:12435` (nomic-embed-code, embeddings). Managed via `ops/llm/docker-compose.yml`. GPU-required (CUDA images). Optional — only needed if dogfooding against local inference rather than codex/anthropic.
+- **Codex auth** stored in `~/.sirtopham/auth.json`. Status check: `./bin/tidmouth auth status`. Imports from `~/.codex/auth.json` if its own store is empty.
+- **LanceDB** via `lib/linux_amd64/liblancedb_go.so`. Tests need the env vars set by `make test`. Phase 7 stages this into `/usr/local/lib/` inside the runtime image.
+- **sqlc** generates `internal/db/*.sql.go` from `internal/db/query/*.sql`. If you change SQL, regenerate (`sqlc generate` from `sqlc.yaml`).
 
----
+### Next session
 
-## Tools and services this project uses
+The next session should pick one of:
 
-- **llama.cpp** at `localhost:12434` (qwen-coder model) and `localhost:12435`
-  (nomic-embed-code model). Managed via `ops/llm/docker-compose.yml` when
-  `local_services.enabled: true`.
-- **Codex/ChatGPT auth** stored in `~/.sirtopham/auth.json`. Status check:
-  `./bin/sirtopham auth status` (or `./bin/tidmouth auth status` post-1.2).
-  Expires 2026-04-13 at the time of this handoff — re-auth before then.
-- **LanceDB** via `lib/linux_amd64/liblancedb_go.so`. Tests need the env vars
-  set by `make test` (or `CGO_ENABLED=1 CGO_LDFLAGS="-L$PWD/lib/linux_amd64 -llancedb_go -lm -ldl -lpthread" LD_LIBRARY_PATH="$PWD/lib/linux_amd64"`).
-- **sqlc** generates `internal/db/*.sql.go` from `internal/db/query/*.sql`. If
-  you change SQL, regenerate (`sqlc generate` from `sqlc.yaml`).
+1. **Execute Phase 5b** — work through `docs/plans/2026-04-11-phase-5b-yard-init-implementation-plan.md` task by task. Use either the subagent-driven-development skill (recommended, two-stage review per task) or the executing-plans skill (inline batched execution). End state: `bin/yard` builds, `tidmouth init` no longer exists, smoke chain passes against a freshly initialized project, tag `v0.5-yard-init`.
 
----
+2. **Execute Phase 7** — only after Phase 5b is fully landed and tagged. Work through `docs/plans/2026-04-11-phase-7-yard-containerization-implementation-plan.md` task by task. End state: `Dockerfile` and `docker-compose.yaml` at the repo root, `yard install` command exists, container smoke chain passes end-to-end with the codex auth bind mount, tag `v0.7-containerization`.
 
-## Hard rules for this session
+3. **TECH-DEBT cleanup** — work through R5/R6/R7 (Phase 3 orchestrator follow-ups) if Phase 5b/7 execution isn't a priority right now. Each is small (one to two commits) and surfaces from the Phase 3 verification this session.
 
-- Per-step commits. Don't batch Phase 1 into one mega-commit.
-- Don't push. The user pushes manually.
-- Don't expand agent prompt stubs — Phase 4 work, not this session.
-- Don't start Phase 3 (orchestrator) until Phase 1 tag `v0.2-monorepo-structure` is cut.
-- Don't rename `sodor`/`Sodor` outside the repo/module scope (see "What NOT to rename" above).
-- Don't delete the `v0.1-pre-sodor` tag.
-- If you discover a bug mid-Phase-1 that isn't a restructure bug, fix it in its
-  own commit labeled `fix(...)` rather than hiding it inside a `refactor(...)`
-  commit. Per-step hygiene.
-- If the smoke test breaks after a step, stop and diagnose. Don't proceed to
-  the next step until it's green again.
+The user has explicitly said Phase 4 (prompts) and Phase 6 (Knapford) are NOT for this conversation series — Phase 4 is being handled out-of-band, Phase 6 waits for Phase 4 to mature.
 
 ---
 
-## Pointer to the narrative of prior work
+## When in doubt
 
-The brain-rebuild narrative that used to live in this file is preserved in git
-at commit `4a63ad8` (the big megacommit) and its predecessor `1338611`. If you
-need the phase 0–3 brain rebuild story for archaeology, `git show 1338611 --
-NEXT_SESSION_HANDOFF.md` is the place to look. The code under
-`internal/brain/parser`, `internal/brain/indexer`, `internal/brain/chunks`,
-`internal/context/brain_search.go`, and `internal/context/analyzer.go` is where
-that work actually lives.
+- Trust the repo over this doc. If git status, the actual code, or `make test` says something different from this doc, the doc is wrong — fix the doc before acting.
+- Per-step commits with clear messages are always safe.
+- Don't push. Don't skip hooks. Don't expand scope.
