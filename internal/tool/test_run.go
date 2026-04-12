@@ -109,15 +109,9 @@ func (t TestRun) Execute(ctx context.Context, projectRoot string, input json.Raw
 	case "go":
 		return t.runGoTests(ctx, projectRoot, targetDir, params.Path, params.Filter, timeoutSec)
 	case "python":
-		return &ToolResult{
-			Success: false,
-			Content: "Python test runner not yet available. Use shell to run Python tests directly.",
-		}, nil
+		return runPythonTests(ctx, projectRoot, params, time.Duration(timeoutSec)*time.Second)
 	case "typescript":
-		return &ToolResult{
-			Success: false,
-			Content: "TypeScript test runner not yet available. Use shell to run TypeScript tests directly.",
-		}, nil
+		return runTypeScriptTests(ctx, projectRoot, params, time.Duration(timeoutSec)*time.Second)
 	default:
 		return &ToolResult{
 			Success: false,
@@ -157,6 +151,126 @@ func detectTestEcosystem(detectDir, projectRoot string) string {
 		dir = parent
 	}
 	return ""
+}
+
+// runPythonTests runs pytest and returns structured output.
+func runPythonTests(ctx context.Context, projectRoot string, params testRunInput, timeout time.Duration) (*ToolResult, error) {
+	pytestPath, err := lookupCommandPath("pytest")
+	if err != nil {
+		return &ToolResult{
+			Success: false,
+			Content: "pytest is required but not found in PATH. Install: pip install pytest",
+			Error:   "pytest not found",
+		}, nil
+	}
+
+	useJSON := pytestJSONReportAvailable(ctx, pytestPath, projectRoot)
+
+	args := []string{}
+	if useJSON {
+		args = append(args, "--json-report", "--json-report-file=-", "-q")
+	} else {
+		args = append(args, "-q", "--tb=short", "--no-header")
+	}
+	if params.Filter != "" {
+		args = append(args, "-k", params.Filter)
+	}
+	if params.Path != "" {
+		args = append(args, params.Path)
+	}
+
+	cmdCtx, cancel := context.WithTimeout(ctx, timeout+10*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(cmdCtx, pytestPath, args...)
+	cmd.Dir = projectRoot
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	cmd.Run() //nolint:errcheck
+
+	var result testRunResult
+	if useJSON {
+		result = parsePytestJSON(stdout.String())
+	} else {
+		result = parsePytestShort(stdout.String())
+	}
+
+	if stderr.Len() > 0 && len(result.BuildErrors) == 0 && result.Passed == 0 && result.Failed == 0 {
+		stderrStr := strings.TrimSpace(stderr.String())
+		if stderrStr != "" {
+			result.BuildErrors = append(result.BuildErrors, stderrStr)
+		}
+	}
+
+	return &ToolResult{Success: true, Content: formatTestResult(result)}, nil
+}
+
+// pytestJSONReportAvailable checks whether pytest-json-report is installed.
+func pytestJSONReportAvailable(ctx context.Context, pytestPath, projectRoot string) bool {
+	cmd := exec.CommandContext(ctx, pytestPath, "--co", "--json-report", "--json-report-file=/dev/null", "-q")
+	cmd.Dir = projectRoot
+	err := cmd.Run()
+	return err == nil
+}
+
+// runTypeScriptTests runs jest or vitest and returns structured output.
+func runTypeScriptTests(ctx context.Context, projectRoot string, params testRunInput, timeout time.Duration) (*ToolResult, error) {
+	runner, runnerArgs := detectTSTestRunner(projectRoot)
+
+	npxPath, err := lookupCommandPath("npx")
+	if err != nil {
+		return &ToolResult{
+			Success: false,
+			Content: "npx is required but not found in PATH. Install Node.js.",
+			Error:   "npx not found",
+		}, nil
+	}
+
+	args := append([]string{runner}, runnerArgs...)
+	if runner == "vitest" {
+		args = append(args, "run", "--reporter=json")
+	} else {
+		args = append(args, "--json", "--forceExit")
+	}
+	if params.Filter != "" {
+		args = append(args, "--testNamePattern", params.Filter)
+	}
+	if params.Path != "" {
+		args = append(args, params.Path)
+	}
+
+	cmdCtx, cancel := context.WithTimeout(ctx, timeout+10*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(cmdCtx, npxPath, args...)
+	cmd.Dir = projectRoot
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	cmd.Run() //nolint:errcheck
+
+	result := parseJestJSON(stdout.String())
+
+	if stderr.Len() > 0 && len(result.BuildErrors) == 0 && result.Passed == 0 && result.Failed == 0 {
+		stderrStr := strings.TrimSpace(stderr.String())
+		if stderrStr != "" {
+			result.BuildErrors = append(result.BuildErrors, stderrStr)
+		}
+	}
+
+	return &ToolResult{Success: true, Content: formatTestResult(result)}, nil
+}
+
+// detectTSTestRunner returns the test runner and any extra args based on config files present.
+func detectTSTestRunner(projectRoot string) (runner string, args []string) {
+	vitestConfigs := []string{"vitest.config.ts", "vitest.config.js", "vitest.config.mts"}
+	for _, cfg := range vitestConfigs {
+		if fileExists(filepath.Join(projectRoot, cfg)) {
+			return "vitest", nil
+		}
+	}
+	return "jest", nil
 }
 
 // runGoTests runs `go test -json` and returns structured output.

@@ -202,10 +202,16 @@ func TestTestRunSchema(t *testing.T) {
 	}
 }
 
-func TestTestRunPythonStub(t *testing.T) {
+func TestTestRunPythonNoPytest(t *testing.T) {
 	dir := t.TempDir()
 	// Add a pyproject.toml so ecosystem detection finds python.
 	os.WriteFile(filepath.Join(dir, "pyproject.toml"), []byte("[tool.pytest]\n"), 0o644)
+
+	// This test verifies that when pytest is not found, the runner returns a
+	// helpful error. In CI pytest may or may not be installed; if it is, skip.
+	if _, err := exec.LookPath("pytest"); err == nil {
+		t.Skip("pytest is installed; skipping not-found test")
+	}
 
 	tool := TestRun{}
 	result, err := tool.Execute(context.Background(), dir, json.RawMessage(`{"ecosystem":"python"}`))
@@ -213,16 +219,22 @@ func TestTestRunPythonStub(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if result.Success {
-		t.Fatal("expected Success=false for python stub")
+		t.Fatal("expected Success=false when pytest not found")
 	}
-	if !strings.Contains(result.Content, "Python test runner not yet available") {
-		t.Errorf("expected stub message, got: %s", result.Content)
+	if !strings.Contains(result.Content, "pytest") {
+		t.Errorf("expected pytest error message, got: %s", result.Content)
 	}
 }
 
-func TestTestRunTypescriptStub(t *testing.T) {
+func TestTestRunTypescriptNoNpx(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "package.json"), []byte(`{"name":"test"}`), 0o644)
+
+	// This test verifies that when npx is not found, the runner returns a
+	// helpful error. In CI npx may or may not be installed; if it is, skip.
+	if _, err := exec.LookPath("npx"); err == nil {
+		t.Skip("npx is installed; skipping not-found test")
+	}
 
 	tool := TestRun{}
 	result, err := tool.Execute(context.Background(), dir, json.RawMessage(`{"ecosystem":"typescript"}`))
@@ -230,10 +242,10 @@ func TestTestRunTypescriptStub(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if result.Success {
-		t.Fatal("expected Success=false for typescript stub")
+		t.Fatal("expected Success=false when npx not found")
 	}
-	if !strings.Contains(result.Content, "TypeScript test runner not yet available") {
-		t.Errorf("expected stub message, got: %s", result.Content)
+	if !strings.Contains(result.Content, "npx") {
+		t.Errorf("expected npx error message, got: %s", result.Content)
 	}
 }
 
