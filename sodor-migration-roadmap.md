@@ -238,7 +238,7 @@ Run `tidmouth run --role {role} --task {test-task}` for each role with a known t
 
 Run a complete chain on a small real task. Iterate on prompts based on where agents go off-script.
 
-### Checkpoint: Tag `v0.5-agents-online`
+### Checkpoint: prompts shipped with no separate checkpoint tag
 
 ---
 
@@ -262,7 +262,7 @@ New top-level CLI (or subcommand of tidmouth): `yard init` or `tidmouth init --y
 - `tidmouth run --role thomas --task "read the brain and describe the project structure"` works against the fresh init
 - `sirtopham chain` can start against the initialized project
 
-### Checkpoint: Tag `v0.6-init`
+### Checkpoint: Tag `v0.5-yard-init`
 
 ---
 
@@ -319,8 +319,8 @@ Once Knapford fully replaces the old web UI, remove the `serve` command from Tid
 ### Step 7.1: Dockerfile
 
 Multi-stage build:
-- Build stage: compile all three Go binaries, build frontend
-- Runtime stage: slim image with binaries + frontend assets + agent prompts
+- Build stage: compile all four Go binaries, build frontend
+- Runtime stage: slim image with binaries + embedded frontend assets + agent prompts
 
 ### Step 7.2: docker-compose.yaml
 
@@ -330,19 +330,25 @@ services:
     build: .
     volumes:
       - ${PROJECT_DIR:-.}:/project
-    ports:
-      - "8080:8080"    # Knapford
     environment:
       - YARD_PROJECT=/project
+
+  knapford:
+    command: ["knapford"]
+    ports:
+      - "8080:8080"
+    profiles:
+      - knapford
 ```
 
 ### Step 7.3: Verify
 
-- `docker-compose up` starts Knapford
+- `docker compose run --rm yard ...` works for the headless CLI flow
+- `docker compose --profile knapford up knapford` starts the placeholder Knapford container slot
 - Chain execution works inside the container against a mounted project
 - Brain vault changes are visible on the host filesystem
 
-### Checkpoint: Tag `v1.0-sodor`
+### Checkpoint: Tag `v0.7-containerization`
 
 ---
 
@@ -357,7 +363,7 @@ services:
 | 4 | System prompts | Phase 2 | Medium — iterative prompt engineering |
 | 5 | Yard init | Phase 1 | Small — template copy + config generation |
 | 6 | Knapford dashboard | Phases 2, 3 | Large — full web app, but migrates existing components |
-| 7 | Containerization | Phases 1-6 | Small — standard Docker multi-stage build |
+| 7 | Containerization | Phases 1-5b (Phase 6 deferred; compose ships a placeholder Knapford slot) | Small — standard Docker multi-stage build |
 
 Phases 3, 4, and 5 can run in parallel once Phase 2 is complete.
 Phase 6 can begin as soon as Phase 3 is functional (chain data to display).
