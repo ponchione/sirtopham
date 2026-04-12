@@ -22,7 +22,10 @@ func newRootCmd() *cobra.Command {
 			return nil
 		},
 	}
-	rootCmd.AddCommand(newInitCmd())
+	rootCmd.AddCommand(
+		newInitCmd(),
+		newInstallCmd(),
+	)
 	return rootCmd
 }
 
