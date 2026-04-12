@@ -238,3 +238,21 @@ func TestShellRTKPrefixSkipsSource(t *testing.T) {
 		t.Fatalf("applyRTKPrefix(%q, true) = %q; want %q", "source .env", got, want)
 	}
 }
+
+func TestShellRTKPrefixSkipsBareBuiltins(t *testing.T) {
+	cases := []struct {
+		cmd  string
+		want string
+	}{
+		{"cd", "cd"},
+		{"export", "export"},
+		{"eval", "eval"},
+		{"source", "source"},
+	}
+	for _, tc := range cases {
+		got := applyRTKPrefix(tc.cmd, true)
+		if got != tc.want {
+			t.Fatalf("applyRTKPrefix(%q, true) = %q; want %q", tc.cmd, got, tc.want)
+		}
+	}
+}

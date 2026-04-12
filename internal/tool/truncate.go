@@ -46,6 +46,14 @@ func truncationNotice(toolName string, shownLines, totalLines int) string {
 		return fmt.Sprintf("[Output truncated — showing first %d lines of %d. Use a path filter to narrow the diff.]", shownLines, totalLines)
 	case "shell":
 		return fmt.Sprintf("[Output truncated — showing first %d lines of %d. Consider piping to head/tail or grep for specific output.]", shownLines, totalLines)
+	case "list_directory":
+		return fmt.Sprintf("[Output truncated — showing first %d lines of %d. Use a deeper path or reduce depth to narrow results.]", shownLines, totalLines)
+	case "find_files":
+		return fmt.Sprintf("[Output truncated — showing first %d lines of %d. Use a more specific pattern or path to narrow results.]", shownLines, totalLines)
+	case "test_run":
+		return fmt.Sprintf("[Output truncated — showing first %d lines of %d. Use a path or filter to run fewer tests.]", shownLines, totalLines)
+	case "db_sqlc":
+		return fmt.Sprintf("[Output truncated — showing first %d lines of %d. Use the path parameter to scope to a specific sqlc project.]", shownLines, totalLines)
 	default:
 		return fmt.Sprintf("[Output truncated — showing first %d lines of %d.]", shownLines, totalLines)
 	}

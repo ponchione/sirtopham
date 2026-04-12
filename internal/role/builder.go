@@ -49,6 +49,12 @@ func BuildRegistry(cfg *appconfig.Config, roleCfg appconfig.AgentRoleConfig, dep
 			})
 		case "search":
 			tool.RegisterSearchTools(registry, deps.SemanticSearcher)
+		case "directory":
+			tool.RegisterDirectoryTools(registry)
+		case "test":
+			tool.RegisterTestTool(registry)
+		case "sqlc":
+			tool.RegisterSqlcTool(registry)
 		case "":
 			continue
 		default:
