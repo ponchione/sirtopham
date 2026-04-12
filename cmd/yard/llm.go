@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -109,15 +108,6 @@ func newYardLLMLogsCmd(configPath *string) *cobra.Command {
 	}
 	cmd.Flags().IntVar(&tail, "tail", 100, "Number of recent log lines")
 	return cmd
-}
-
-func yardNewLLMManager() interface {
-	Status(context.Context, *appconfig.Config) (localservices.StackStatus, error)
-	EnsureUp(context.Context, *appconfig.Config) (localservices.StackStatus, error)
-	Down(context.Context, *appconfig.Config) error
-	Logs(context.Context, *appconfig.Config, int) (string, error)
-} {
-	return localservices.NewManager(nil)
 }
 
 func yardPrintLLMStatus(out io.Writer, status localservices.StackStatus, jsonOutput bool) error {
