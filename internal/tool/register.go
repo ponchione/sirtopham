@@ -61,6 +61,16 @@ func RegisterDirectoryTools(r *Registry) {
 	r.Register(FindFiles{})
 }
 
+// RegisterTestTool registers the test_run tool in the given registry.
+func RegisterTestTool(r *Registry) {
+	r.Register(TestRun{})
+}
+
+// RegisterSqlcTool registers the db_sqlc tool in the given registry.
+func RegisterSqlcTool(r *Registry) {
+	r.Register(DbSqlc{})
+}
+
 // RegisterBrainTools registers all brain tools (brain_search, brain_read,
 // brain_write, brain_update, brain_lint) in the given registry when the brain
 // is enabled. When disabled, the tools are omitted entirely so the model never

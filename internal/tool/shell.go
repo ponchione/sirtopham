@@ -40,7 +40,7 @@ func NewShell(config ShellConfig) *Shell {
 }
 
 var rtkSkipPrefixes = []string{
-	"rtk", "cd ", "export ", "source ", "eval ",
+	"rtk", "cd", "export", "source", "eval",
 }
 
 func applyRTKPrefix(command string, rtkAvailable bool) string {
@@ -49,7 +49,7 @@ func applyRTKPrefix(command string, rtkAvailable bool) string {
 	}
 	trimmed := strings.TrimSpace(command)
 	for _, prefix := range rtkSkipPrefixes {
-		if strings.HasPrefix(trimmed, prefix) {
+		if trimmed == prefix || strings.HasPrefix(trimmed, prefix+" ") {
 			return command
 		}
 	}

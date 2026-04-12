@@ -81,6 +81,9 @@ func runServe(cmd *cobra.Command, configPath string, portOverride int, hostOverr
 	})
 	tool.RegisterBrainToolsWithProviderRuntimeAndIndex(registry, runtimeBundle.BrainBackend, runtimeBundle.BrainSearcher, cfg.Brain, runtimeBundle.ProviderRouter, runtimeBundle.Queries, cfg.ProjectRoot)
 	tool.RegisterSearchTools(registry, runtimeBundle.SemanticSearcher)
+	tool.RegisterDirectoryTools(registry)
+	tool.RegisterTestTool(registry)
+	tool.RegisterSqlcTool(registry)
 
 	executor := tool.NewExecutor(registry, tool.ExecutorConfig{
 		MaxOutputTokens: cfg.Agent.ToolOutputMaxTokens,
