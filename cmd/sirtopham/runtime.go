@@ -100,7 +100,15 @@ func buildOrchestratorRuntime(ctx context.Context, cfg *appconfig.Config) (*orch
 		cleanup()
 		return nil, fmt.Errorf("create router: %w", err)
 	}
-	for name, provCfg := range cfg.Providers {
+	// Only register providers the YAML explicitly listed. This avoids
+	// registering Default() providers (anthropic, openrouter) that the
+	// operator's config never asked for (TECH-DEBT R6).
+	providerNames := cfg.ProviderNamesForSurfaces()
+	for _, name := range providerNames {
+		provCfg, ok := cfg.Providers[name]
+		if !ok {
+			continue
+		}
 		p, err := buildProvider(name, provCfg)
 		if err != nil {
 			cleanup()
