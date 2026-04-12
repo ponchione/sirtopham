@@ -111,7 +111,7 @@ HEAD  d1503fa  fix(docker): install codex CLI in runtime image
       1198039  docs: update handoff for Phase 5b completion
 ```
 
-- Working tree: clean
+- Working tree at handoff time: intended clean; trust `git status` for the current local checkout state.
 - `make test`: green
 - `make all`: green (4 binaries: tidmouth, sirtopham, knapford, yard)
 - `docker compose build yard`: green
@@ -148,7 +148,7 @@ PROJECT_DIR=/path/to/project docker compose run --rm \
 
 - **Templates:** `internal/initializer/templates/init/` (moved from repo-root `templates/init/` during Phase 5b)
 - **Agent prompts:** `agents/` — 13 engine-named `.md` files
-- **Specs:** `docs/specs/16-yard-init.md`, `docs/specs/17-yard-containerization.md`
+- **Specs:** `docs/specs/16-yard-init.md`, `docs/specs/17-yard-containerization.md`, `docs/specs/18-unified-yard-cli.md`
 - **Roadmap:** `sodor-migration-roadmap.md`
 - **Tech debt:** `TECH-DEBT.md` (R5/R6/R7 closed this session; R1-R4 remain)
 
@@ -158,15 +158,26 @@ Tokens in `~/.sirtopham/auth.json` expire 2026-04-13. Re-auth via `codex auth` i
 
 ---
 
-## Next session
+## Next session — Phase 8: Unified `yard` CLI
 
-The next session should focus on:
+**Execute immediately.** No further design work needed.
 
-1. **Phase 6 — Knapford dashboard** — the only remaining migration phase. Needs epic decomposition before implementation. The docker-compose.yaml knapford service slot and the Phase 4 agent prompts are ready.
+**Spec:** `docs/specs/18-unified-yard-cli.md`
+**Plan:** `docs/plans/2026-04-12-phase-8-unified-yard-cli-implementation-plan.md` (3350 lines, 16 tasks)
 
-2. **Daily-driver validation (TECH-DEBT R1/R2)** — prove the harness on a real project, real vault, real workflow. Now that containerization works, this is the natural next step.
+**Execution method:** Use `superpowers:subagent-driven-development` — dispatch a fresh subagent per task, review between tasks.
 
-3. **Index freshness UX (TECH-DEBT R3)** — make stale-index states obvious or implement auto-refresh.
+**What it ships:** All 19 operator-facing commands under the `yard` binary. `internal/runtime/` package with extracted runtime builders. Legacy binaries (`tidmouth`, `sirtopham`) continue building unchanged. Tag: `v0.8-unified-cli`.
+
+**After Phase 8:** The operator workflow becomes `yard serve`, `yard chain start`, `yard index`, `yard brain index`, etc. — one CLI, one `--help`. Then dogfood on a real project.
+
+### After Phase 8
+
+1. **Daily-driver dogfooding** — point `yard` at a real project, run the full workflow (init → install → index → serve → chain), prove it works end-to-end through the UI.
+
+2. **Phase 6 — Knapford features folded into `yard serve`** — chain timelines, brain explorer, analytics added to the existing web UI rather than a separate binary. Epic decomposition needed first.
+
+3. **TECH-DEBT R1/R2/R3** — daily-driver validation, brain retrieval quality, index freshness UX.
 
 ---
 
