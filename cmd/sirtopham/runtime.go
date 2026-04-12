@@ -130,6 +130,9 @@ func buildOrchestratorRuntime(ctx context.Context, cfg *appconfig.Config) (*orch
 	}
 	convManager := conversation.NewManager(database, nil, logger)
 	return &orchestratorRuntime{Config: cfg, Logger: logger, Database: database, Queries: queries, ProviderRouter: provRouter, BrainBackend: brainBackend, ConversationManager: convManager, ContextAssembler: noopContextAssembler{}, ChainStore: chain.NewStore(database), Cleanup: func() {
+		// Drain in-flight sub-call writes before closing the DB so stream
+		// goroutines don't race against database.Close() (TECH-DEBT R5).
+		provRouter.DrainTracking()
 		if brainBackend != nil {
 			if c, ok := brainBackend.(interface{ Close() error }); ok {
 				_ = c.Close()

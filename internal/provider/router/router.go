@@ -118,6 +118,19 @@ func (r *Router) RegisterProvider(p provider.Provider) error {
 	return nil
 }
 
+// DrainTracking waits for all in-flight async sub-call writes (from
+// TrackedProvider stream goroutines) to complete. Call before closing
+// the database to avoid "sql: database is closed" errors.
+func (r *Router) DrainTracking() {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, p := range r.providers {
+		if tp, ok := p.(*tracking.TrackedProvider); ok {
+			tp.Wait()
+		}
+	}
+}
+
 // Name returns the literal string "router".
 func (r *Router) Name() string {
 	return "router"

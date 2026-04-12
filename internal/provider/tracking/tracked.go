@@ -3,6 +3,7 @@ package tracking
 import (
 	"context"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/ponchione/sodoryard/internal/provider"
@@ -15,6 +16,7 @@ type TrackedProvider struct {
 	inner  provider.Provider
 	store  SubCallStore
 	logger *slog.Logger
+	wg     sync.WaitGroup // tracks in-flight async sub-call writes
 }
 
 // Compile-time interface check.
@@ -27,6 +29,13 @@ func NewTrackedProvider(inner provider.Provider, store SubCallStore, logger *slo
 		store:  store,
 		logger: logger,
 	}
+}
+
+// Wait blocks until all in-flight async sub-call writes (from Stream
+// goroutines) have completed. Call before closing the database to avoid
+// "sql: database is closed" errors (TECH-DEBT R5).
+func (tp *TrackedProvider) Wait() {
+	tp.wg.Wait()
 }
 
 // Name delegates directly to the inner provider.
@@ -147,7 +156,9 @@ func (tp *TrackedProvider) Stream(ctx context.Context, req *provider.Request) (<
 
 	out := make(chan provider.StreamEvent)
 
+	tp.wg.Add(1)
 	go func() {
+		defer tp.wg.Done()
 		var finalUsage provider.Usage
 		var streamErr error
 		success := true
