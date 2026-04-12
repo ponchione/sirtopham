@@ -279,6 +279,38 @@ func TestRegisterDirectoryTools(t *testing.T) {
 	}
 }
 
+func TestAllNewToolsRegistered(t *testing.T) {
+	reg := NewRegistry()
+	RegisterFileTools(reg)
+	RegisterGitTools(reg)
+	RegisterShellTool(reg, ShellConfig{})
+	RegisterSearchTools(reg, nil)
+	RegisterDirectoryTools(reg)
+	RegisterTestTool(reg)
+	RegisterSqlcTool(reg)
+
+	expected := []string{
+		"list_directory", "find_files",
+		"test_run", "db_sqlc",
+	}
+	for _, name := range expected {
+		if _, ok := reg.Get(name); !ok {
+			t.Fatalf("tool %q not registered", name)
+		}
+	}
+
+	defs := reg.ToolDefinitions()
+	defNames := make(map[string]bool)
+	for _, d := range defs {
+		defNames[d.Name] = true
+	}
+	for _, name := range expected {
+		if !defNames[name] {
+			t.Fatalf("tool %q not in ToolDefinitions()", name)
+		}
+	}
+}
+
 func TestRegistryNames(t *testing.T) {
 	reg := NewRegistry()
 	reg.Register(newMockTool("shell", Mutating))
