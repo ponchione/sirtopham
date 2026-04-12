@@ -355,7 +355,7 @@ agent_roles:
     max_tokens: 300000
 
 local_services:
-  enabled: false
+  enabled: true
   mode: manual
   provider: docker-compose
   compose_file: ./ops/llm/docker-compose.yml
