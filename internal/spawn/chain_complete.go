@@ -56,6 +56,16 @@ func (t *ChainCompleteTool) Execute(ctx context.Context, projectRoot string, raw
 	if now == nil {
 		now = time.Now
 	}
+
+	// Read real chain metrics from the store so the receipt reflects
+	// actual resource usage instead of hardcoded zeros (TECH-DEBT R7).
+	var turnsUsed, tokensUsed, durationSecs int
+	if ch, err := t.Store.GetChain(ctx, t.ChainID); err == nil && ch != nil {
+		turnsUsed = ch.TotalSteps
+		tokensUsed = ch.TotalTokens
+		durationSecs = ch.TotalDurationSecs
+	}
+
 	receiptPath := fmt.Sprintf("receipts/orchestrator/%s.md", t.ChainID)
 	receiptBody := fmt.Sprintf(`---
 agent: orchestrator
@@ -63,9 +73,9 @@ chain_id: %s
 step: 1
 verdict: completed
 timestamp: %s
-turns_used: 0
-tokens_used: 0
-duration_seconds: 0
+turns_used: %d
+tokens_used: %d
+duration_seconds: %d
 ---
 
 # Chain summary
@@ -73,7 +83,7 @@ duration_seconds: 0
 Status: %s
 
 %s
-`, t.ChainID, now().UTC().Format(time.RFC3339), status, strings.TrimSpace(in.Summary))
+`, t.ChainID, now().UTC().Format(time.RFC3339), turnsUsed, tokensUsed, durationSecs, status, strings.TrimSpace(in.Summary))
 	if err := t.Backend.WriteDocument(ctx, receiptPath, receiptBody); err != nil {
 		return nil, fmt.Errorf("chain_complete: write receipt: %w", err)
 	}
