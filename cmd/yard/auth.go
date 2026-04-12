@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -150,13 +149,6 @@ func yardCollectProviderAuthReports(ctx context.Context, cfg *appconfig.Config, 
 		reports = append(reports, report)
 	}
 	return reports
-}
-
-func yardErrorAsProviderError(err error, out **provider.ProviderError) bool {
-	if err == nil {
-		return false
-	}
-	return errors.As(err, out)
 }
 
 func yardPrintProviderAuthReports(out io.Writer, reports []yardAuthProviderReport) {
