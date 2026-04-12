@@ -28,7 +28,6 @@ func newRootCmd() *cobra.Command {
 
 	rootCmd.PersistentFlags().StringVar(&configPath, "config", defaultCLIConfigPath, "Path to config file")
 
-	initCmd := newInitCmd(&configPath)
 	indexCmd := newIndexCmd(&configPath)
 
 	configCmd := newConfigCmd(&configPath)
@@ -40,7 +39,7 @@ func newRootCmd() *cobra.Command {
 	runCmd := newRunCmd(&configPath)
 	brainServeCmd := newBrainServeCmd()
 
-	rootCmd.AddCommand(serveCmd, runCmd, brainServeCmd, initCmd, indexCmd, configCmd, llmCmd, authCmd, doctorCmd)
+	rootCmd.AddCommand(serveCmd, runCmd, brainServeCmd, indexCmd, configCmd, llmCmd, authCmd, doctorCmd)
 	return rootCmd
 }
 
