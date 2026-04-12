@@ -1,6 +1,8 @@
 package tool
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -139,6 +141,45 @@ func TestFormatTestResult_WithFailures(t *testing.T) {
 	}
 }
 
+func TestParsePytestJSON_AllPass(t *testing.T) {
+	input := `{"summary":{"passed":3,"total":3},"tests":[{"nodeid":"tests/test_auth.py::test_login","outcome":"passed"},{"nodeid":"tests/test_auth.py::test_logout","outcome":"passed"},{"nodeid":"tests/test_auth.py::test_signup","outcome":"passed"}]}`
+	result := parsePytestJSON(input)
+	if result.Passed != 3 {
+		t.Fatalf("expected 3 passed, got %d", result.Passed)
+	}
+	if result.Failed != 0 {
+		t.Fatalf("expected 0 failed, got %d", result.Failed)
+	}
+}
+
+func TestParsePytestJSON_WithFailure(t *testing.T) {
+	input := `{"summary":{"passed":1,"failed":1,"total":2},"tests":[{"nodeid":"tests/test_auth.py::test_login","outcome":"passed"},{"nodeid":"tests/test_auth.py::test_signup","outcome":"failed","call":{"longrepr":"AssertionError: expected 200, got 401"}}]}`
+	result := parsePytestJSON(input)
+	if result.Failed != 1 {
+		t.Fatalf("expected 1 failed, got %d", result.Failed)
+	}
+	if len(result.Failures) != 1 {
+		t.Fatalf("expected 1 failure, got %d", len(result.Failures))
+	}
+	if !strings.Contains(result.Failures[0].Output, "expected 200, got 401") {
+		t.Fatalf("expected failure output, got: %s", result.Failures[0].Output)
+	}
+}
+
+func TestParsePytestShort_WithFailure(t *testing.T) {
+	input := "FAILED tests/test_auth.py::test_signup - AssertionError: expected 200\n1 passed, 1 failed in 0.34s"
+	result := parsePytestShort(input)
+	if result.Failed != 1 {
+		t.Fatalf("expected 1 failed, got %d", result.Failed)
+	}
+	if result.Passed != 1 {
+		t.Fatalf("expected 1 passed, got %d", result.Passed)
+	}
+	if len(result.Failures) != 1 {
+		t.Fatalf("expected 1 failure, got %d", len(result.Failures))
+	}
+}
+
 func TestFormatTestSummary(t *testing.T) {
 	s := formatTestSummary("go", 5, 5, 0, 0)
 	if s != "GO PASS — 5 passed, 0 failed, 0 skipped, 5 total" {
@@ -149,4 +190,57 @@ func TestFormatTestSummary(t *testing.T) {
 	if s != "PYTHON FAIL — 2 passed, 1 failed, 0 skipped, 3 total" {
 		t.Errorf("unexpected summary: %q", s)
 	}
+}
+
+func TestParseJestJSON_AllPass(t *testing.T) {
+	input := `{"numPassedTests":5,"numFailedTests":0,"numPendingTests":1,"testResults":[]}`
+	result := parseJestJSON(input)
+	if result.Passed != 5 {
+		t.Fatalf("expected 5 passed, got %d", result.Passed)
+	}
+	if result.Failed != 0 {
+		t.Fatalf("expected 0 failed, got %d", result.Failed)
+	}
+	if result.Skipped != 1 {
+		t.Fatalf("expected 1 skipped, got %d", result.Skipped)
+	}
+}
+
+func TestParseJestJSON_WithFailure(t *testing.T) {
+	input := `{"numPassedTests":2,"numFailedTests":1,"numPendingTests":0,"testResults":[{"testFilePath":"/app/src/components/Button.test.tsx","testResults":[{"fullName":"Button renders correctly","status":"passed"},{"fullName":"Button handles click","status":"failed","failureMessages":["Expected: 1\nReceived: 0"]}]}]}`
+	result := parseJestJSON(input)
+	if result.Failed != 1 {
+		t.Fatalf("expected 1 failed, got %d", result.Failed)
+	}
+	if len(result.Failures) != 1 {
+		t.Fatalf("expected 1 failure, got %d", len(result.Failures))
+	}
+	f := result.Failures[0]
+	if f.Test != "Button handles click" {
+		t.Fatalf("expected test name, got: %s", f.Test)
+	}
+	if !strings.Contains(f.Output, "Expected: 1") {
+		t.Fatalf("expected failure output, got: %s", f.Output)
+	}
+	if !strings.Contains(f.File, "Button.test.tsx") {
+		t.Fatalf("expected file path, got: %s", f.File)
+	}
+}
+
+func TestDetectTSTestRunner(t *testing.T) {
+	t.Run("default jest", func(t *testing.T) {
+		dir := t.TempDir()
+		runner, _ := detectTSTestRunner(dir)
+		if runner != "jest" {
+			t.Fatalf("expected jest, got %s", runner)
+		}
+	})
+	t.Run("vitest config", func(t *testing.T) {
+		dir := t.TempDir()
+		os.WriteFile(filepath.Join(dir, "vitest.config.ts"), []byte("export default {}"), 0o644)
+		runner, _ := detectTSTestRunner(dir)
+		if runner != "vitest" {
+			t.Fatalf("expected vitest, got %s", runner)
+		}
+	})
 }
