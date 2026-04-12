@@ -66,7 +66,7 @@ func TestRunInitializesEmptyDirectory(t *testing.T) {
 		t.Errorf("expected PROJECT_NAME substituted to %s, got:\n%s", wantName, got)
 	}
 	// SODORYARD_AGENTS_DIR placeholder is preserved.
-	if !strings.Contains(got, "{{SODORYARD_AGENTS_DIR}}/coder.md") {
+	if !strings.Contains(got, "{{SODORYARD_AGENTS_DIR}}/thomas.md") {
 		t.Errorf("expected {{SODORYARD_AGENTS_DIR}} placeholder to be preserved")
 	}
 	// All 13 roles are present in agent_roles.
