@@ -42,22 +42,26 @@ Use `make test` / `make build` rather than raw Go commands unless you intentiona
 
 ## Current working-tree status
 
-As of 2026-04-13 10:49 -04:00:
-- `npx vitest run src/hooks/use-context-report.test.tsx` ✅
-- `npx tsc --noEmit` ✅
+As of 2026-04-13 20:32 EDT:
+- `go test -tags sqlite_fts5 ./cmd/sirtopham ./cmd/yard -run 'Test.*(RunChain|YardRunChain).*ActiveExecution.*' -count=1` ✅
+- `go test -tags sqlite_fts5 ./internal/chain ./cmd/sirtopham ./cmd/yard ./internal/spawn -count=1` ✅
 - `make test` ✅
 - `make build` ✅
-- live `yard serve --config /tmp/my-website-runtime-8092.yaml` browser rerun on `http://localhost:8092` ✅
+- live `yard serve --config /tmp/my-website-runtime-8092.yaml` browser rerun on `http://localhost:8092` remains the last completed runtime validation ✅
 
 Current modified files (use live `git status` for the full dirty tree):
-- prior in-flight orchestrator/control/docs/web files from the earlier audit follow-through slices are still present
-- new files from this slice:
-  - `web/src/hooks/use-context-report.ts`
-  - `web/src/hooks/use-context-report.test.tsx`
-  - `web/src/test/setup.ts`
-  - `web/vite.config.ts`
-  - `web/package.json`
-  - `web/package-lock.json`
+- `cmd/sirtopham/cancel.go`
+- `cmd/sirtopham/chain.go`
+- `cmd/sirtopham/chain_cli_flags_test.go`
+- `cmd/sirtopham/chain_test.go`
+- `cmd/yard/chain.go`
+- `cmd/yard/chain_test.go`
+- `internal/chain/control.go`
+- `internal/chain/control_test.go`
+- `internal/spawn/chain_complete.go`
+- `internal/spawn/chain_complete_test.go`
+- `cmd/sirtopham/chain_control_sqlite_test.go`
+- `cmd/yard/chain_control_sqlite_test.go`
 
 What the new runtime-validation follow-up proved:
 - exact-setup daily-driver validation ran against the intended `my-website` runtime on `:8092`
@@ -254,6 +258,160 @@ What changed:
 - reran the targeted websocket test, full `make test`, and `make build`
 - reran the direct websocket cancellation probe and confirmed the live runtime still emits `turn_cancelled` with reason `user_interrupted`, persists the interrupted tool tombstone, and still returns sanitized `/api/conversations/search?q=interrupted` snippets
 
+### 12. Requested-stop finalization now emits durable terminal chain events
+Files:
+- `internal/chain/control.go`
+- `internal/chain/control_test.go`
+- `cmd/sirtopham/chain.go`
+- `cmd/sirtopham/chain_control_sqlite_test.go`
+- `cmd/yard/chain.go`
+- `cmd/yard/chain_control_sqlite_test.go`
+- `NEXT_SESSION_HANDOFF.md`
+
+What changed:
+- reproduced a remaining control-plane audit gap: `pause_requested` / `cancel_requested` were finalized to `paused` / `cancelled` silently, so the durable chain event log did not show the terminal control transition after the current turn exited
+- added failing tests first for a shared control-event mapping helper plus sqlite-backed command-package regressions proving finalization should append `chain_paused` / `chain_cancelled` events
+- added `FinalizeControlEventType(...)` in `internal/chain/control.go`
+- updated both CLI finalization paths to log a terminal chain event with `status` and `finalized_from` payload once a requested stop is durably finalized
+- reran targeted `go test -tags sqlite_fts5 ./internal/chain ./cmd/sirtopham ./cmd/yard -count=1`, then `make test`, then `make build`
+
+### 13. Resume semantics no longer restart active or pause-pending chains
+Files:
+- `internal/chain/control.go`
+- `internal/chain/control_test.go`
+- `cmd/sirtopham/chain.go`
+- `cmd/sirtopham/chain_cli_flags_test.go`
+- `cmd/sirtopham/chain_test.go`
+- `cmd/yard/chain.go`
+- `cmd/yard/chain_test.go`
+- `NEXT_SESSION_HANDOFF.md`
+
+What changed:
+- reproduced a deeper control-plane bug: `pause_requested` still counted as resumable, and an already `running` chain also passed through existing-chain execution prep, which meant the CLI could try to start a second orchestrator while the first execution was still active or still winding down toward `paused`
+- added failing tests first proving `pause_requested -> running` should be rejected at the shared control-state layer and that both CLI surfaces reject `pause_requested` resume plus duplicate `running` resume attempts
+- tightened `NextControlStatus(...)` so `pause_requested` is no longer treated as resumable-to-running
+- added shared `ResumeExecutionReady(...)` / `ErrChainAlreadyRunning` control helpers in `internal/chain/control.go`
+- updated both CLI existing-chain execution prep paths to only resume from durable `paused`, reject `pause_requested` until it finishes pausing, and surface `already running` for duplicate active-chain resume attempts instead of trying to continue into a second orchestrator run
+- reran targeted `go test -tags sqlite_fts5 ./internal/chain ./cmd/sirtopham ./cmd/yard -count=1`, then `make test`, then `make build`
+
+### 14. Cancel signaling now ignores stale orchestrator pids and targets the latest active execution
+Files:
+- `cmd/sirtopham/cancel.go`
+- `cmd/sirtopham/chain_test.go`
+- `cmd/yard/chain.go`
+- `cmd/yard/chain_test.go`
+- `NEXT_SESSION_HANDOFF.md`
+
+What changed:
+- reproduced the next control-plane hardening gap: best-effort cancel signaling could bubble an error when the recorded orchestrator pid was stale/already exited, even though the desired behavior is graceful degradation, and this path needed explicit proof that the latest logged orchestrator pid is the one signaled
+- added failing tests first for both CLI surfaces proving (1) stale/already-exited orchestrator pids are ignored cleanly and (2) signaling uses the most recent logged `orchestrator_pid`
+- introduced tiny interrupt seams (`interruptChainPID`, `interruptYardChainPID`) plus narrow stale-pid sentinel errors so the logic is testable without broader refactors
+- hardened both signal paths to treat `os.ErrProcessDone` / `syscall.ESRCH` as expected stale-pid outcomes and return nil instead of failing the cancel request
+- reran targeted `go test -tags sqlite_fts5 ./cmd/sirtopham ./cmd/yard -count=1`, then `make test`, then `make build`
+
+### 15. Cancel targeting now trusts active execution registration events, not any later pid-shaped payload
+Files:
+- `cmd/sirtopham/cancel.go`
+- `cmd/sirtopham/chain.go`
+- `cmd/sirtopham/chain_test.go`
+- `cmd/yard/chain.go`
+- `cmd/yard/chain_test.go`
+- `NEXT_SESSION_HANDOFF.md`
+
+What changed:
+- reproduced an execution-identity gap in the current cancel path: simple "latest pid wins" scanning could target a later unrelated event payload that happened to contain `orchestrator_pid`, instead of the latest active execution registration event
+- added failing tests first for both CLI surfaces proving cancel should ignore later non-registration events with pid-shaped payloads and still target the latest active registered execution
+- tightened active execution registration logging to include `active_execution: true`
+- replaced raw latest-pid scanning with narrow helpers that only consider `chain_started` / `chain_resumed` events carrying a valid `orchestrator_pid`; they also honor the new `active_execution` marker while remaining compatible with older registration events that lack the field
+- reran targeted `go test -tags sqlite_fts5 ./cmd/sirtopham ./cmd/yard -count=1`, then `make test`, then `make build`
+
+### 16. Active execution identity now carries explicit execution ids through registration and terminal events
+Files:
+- `internal/chain/control.go`
+- `internal/chain/control_test.go`
+- `cmd/sirtopham/cancel.go`
+- `cmd/sirtopham/chain.go`
+- `cmd/sirtopham/chain_test.go`
+- `cmd/sirtopham/chain_control_sqlite_test.go`
+- `cmd/yard/chain.go`
+- `cmd/yard/chain_test.go`
+- `cmd/yard/chain_control_sqlite_test.go`
+- `internal/spawn/chain_complete.go`
+- `internal/spawn/chain_complete_test.go`
+- `NEXT_SESSION_HANDOFF.md`
+
+What changed:
+- reproduced the next identity gap: active-run targeting and finalization still depended mostly on event ordering/type inference, with no explicit execution id threaded from active registration into terminal events
+- added failing tests first for shared active-execution resolution, terminal finalization payloads, and `chain_complete` completion events carrying the current execution id
+- introduced shared `chain.LatestActiveExecution(...)` parsing logic that tracks registration events by `execution_id` and ignores execution ids already terminalized by later `chain_paused` / `chain_cancelled` / `chain_completed` events
+- active orchestrator registration events now log a fresh `execution_id` alongside `orchestrator_pid` and `active_execution: true`
+- requested-stop finalization and `chain_complete` now propagate the active execution id into terminal chain events when available
+- both cancel paths now rely on the shared active-execution helper instead of local pid-scan heuristics
+- reran targeted `go test -tags sqlite_fts5 ./internal/chain ./cmd/sirtopham ./cmd/yard ./internal/spawn -count=1`, then `make test`, then `make build`
+
+### 17. Active execution lifecycle now closes on errored orchestrator exits too
+Files:
+- `cmd/sirtopham/chain.go`
+- `cmd/sirtopham/chain_control_sqlite_test.go`
+- `cmd/yard/chain.go`
+- `cmd/yard/chain_control_sqlite_test.go`
+- `NEXT_SESSION_HANDOFF.md`
+
+What changed:
+- reproduced the remaining lifecycle gap: once an orchestrator execution registered an active `execution_id`, a later non-cancel/non-`chain_complete` command error could return without any terminal event, leaving cancel targeting to believe that execution was still active even though the run had already ended
+- added failing sqlite-backed tests first for both CLI surfaces proving an errored run-close helper must mark the chain failed, append a terminal `chain_completed` event carrying that `execution_id`, and leave `LatestActiveExecution(...)` empty afterward
+- added narrow deferred cleanup in both `runChain` paths so any command error after active execution registration now best-effort terminalizes the still-active execution as failed
+- added focused `closeErroredChainExecution(...)` / `closeErroredYardChainExecution(...)` helpers that write the failed terminal status plus `execution_id` only when an active execution is still open
+- reran the focused failing-test command, then `go test -tags sqlite_fts5 ./internal/chain ./cmd/sirtopham ./cmd/yard ./internal/spawn -count=1`, then `make test`, then `make build`
+
+### 18. Terminal execution payload logic is now shared across all run-ending paths
+Files:
+- `internal/chain/control.go`
+- `internal/chain/control_test.go`
+- `cmd/sirtopham/chain.go`
+- `cmd/yard/chain.go`
+- `internal/spawn/chain_complete.go`
+- `NEXT_SESSION_HANDOFF.md`
+
+What changed:
+- reproduced the next low-churn control-plane drift risk: requested-stop finalization, `chain_complete`, and errored-run closure all emitted terminal events separately, each hand-assembling the payload logic for `status` and `execution_id`
+- added failing tests first for a new shared payload helper in `internal/chain/control_test.go`; initial focused `go test` failed with `undefined: BuildTerminalEventPayload`
+- added shared `BuildTerminalEventPayload(...)` in `internal/chain/control.go` so terminal event payloads always carry authoritative `status`, preserve caller-specific extras, and attach the current active `execution_id` when one exists
+- rewired `finalizeRequestedChainStatus(...)`, `finalizeYardRequestedChainStatus(...)`, `closeErroredChainExecution(...)`, `closeErroredYardChainExecution(...)`, and `spawn.ChainCompleteTool.Execute(...)` to use the shared helper instead of duplicating payload assembly
+- reran the focused helper tests, focused terminal-path regressions, broader targeted `internal/chain`/`cmd`/`spawn` tests, then `make test` and `make build`
+
+### 19. Terminal closure sequencing is now shared instead of duplicated per caller
+Files:
+- `internal/chain/control.go`
+- `internal/chain/control_test.go`
+- `cmd/sirtopham/chain.go`
+- `cmd/yard/chain.go`
+- `internal/spawn/chain_complete.go`
+- `NEXT_SESSION_HANDOFF.md`
+
+What changed:
+- reproduced the next remaining control-plane duplication: even after sharing terminal payload assembly, requested-stop finalization, errored-run closure, and `chain_complete` still each hand-managed the higher-level sequence of loading events, writing terminal status, and then logging the terminal event
+- added failing tests first for a shared higher-level helper in `internal/chain/control_test.go`; focused `go test` initially failed with `undefined: ApplyTerminalChainClosure` / `undefined: TerminalChainClosure`
+- added shared `TerminalChainClosure` plus `ApplyTerminalChainClosure(...)` in `internal/chain/control.go`; it now centralizes `ListEvents -> SetChainStatus/CompleteChain -> BuildTerminalEventPayload -> LogEvent`
+- rewired `finalizeRequestedChainStatus(...)`, `finalizeYardRequestedChainStatus(...)`, `closeErroredChainExecution(...)`, `closeErroredYardChainExecution(...)`, and `spawn.ChainCompleteTool.Execute(...)` through the shared higher-level helper
+- kept the errored-run callers’ explicit active-execution guard, so that path still no-ops when there is no active execution left to close
+- reran the focused helper tests, focused terminal-path regressions, broader targeted `internal/chain`/`cmd`/`spawn` tests, then `make test` and `make build`
+
+### 21. Phase 1.1 blocked in-flight command-flow harness proof
+Files:
+- `cmd/sirtopham/chain.go`
+- `cmd/sirtopham/chain_test.go`
+- `cmd/yard/chain.go`
+- `cmd/yard/chain_test.go`
+- `NEXT_SESSION_HANDOFF.md`
+
+What changed:
+- added blocked in-flight command-flow tests that drive the real `runChain(...)` / `yardRunChain(...)` paths with a deterministic fake turn runner instead of only exercising helper entrypoints
+- each regression now waits for a real active `execution_id` registration, flips the chain into `cancel_requested` or `pause_requested` while the turn is blocked, then cancels the in-flight context and proves the final command path emits the correct user-facing message, writes the matching terminal chain event, and leaves `LatestActiveExecution(...)` empty
+- introduced tiny test seams for runtime/registry/turn-runner construction so the command tests can reach the real command flow without starting external processes
+- fixed the concrete bug those regressions exposed: interruption cleanup was still using the cancelled command context, so post-cancel finalization could fail with `get chain: context canceled`; interruption cleanup now switches to `context.WithoutCancel(ctx)` before finalizing requested-stop state and closing any still-active execution
+- reran the focused new harness tests, broader `internal/chain` + command/spawn suites, then `make test` and `make build`
+
 ---
 
 ## Verification status
@@ -280,34 +438,32 @@ The original ranked list lived in a root `AUDIT.md` during the earlier audit pas
 
 ### Improved but not fully closed
 - P0 #1 chain pause/resume/cancel semantics
-  - resume is real now
+  - resume is real now for durably paused chains
   - pause/cancel requested states now exist (`pause_requested`, `cancel_requested`) so running chains no longer pretend they are already terminal mid-step
   - `spawn_agent` now respects requested-stop states before scheduling another engine
+  - when a requested stop finalizes after the current turn exits, the durable event log now records the terminal `chain_paused` / `chain_cancelled` transition instead of changing status silently
+  - resume no longer treats `pause_requested` as already-paused, and existing-chain execution prep no longer tries to launch a duplicate orchestrator for a chain that is still `running`
   - cancel still relies on best-effort pid/event-based live signaling rather than a first-class durable command queue or stronger orchestration coordination
 
 ### Still clearly open / best next work
 Likely next highest-value items now:
-1. if you still want deeper control semantics after the daily-driver and observability cleanup, move from requested-state strings + best-effort pid signaling to a first-class durable command/control surface
-2. any additional doc cleanup should now be narrow and evidence-driven rather than another broad audit sweep
-3. optional polish: if you care about even quieter logs, decide whether the new `run turn cancelled` info log should remain or whether the existing `turn cancelled` event log is already sufficient by itself
+1. if you still want deeper control semantics after the daily-driver and observability cleanup, move from pid/event-based best-effort signaling toward a first-class durable command/control surface
+2. add stronger end-to-end tests around long-running orchestrator turns so request timing vs. finalization remains proven, not inferred from helper/unit coverage
+3. if you keep the current pid-signaling approach for a while, the next narrow follow-through after interruption hardening is a more realistic long-running runChain/yardRunChain harness that drives a blocked in-flight loop and proves pause/cancel request timing against the actual command flow rather than helper entrypoints alone
 
 ---
 
 ## Recommended next slice
 
-The exact-setup daily-driver validation slice is now done, the highest-value concrete validation failure (latest-turn inspector 404 noise) is fixed, and expected user-triggered cancellation no longer emits the bogus generic run-turn error. Next best move:
+Phase 1.1 from `docs/plans/2026-04-13-sodoryard-stability-closeout-plan.md` is now done and the new blocked in-flight command-flow proof passed cleanly. Do not keep adding more chain-control helpers unless a fresh real-use bug appears.
 
-### Option A — deeper chain control architecture (recommended)
-If you want to keep pushing the control plane:
-- move from pid/event-based best-effort signaling toward a first-class durable control surface
-- consider a command queue or equivalent durable mechanism rather than encoding all intent in the status string
-- add stronger end-to-end tests proving pause/cancel timing semantics across long-running orchestrator turns
+Next best move:
 
-### Option B — smaller runtime/UI polish
-If you want another narrow operator-facing polish slice instead:
-- audit whether the remaining cancellation logging should be one line or two
-- do another browser pass on settings/search/cancel after a cold restart
-- keep any follow-up scoped to one reproduced annoyance at a time
+### Phase 2.1 — repeated real-use runtime soak on the intended setup
+- reuse the intended `my-website` runtime documented in the handoff unless reality has changed
+- re-run the maintained validation flow plus at least one longer mixed session covering first turn, reload/history, settings/model routing, cancellation, search, and retrieval/context-inspector evidence
+- if that run is clean, stop control-plane churn and move on
+- if it reproduces one concrete annoyance, take exactly one narrow regression-first bugfix slice next
 
 ---
 

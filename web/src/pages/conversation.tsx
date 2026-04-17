@@ -79,7 +79,12 @@ export function ConversationPage() {
   // refresh leaves the badge blank. We fetch the aggregate metrics once per
   // convId and use its last_turn field as a fallback.
   const [hydratedLastTurn, setHydratedLastTurn] = useState<TurnUsage | null>(null);
-  const ctxReport = useContextReport(convId);
+  const [historyLatestTurnPending, setHistoryLatestTurnPending] = useState(false);
+  const ctxReport = useContextReport(
+    convId,
+    historyLatestTurnPending || isStreaming || agentState !== "idle",
+    inspectorOpen,
+  );
   const { providers } = useProviders();
 
   // Derived: prefer the live state value over hydrated, so ongoing turns
@@ -89,6 +94,7 @@ export function ConversationPage() {
   // Feed live context_debug events into the inspector.
   useEffect(() => {
     if (lastContextDebug) {
+      setHistoryLatestTurnPending(false);
       ctxReport.setLiveReport(lastContextDebug as unknown as ContextReport);
     }
   }, [lastContextDebug]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -96,6 +102,7 @@ export function ConversationPage() {
 
   useEffect(() => {
     historyLoaded.current = false;
+    setHistoryLatestTurnPending(false);
   }, [convId]);
 
   // B3 fix: fetch aggregate metrics once per conversation, extract last_turn,
@@ -185,6 +192,10 @@ export function ConversationPage() {
           const chatMessages = messageViewsToChat(views);
           loadHistory(chatMessages);
           const maxTurn = views.reduce((max, view) => Math.max(max, view.turn_number ?? 0), 0);
+          const latestTurnHasAssistant = views.some(
+            (view) => view.turn_number === maxTurn && view.role === "assistant",
+          );
+          setHistoryLatestTurnPending(maxTurn > 0 && !latestTurnHasAssistant);
           ctxReport.setHistoryTurns(maxTurn);
         })
         .catch((err) => {

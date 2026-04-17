@@ -623,6 +623,10 @@ func (a *GoAnalyzer) extractImplementsEdges(file *ast.File, pkg *packages.Packag
 				continue
 			}
 
+			if _, ok := obj.Type().Underlying().(*goTypes.Interface); ok {
+				continue
+			}
+
 			typ := obj.Type()
 			ptrTyp := goTypes.NewPointer(typ)
 

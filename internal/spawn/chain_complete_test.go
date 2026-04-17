@@ -83,6 +83,43 @@ func TestChainCompleteHappyPathReturnsSentinel(t *testing.T) {
 	}
 }
 
+func TestChainCompleteLogsLatestActiveExecutionID(t *testing.T) {
+	ctx := context.Background()
+	store := chain.NewStore(newSpawnTestDB(t))
+	chainID, err := store.StartChain(ctx, chain.ChainSpec{MaxSteps: 10, MaxResolverLoops: 2, MaxDuration: time.Hour, TokenBudget: 100})
+	if err != nil {
+		t.Fatalf("StartChain returned error: %v", err)
+	}
+	if err := store.LogEvent(ctx, chainID, "", chain.EventChainStarted, map[string]any{"orchestrator_pid": 1111, "execution_id": "exec-1", "active_execution": true}); err != nil {
+		t.Fatalf("LogEvent returned error: %v", err)
+	}
+	backend := &fakeBrainBackend{docs: map[string]string{}}
+	completeTool := NewChainCompleteTool(store, backend, chainID)
+	completeTool.Now = func() time.Time { return time.Date(2026, 4, 11, 0, 0, 0, 0, time.UTC) }
+
+	_, err = completeTool.Execute(ctx, ".", []byte(`{"summary":"done","status":"success"}`))
+	if !errors.Is(err, tool.ErrChainComplete) {
+		t.Fatalf("error = %v, want ErrChainComplete", err)
+	}
+	events, err := store.ListEvents(ctx, chainID)
+	if err != nil {
+		t.Fatalf("ListEvents returned error: %v", err)
+	}
+	found := false
+	for _, event := range events {
+		if event.EventType != chain.EventChainCompleted {
+			continue
+		}
+		if !strings.Contains(event.EventData, `"execution_id":"exec-1"`) {
+			t.Fatalf("EventData = %s, want execution_id exec-1", event.EventData)
+		}
+		found = true
+	}
+	if !found {
+		t.Fatal("expected chain_completed event")
+	}
+}
+
 func TestChainCompletePreservesPartialStatus(t *testing.T) {
 	ctx := context.Background()
 	store := chain.NewStore(newSpawnTestDB(t))

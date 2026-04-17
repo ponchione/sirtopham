@@ -55,6 +55,13 @@ func writeAuthFile(t *testing.T, dir, content string) {
 	}
 }
 
+func writePrivateAuthStore(t *testing.T, dir string, auth codexAuthFile) {
+	t.Helper()
+	if err := writeCodexStore(sirtophamAuthStorePath(dir), auth); err != nil {
+		t.Fatalf("failed to write private auth store: %v", err)
+	}
+}
+
 func testJWT(t *testing.T, exp time.Time) string {
 	t.Helper()
 	headerJSON, err := json.Marshal(map[string]any{"alg": "none", "typ": "JWT"})
@@ -293,6 +300,38 @@ func TestGetAccessToken_ExpiredTokenTriggersDirectRefreshWithoutShellingOut(t *t
 	}
 	if _, statErr := os.Stat(marker); !os.IsNotExist(statErr) {
 		t.Fatalf("expected no CLI shellout, stat err = %v", statErr)
+	}
+}
+
+func TestGetAccessToken_PrefersNewerSharedStoreOverStalePrivateStore(t *testing.T) {
+	tmpDir := t.TempDir()
+	overrideHomeDir(t, tmpDir)
+
+	sharedToken := testJWT(t, time.Now().Add(24*time.Hour).UTC())
+	writeAuthFile(t, tmpDir, `{"auth_mode":"chatgpt","last_refresh":"2026-04-10T00:43:46Z","tokens":{"access_token": "`+sharedToken+`","refresh_token": "shared-refresh"}}`)
+	writePrivateAuthStore(t, tmpDir, codexAuthFile{
+		AuthMode:    "chatgpt",
+		ExpiresAt:   time.Now().Add(-2 * time.Hour).UTC().Format(time.RFC3339),
+		LastRefresh: "2026-04-03T17:56:16Z",
+		Tokens: codexAuthTokens{
+			AccessToken: testJWT(t, time.Now().Add(-24*time.Hour).UTC()),
+		},
+	})
+
+	p := &CodexProvider{}
+	token, err := p.getAccessToken(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if token != sharedToken {
+		t.Fatalf("expected newer shared-store token, got %q", token)
+	}
+	status, err := p.AuthStatus(context.Background())
+	if err != nil {
+		t.Fatalf("AuthStatus() error: %v", err)
+	}
+	if status.Source != "sirtopham_store" || status.StorePath == "" {
+		t.Fatalf("expected imported private auth state after runtime use, got %+v", status)
 	}
 }
 

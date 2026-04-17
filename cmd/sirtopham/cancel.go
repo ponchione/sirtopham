@@ -2,14 +2,31 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"syscall"
 
 	"github.com/ponchione/sodoryard/internal/chain"
 	appconfig "github.com/ponchione/sodoryard/internal/config"
 	"github.com/spf13/cobra"
 )
+
+var errChainPIDNotRunning = errors.New("chain orchestrator pid not running")
+
+var interruptChainPID = func(pid int) error {
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return err
+	}
+	if err := proc.Signal(os.Interrupt); err != nil {
+		if errors.Is(err, os.ErrProcessDone) || errors.Is(err, syscall.ESRCH) {
+			return errChainPIDNotRunning
+		}
+		return err
+	}
+	return nil
+}
 
 func newCancelCmd(configPath *string) *cobra.Command {
 	return &cobra.Command{Use: "cancel <chain-id>", Short: "Cancel a chain", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
@@ -70,27 +87,14 @@ func signalActiveChainProcess(ctx context.Context, store *chain.Store, chainID s
 	if err != nil {
 		return err
 	}
-	pid := 0
-	for i := len(events) - 1; i >= 0; i-- {
-		var payload struct {
-			OrchestratorPID int `json:"orchestrator_pid"`
-		}
-		if err := json.Unmarshal([]byte(events[i].EventData), &payload); err != nil {
-			continue
-		}
-		if payload.OrchestratorPID > 0 {
-			pid = payload.OrchestratorPID
-			break
-		}
-	}
-	if pid <= 0 {
+	exec, ok := chain.LatestActiveExecution(events)
+	if !ok || exec.OrchestratorPID <= 0 {
 		return nil
 	}
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return err
-	}
-	if err := proc.Signal(os.Interrupt); err != nil {
+	if err := interruptChainPID(exec.OrchestratorPID); err != nil {
+		if errors.Is(err, errChainPIDNotRunning) {
+			return nil
+		}
 		return err
 	}
 	return nil

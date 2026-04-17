@@ -2,12 +2,12 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -19,6 +19,22 @@ import (
 	"github.com/ponchione/sodoryard/internal/id"
 	rtpkg "github.com/ponchione/sodoryard/internal/runtime"
 )
+
+var errYardChainPIDNotRunning = errors.New("chain orchestrator pid not running")
+
+var interruptYardChainPID = func(pid int) error {
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return err
+	}
+	if err := proc.Signal(os.Interrupt); err != nil {
+		if errors.Is(err, os.ErrProcessDone) || errors.Is(err, syscall.ESRCH) {
+			return errYardChainPIDNotRunning
+		}
+		return err
+	}
+	return nil
+}
 
 type yardChainFlags struct {
 	Specs            string
@@ -32,6 +48,15 @@ type yardChainFlags struct {
 	DryRun           bool
 	ProjectRoot      string
 }
+
+type chainTurnRunner interface {
+	RunTurn(ctx context.Context, req agent.RunTurnRequest) (*agent.TurnResult, error)
+	Close()
+}
+
+var buildYardChainRuntime = rtpkg.BuildOrchestratorRuntime
+var buildYardChainRegistry = rtpkg.BuildOrchestratorRegistry
+var newYardChainTurnRunner = func(deps agent.AgentLoopDeps) chainTurnRunner { return agent.NewAgentLoop(deps) }
 
 func newYardChainCmd(configPath *string) *cobra.Command {
 	cmd := &cobra.Command{
@@ -75,7 +100,7 @@ func newYardChainStartCmd(configPath *string) *cobra.Command {
 	return cmd
 }
 
-func yardRunChain(ctx context.Context, configPath string, flags yardChainFlags, cmd *cobra.Command) error {
+func yardRunChain(ctx context.Context, configPath string, flags yardChainFlags, cmd *cobra.Command) (err error) {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt)
 	defer stop()
 
@@ -95,7 +120,7 @@ func yardRunChain(ctx context.Context, configPath string, flags yardChainFlags, 
 	if err != nil {
 		return err
 	}
-	rt, err := rtpkg.BuildOrchestratorRuntime(ctx, cfg)
+	rt, err := buildYardChainRuntime(ctx, cfg)
 	if err != nil {
 		return err
 	}
@@ -129,10 +154,20 @@ func yardRunChain(ctx context.Context, configPath string, flags yardChainFlags, 
 		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s\n", chainID)
 		return nil
 	}
+	executionRegistered := false
+	defer func() {
+		if err == nil || !executionRegistered {
+			return
+		}
+		if closeErr := closeErroredYardChainExecution(ctx, rt.ChainStore, chainID, err.Error()); closeErr != nil {
+			err = fmt.Errorf("%w (while closing active execution: %v)", err, closeErr)
+		}
+	}()
 	if err := registerYardActiveChainExecution(ctx, rt.ChainStore, chainID, existing == nil, existing != nil && existing.Status == "paused"); err != nil {
 		return err
 	}
-	registry, err := rtpkg.BuildOrchestratorRegistry(rt, roleCfg, chainID)
+	executionRegistered = true
+	registry, err := buildYardChainRegistry(rt, roleCfg, chainID)
 	if err != nil {
 		return err
 	}
@@ -144,7 +179,7 @@ func yardRunChain(ctx context.Context, configPath string, flags yardChainFlags, 
 	if err != nil {
 		return err
 	}
-	loop := agent.NewAgentLoop(agent.AgentLoopDeps{ContextAssembler: rt.ContextAssembler, ConversationManager: rt.ConversationManager, ProviderRouter: rt.ProviderRouter, ToolExecutor: &rtpkg.RegistryToolExecutor{Registry: registry, ProjectRoot: cfg.ProjectRoot}, ToolDefinitions: registry.ToolDefinitions(), PromptBuilder: agent.NewPromptBuilder(rt.Logger), TitleGenerator: conversation.NewTitleGen(rt.ConversationManager, rt.ProviderRouter, cfg.Routing.Default.Model, rt.Logger), Config: agent.AgentLoopConfig{MaxIterations: roleCfg.MaxTurns, BasePrompt: systemPrompt, ProviderName: cfg.Routing.Default.Provider, ModelName: cfg.Routing.Default.Model, ContextConfig: cfg.Context}, Logger: rt.Logger})
+	loop := newYardChainTurnRunner(agent.AgentLoopDeps{ContextAssembler: rt.ContextAssembler, ConversationManager: rt.ConversationManager, ProviderRouter: rt.ProviderRouter, ToolExecutor: &rtpkg.RegistryToolExecutor{Registry: registry, ProjectRoot: cfg.ProjectRoot}, ToolDefinitions: registry.ToolDefinitions(), PromptBuilder: agent.NewPromptBuilder(rt.Logger), TitleGenerator: conversation.NewTitleGen(rt.ConversationManager, rt.ProviderRouter, cfg.Routing.Default.Model, rt.Logger), Config: agent.AgentLoopConfig{MaxIterations: roleCfg.MaxTurns, BasePrompt: systemPrompt, ProviderName: cfg.Routing.Default.Provider, ModelName: cfg.Routing.Default.Model, ContextConfig: cfg.Context}, Logger: rt.Logger})
 	defer loop.Close()
 	turnTask := yardBuildChainTask(flags, chainID)
 	if _, err := loop.RunTurn(ctx, agent.RunTurnRequest{ConversationID: conv.ID, TurnNumber: 1, Message: turnTask, ModelContextLimit: limit}); err != nil {
@@ -208,27 +243,27 @@ func prepareYardExistingChainForExecution(ctx context.Context, store *chain.Stor
 	if existing == nil {
 		return nil
 	}
-	switch existing.Status {
-	case "paused", "pause_requested":
-		if err := store.SetChainStatus(ctx, existing.ID, "running"); err != nil {
-			return err
+	resumeReady, err := chain.ResumeExecutionReady(existing.Status)
+	if err != nil {
+		if errors.Is(err, chain.ErrChainAlreadyRunning) {
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "chain %s already running\n", existing.ID)
 		}
-		_ = store.LogEvent(ctx, existing.ID, "", chain.EventChainResumed, map[string]any{"resumed_by": "cli"})
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "chain %s resumed\n", existing.ID)
-		return nil
-	case "running":
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "chain %s continuing from existing running state\n", existing.ID)
-		return nil
-	case "cancelled", "completed", "failed", "partial", "cancel_requested":
-		return fmt.Errorf("chain %s is %s and cannot be resumed", existing.ID, existing.Status)
-	default:
-		return fmt.Errorf("chain %s is in unsupported state %q", existing.ID, existing.Status)
+		return fmt.Errorf("chain %s %w", existing.ID, err)
 	}
+	if !resumeReady {
+		return nil
+	}
+	if err := store.SetChainStatus(ctx, existing.ID, "running"); err != nil {
+		return err
+	}
+	_ = store.LogEvent(ctx, existing.ID, "", chain.EventChainResumed, map[string]any{"resumed_by": "cli"})
+	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "chain %s resumed\n", existing.ID)
+	return nil
 }
 
 func registerYardActiveChainExecution(ctx context.Context, store *chain.Store, chainID string, isNew bool, resumed bool) error {
 	eventType := chain.EventChainStarted
-	payload := map[string]any{"orchestrator_pid": os.Getpid()}
+	payload := map[string]any{"orchestrator_pid": os.Getpid(), "active_execution": true, "execution_id": id.New()}
 	if resumed {
 		eventType = chain.EventChainResumed
 		payload["resumed_by"] = "cli"
@@ -246,18 +281,25 @@ func handleYardChainRunInterruption(ctx context.Context, store *chain.Store, cha
 	if !errors.Is(err, agent.ErrTurnCancelled) {
 		return false, nil
 	}
-	if err := finalizeYardRequestedChainStatus(ctx, store, chainID); err != nil {
+	cleanupCtx := context.WithoutCancel(ctx)
+	if err := finalizeYardRequestedChainStatus(cleanupCtx, store, chainID); err != nil {
 		return true, err
 	}
-	ch, loadErr := store.GetChain(ctx, chainID)
+	ch, loadErr := store.GetChain(cleanupCtx, chainID)
 	if loadErr != nil {
 		return true, loadErr
 	}
 	switch ch.Status {
 	case "cancelled":
+		if err := chain.CloseTerminalizedActiveExecution(cleanupCtx, store, chainID, ch.Status, nil); err != nil {
+			return true, err
+		}
 		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "chain %s cancelled\n", chainID)
 		return true, nil
 	case "paused":
+		if err := chain.CloseTerminalizedActiveExecution(cleanupCtx, store, chainID, ch.Status, nil); err != nil {
+			return true, err
+		}
 		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "chain %s paused\n", chainID)
 		return true, nil
 	default:
@@ -271,11 +313,40 @@ func finalizeYardRequestedChainStatus(ctx context.Context, store *chain.Store, c
 		return err
 	}
 	if finalStatus, ok := chain.FinalizeControlStatus(ch.Status); ok {
+		eventType, eventOK := chain.FinalizeControlEventType(ch.Status)
+		if eventOK {
+			return chain.ApplyTerminalChainClosure(ctx, store, chainID, chain.TerminalChainClosure{
+				Status:    finalStatus,
+				EventType: eventType,
+				Extra:     map[string]any{"finalized_from": ch.Status},
+			})
+		}
 		if err := store.SetChainStatus(ctx, chainID, finalStatus); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func closeErroredYardChainExecution(ctx context.Context, store *chain.Store, chainID string, summary string) error {
+	events := mustListYardChainEvents(ctx, store, chainID)
+	if _, ok := chain.LatestActiveExecution(events); !ok {
+		return nil
+	}
+	return chain.ApplyTerminalChainClosure(ctx, store, chainID, chain.TerminalChainClosure{
+		Status:    "failed",
+		EventType: chain.EventChainCompleted,
+		Summary:   &summary,
+		Extra:     map[string]any{"summary": summary},
+	})
+}
+
+func mustListYardChainEvents(ctx context.Context, store *chain.Store, chainID string) []chain.Event {
+	events, err := store.ListEvents(ctx, chainID)
+	if err != nil {
+		return nil
+	}
+	return events
 }
 
 func validateYardChainFlags(flags yardChainFlags) error {
@@ -440,27 +511,14 @@ func signalYardActiveChainProcess(ctx context.Context, store *chain.Store, chain
 	if err != nil {
 		return err
 	}
-	pid := 0
-	for i := len(events) - 1; i >= 0; i-- {
-		var payload struct {
-			OrchestratorPID int `json:"orchestrator_pid"`
-		}
-		if err := json.Unmarshal([]byte(events[i].EventData), &payload); err != nil {
-			continue
-		}
-		if payload.OrchestratorPID > 0 {
-			pid = payload.OrchestratorPID
-			break
-		}
-	}
-	if pid <= 0 {
+	exec, ok := chain.LatestActiveExecution(events)
+	if !ok || exec.OrchestratorPID <= 0 {
 		return nil
 	}
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return err
-	}
-	if err := proc.Signal(os.Interrupt); err != nil {
+	if err := interruptYardChainPID(exec.OrchestratorPID); err != nil {
+		if errors.Is(err, errYardChainPIDNotRunning) {
+			return nil
+		}
 		return err
 	}
 	return nil

@@ -118,6 +118,18 @@ func (a *PythonAnalyzer) extractPySymbols(relPath string, content []byte) (*pars
 		relPath:    relPath,
 		modulePath: modPath,
 		classes:    make(map[string][]string),
+		symbols: []Symbol{{
+			ID:        pythonSymbolID(modPath, "module", modPath),
+			Name:      modPath,
+			Kind:      "module",
+			Language:  "python",
+			Package:   modPath,
+			FilePath:  relPath,
+			LineStart: 1,
+			LineEnd:   int(root.EndPosition().Row) + 1,
+			Signature: "module " + modPath,
+			Exported:  true,
+		}},
 	}
 
 	for i := uint(0); i < root.ChildCount(); i++ {
