@@ -10,14 +10,21 @@ func TestEmbeddedTemplatesContainsYardYaml(t *testing.T) {
 	if err != nil {
 		t.Fatalf("readEmbeddedFile: %v", err)
 	}
-	if !strings.Contains(string(content), "{{PROJECT_ROOT}}") {
+	text := string(content)
+	if !strings.Contains(text, "{{PROJECT_ROOT}}") {
 		t.Fatalf("expected embedded yard.yaml.example to contain {{PROJECT_ROOT}} placeholder")
 	}
-	if !strings.Contains(string(content), "agent_roles:") {
+	if !strings.Contains(text, "agent_roles:") {
 		t.Fatalf("expected embedded yard.yaml.example to contain agent_roles section")
 	}
-	if !strings.Contains(string(content), "orchestrator:") {
+	if !strings.Contains(text, "orchestrator:") {
 		t.Fatalf("expected embedded yard.yaml.example to contain orchestrator role")
+	}
+	if !strings.Contains(text, "builtin:orchestrator") {
+		t.Fatalf("expected embedded yard.yaml.example to contain builtin orchestrator prompt marker")
+	}
+	if strings.Contains(text, "{{SODORYARD_AGENTS_DIR}}") {
+		t.Fatalf("expected embedded yard.yaml.example to avoid {{SODORYARD_AGENTS_DIR}} placeholder")
 	}
 }
 

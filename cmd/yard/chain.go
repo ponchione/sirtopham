@@ -116,7 +116,7 @@ func yardRunChain(ctx context.Context, configPath string, flags yardChainFlags, 
 	if !ok {
 		return fmt.Errorf("agent role %q not found in config", "orchestrator")
 	}
-	systemPrompt, err := rtpkg.LoadRoleSystemPrompt(cfg.ProjectRoot, roleCfg.SystemPrompt)
+	systemPrompt, _, err := rtpkg.LoadRoleSystemPrompt("orchestrator", cfg.ProjectRoot, roleCfg.SystemPrompt)
 	if err != nil {
 		return err
 	}

@@ -716,3 +716,82 @@ func TestResolveAgentRoleSystemPromptPathUsesProjectRoot(t *testing.T) {
 		t.Fatalf("ResolveAgentRoleSystemPromptPath(abs) = %q", got)
 	}
 }
+
+func TestLoadAllowsBuiltInPromptDefaultsAndSelectors(t *testing.T) {
+	projectRoot := t.TempDir()
+	ensureDir(t, filepath.Join(projectRoot, ".brain"))
+
+	tests := []struct {
+		name string
+		yaml string
+	}{
+		{
+			name: "empty builtin role prompt uses default",
+			yaml: "project_root: \"" + projectRoot + "\"\n" +
+				"brain:\n  vault_path: \"" + filepath.Join(projectRoot, ".brain") + "\"\n" +
+				"agent_roles:\n  coder:\n    system_prompt: \"\"\n",
+		},
+		{
+			name: "explicit builtin selector",
+			yaml: "project_root: \"" + projectRoot + "\"\n" +
+				"brain:\n  vault_path: \"" + filepath.Join(projectRoot, ".brain") + "\"\n" +
+				"agent_roles:\n  reviewer:\n    system_prompt: builtin:coder\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			configPath := filepath.Join(t.TempDir(), "sirtopham.yaml")
+			if err := os.WriteFile(configPath, []byte(tt.yaml), 0o644); err != nil {
+				t.Fatalf("WriteFile returned error: %v", err)
+			}
+
+			if _, err := Load(configPath); err != nil {
+				t.Fatalf("Load returned error: %v", err)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsUnknownBuiltInSelectorsAndEmptyUnknownRolePrompt(t *testing.T) {
+	projectRoot := t.TempDir()
+	ensureDir(t, filepath.Join(projectRoot, ".brain"))
+
+	tests := []struct {
+		name       string
+		yaml       string
+		wantSubstr string
+	}{
+		{
+			name: "empty unknown role prompt",
+			yaml: "project_root: \"" + projectRoot + "\"\n" +
+				"brain:\n  vault_path: \"" + filepath.Join(projectRoot, ".brain") + "\"\n" +
+				"agent_roles:\n  reviewer:\n    system_prompt: \"\"\n",
+			wantSubstr: "agent_roles.reviewer.system_prompt",
+		},
+		{
+			name: "unknown builtin selector",
+			yaml: "project_root: \"" + projectRoot + "\"\n" +
+				"brain:\n  vault_path: \"" + filepath.Join(projectRoot, ".brain") + "\"\n" +
+				"agent_roles:\n  reviewer:\n    system_prompt: builtin:not-a-role\n",
+			wantSubstr: "unknown built-in role system prompt",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			configPath := filepath.Join(t.TempDir(), "sirtopham.yaml")
+			if err := os.WriteFile(configPath, []byte(tt.yaml), 0o644); err != nil {
+				t.Fatalf("WriteFile returned error: %v", err)
+			}
+
+			_, err := Load(configPath)
+			if err == nil {
+				t.Fatal("expected validation error, got nil")
+			}
+			if !strings.Contains(err.Error(), tt.wantSubstr) {
+				t.Fatalf("error %q does not contain %q", err.Error(), tt.wantSubstr)
+			}
+		})
+	}
+}
