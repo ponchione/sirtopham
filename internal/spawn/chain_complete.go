@@ -94,9 +94,14 @@ Status: %s
 	if err := t.Backend.WriteDocument(ctx, receiptPath, receiptBody); err != nil {
 		return nil, fmt.Errorf("chain_complete: write receipt: %w", err)
 	}
-	if err := t.Store.CompleteChain(ctx, t.ChainID, chainStatus, in.Summary); err != nil {
+	closureSummary := in.Summary
+	if err := chain.ApplyTerminalChainClosure(ctx, t.Store, t.ChainID, chain.TerminalChainClosure{
+		Status:    chainStatus,
+		EventType: chain.EventChainCompleted,
+		Summary:   &closureSummary,
+		Extra:     map[string]any{"summary": in.Summary},
+	}); err != nil {
 		return nil, fmt.Errorf("chain_complete: update chain state: %w", err)
 	}
-	_ = t.Store.LogEvent(ctx, t.ChainID, "", chain.EventChainCompleted, map[string]any{"status": status, "summary": in.Summary})
 	return &tool.ToolResult{Success: true, Content: fmt.Sprintf("Chain %s marked as %s. Receipt at %s.", t.ChainID, chainStatus, receiptPath)}, tool.ErrChainComplete
 }

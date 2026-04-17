@@ -126,14 +126,38 @@ func (p *CodexProvider) readAuthStateWithImport(allowImport bool) (*codexAuthSta
 	}
 
 	storePath := sirtophamAuthStorePath(home)
-	state, err := readCodexStoreState(storePath)
+	privateState, err := readCodexStoreState(storePath)
 	if err == nil {
-		return state, nil
+		if !allowImport {
+			return privateState, nil
+		}
+		sharedState, sharedErr := p.readSharedCodexAuthState(home, storePath, allowImport)
+		if sharedErr == nil && shouldPreferSharedCodexAuthState(privateState, sharedState) {
+			if err := writeCodexStore(storePath, sharedState.auth); err != nil {
+				return nil, fmt.Errorf("codex: failed to persist imported auth state to %s: %w", storePath, err)
+			}
+			return sharedState, nil
+		}
+		return privateState, nil
 	}
 	if err != nil && !errors.Is(err, os.ErrNotExist) && !errors.Is(err, errCodexStoreStateNotFound) {
 		return nil, fmt.Errorf("codex: invalid Sirtopham auth store %s: %w", storePath, err)
 	}
 
+	sharedState, err := p.readSharedCodexAuthState(home, storePath, allowImport)
+	if err != nil {
+		return nil, err
+	}
+	if !allowImport {
+		return sharedState, nil
+	}
+	if err := writeCodexStore(storePath, sharedState.auth); err != nil {
+		return nil, fmt.Errorf("codex: failed to persist imported auth state to %s: %w", storePath, err)
+	}
+	return sharedState, nil
+}
+
+func (p *CodexProvider) readSharedCodexAuthState(home, storePath string, allowImport bool) (*codexAuthState, error) {
 	sharedPath := codexCLIAuthPath(home)
 	var sharedAuth codexAuthFile
 	if err := readJSONFileLocked(sharedPath, &sharedAuth); err != nil {
@@ -151,13 +175,33 @@ func (p *CodexProvider) readAuthStateWithImport(allowImport bool) (*codexAuthSta
 	if err != nil {
 		return nil, err
 	}
-	if !allowImport {
-		return sharedState, nil
-	}
-	if err := writeCodexStore(storePath, sharedState.auth); err != nil {
-		return nil, fmt.Errorf("codex: failed to persist imported auth state to %s: %w", storePath, err)
-	}
 	return sharedState, nil
+}
+
+func shouldPreferSharedCodexAuthState(privateState, sharedState *codexAuthState) bool {
+	if privateState == nil || sharedState == nil {
+		return false
+	}
+	sharedRefresh, sharedOK := codexLastRefresh(sharedState.auth)
+	privateRefresh, privateOK := codexLastRefresh(privateState.auth)
+	if !sharedOK {
+		return false
+	}
+	if !privateOK {
+		return true
+	}
+	return sharedRefresh.After(privateRefresh)
+}
+
+func codexLastRefresh(auth codexAuthFile) (time.Time, bool) {
+	if strings.TrimSpace(auth.LastRefresh) == "" {
+		return time.Time{}, false
+	}
+	t, err := time.Parse(time.RFC3339, auth.LastRefresh)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return t, true
 }
 
 func buildCodexAuthState(path, sourcePath string, version int, activeProvider string, fromSharedCLI bool, auth codexAuthFile) (*codexAuthState, error) {

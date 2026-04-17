@@ -51,6 +51,12 @@ def create_user(name, email):
 		symByID[s.ID] = s
 	}
 
+	if _, ok := symByID["py:app.service:module:app.service"]; !ok {
+		t.Errorf("missing module symbol for app.service")
+	}
+	if _, ok := symByID["py:app.models:module:app.models"]; !ok {
+		t.Errorf("missing module symbol for app.models")
+	}
 	if _, ok := symByID["py:app.service:class:AuthService"]; !ok {
 		t.Errorf("missing AuthService; have: %v", symIDs(result.Symbols))
 	}

@@ -31,8 +31,14 @@ type chainFlags struct {
 	ProjectRoot      string
 }
 
+type chainTurnRunner interface {
+	RunTurn(ctx context.Context, req agent.RunTurnRequest) (*agent.TurnResult, error)
+	Close()
+}
+
 var buildChainRuntime = buildOrchestratorRuntime
-var newChainAgentLoop = func(deps agent.AgentLoopDeps) *agent.AgentLoop { return agent.NewAgentLoop(deps) }
+var buildChainRegistry = buildOrchestratorRegistry
+var newChainTurnRunner = func(deps agent.AgentLoopDeps) chainTurnRunner { return agent.NewAgentLoop(deps) }
 
 func defaultChainFlags() chainFlags {
 	return chainFlags{MaxSteps: 100, MaxResolverLoops: 3, MaxDuration: 4 * time.Hour, TokenBudget: 5_000_000}
@@ -59,7 +65,7 @@ func newChainCmd(configPath *string) *cobra.Command {
 	return cmd
 }
 
-func runChain(ctx context.Context, configPath string, flags chainFlags, cmd *cobra.Command) error {
+func runChain(ctx context.Context, configPath string, flags chainFlags, cmd *cobra.Command) (err error) {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt)
 	defer stop()
 
@@ -114,11 +120,21 @@ func runChain(ctx context.Context, configPath string, flags chainFlags, cmd *cob
 		return nil
 	}
 
+	executionRegistered := false
+	defer func() {
+		if err == nil || !executionRegistered {
+			return
+		}
+		if closeErr := closeErroredChainExecution(ctx, rt.ChainStore, chainID, err.Error()); closeErr != nil {
+			err = fmt.Errorf("%w (while closing active execution: %v)", err, closeErr)
+		}
+	}()
 	if err := registerActiveChainExecution(ctx, rt.ChainStore, chainID, existing == nil, existing != nil && existing.Status == "paused"); err != nil {
 		return err
 	}
+	executionRegistered = true
 
-	registry, err := buildOrchestratorRegistry(rt, roleCfg, chainID)
+	registry, err := buildChainRegistry(rt, roleCfg, chainID)
 	if err != nil {
 		return err
 	}
@@ -130,7 +146,7 @@ func runChain(ctx context.Context, configPath string, flags chainFlags, cmd *cob
 	if err != nil {
 		return err
 	}
-	loop := newChainAgentLoop(agent.AgentLoopDeps{ContextAssembler: rt.ContextAssembler, ConversationManager: rt.ConversationManager, ProviderRouter: rt.ProviderRouter, ToolExecutor: &rtpkg.RegistryToolExecutor{Registry: registry, ProjectRoot: cfg.ProjectRoot}, ToolDefinitions: registry.ToolDefinitions(), PromptBuilder: agent.NewPromptBuilder(rt.Logger), TitleGenerator: conversation.NewTitleGen(rt.ConversationManager, rt.ProviderRouter, cfg.Routing.Default.Model, rt.Logger), Config: agent.AgentLoopConfig{MaxIterations: roleCfg.MaxTurns, BasePrompt: systemPrompt, ProviderName: cfg.Routing.Default.Provider, ModelName: cfg.Routing.Default.Model, ContextConfig: cfg.Context}, Logger: rt.Logger})
+	loop := newChainTurnRunner(agent.AgentLoopDeps{ContextAssembler: rt.ContextAssembler, ConversationManager: rt.ConversationManager, ProviderRouter: rt.ProviderRouter, ToolExecutor: &rtpkg.RegistryToolExecutor{Registry: registry, ProjectRoot: cfg.ProjectRoot}, ToolDefinitions: registry.ToolDefinitions(), PromptBuilder: agent.NewPromptBuilder(rt.Logger), TitleGenerator: conversation.NewTitleGen(rt.ConversationManager, rt.ProviderRouter, cfg.Routing.Default.Model, rt.Logger), Config: agent.AgentLoopConfig{MaxIterations: roleCfg.MaxTurns, BasePrompt: systemPrompt, ProviderName: cfg.Routing.Default.Provider, ModelName: cfg.Routing.Default.Model, ContextConfig: cfg.Context}, Logger: rt.Logger})
 	defer loop.Close()
 	turnTask := buildChainTask(flags, chainID)
 	if _, err := loop.RunTurn(ctx, agent.RunTurnRequest{ConversationID: conv.ID, TurnNumber: 1, Message: turnTask, ModelContextLimit: limit}); err != nil {
@@ -194,27 +210,27 @@ func prepareExistingChainForExecution(ctx context.Context, store *chain.Store, e
 	if existing == nil {
 		return nil
 	}
-	switch existing.Status {
-	case "paused", "pause_requested":
-		if err := store.SetChainStatus(ctx, existing.ID, "running"); err != nil {
-			return err
+	resumeReady, err := chain.ResumeExecutionReady(existing.Status)
+	if err != nil {
+		if errors.Is(err, chain.ErrChainAlreadyRunning) {
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "chain %s already running\n", existing.ID)
 		}
-		_ = store.LogEvent(ctx, existing.ID, "", chain.EventChainResumed, map[string]any{"resumed_by": "cli"})
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "chain %s resumed\n", existing.ID)
-		return nil
-	case "running":
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "chain %s continuing from existing running state\n", existing.ID)
-		return nil
-	case "cancelled", "completed", "failed", "partial", "cancel_requested":
-		return fmt.Errorf("chain %s is %s and cannot be resumed", existing.ID, existing.Status)
-	default:
-		return fmt.Errorf("chain %s is in unsupported state %q", existing.ID, existing.Status)
+		return fmt.Errorf("chain %s %w", existing.ID, err)
 	}
+	if !resumeReady {
+		return nil
+	}
+	if err := store.SetChainStatus(ctx, existing.ID, "running"); err != nil {
+		return err
+	}
+	_ = store.LogEvent(ctx, existing.ID, "", chain.EventChainResumed, map[string]any{"resumed_by": "cli"})
+	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "chain %s resumed\n", existing.ID)
+	return nil
 }
 
 func registerActiveChainExecution(ctx context.Context, store *chain.Store, chainID string, isNew bool, resumed bool) error {
 	eventType := chain.EventChainStarted
-	payload := map[string]any{"orchestrator_pid": os.Getpid()}
+	payload := map[string]any{"orchestrator_pid": os.Getpid(), "active_execution": true, "execution_id": id.New()}
 	if resumed {
 		eventType = chain.EventChainResumed
 		payload["resumed_by"] = "cli"
@@ -232,18 +248,25 @@ func handleChainRunInterruption(ctx context.Context, store *chain.Store, chainID
 	if !errors.Is(err, agent.ErrTurnCancelled) {
 		return false, nil
 	}
-	if err := finalizeRequestedChainStatus(ctx, store, chainID); err != nil {
+	cleanupCtx := context.WithoutCancel(ctx)
+	if err := finalizeRequestedChainStatus(cleanupCtx, store, chainID); err != nil {
 		return true, err
 	}
-	ch, loadErr := store.GetChain(ctx, chainID)
+	ch, loadErr := store.GetChain(cleanupCtx, chainID)
 	if loadErr != nil {
 		return true, loadErr
 	}
 	switch ch.Status {
 	case "cancelled":
+		if err := chain.CloseTerminalizedActiveExecution(cleanupCtx, store, chainID, ch.Status, nil); err != nil {
+			return true, err
+		}
 		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "chain %s cancelled\n", chainID)
 		return true, nil
 	case "paused":
+		if err := chain.CloseTerminalizedActiveExecution(cleanupCtx, store, chainID, ch.Status, nil); err != nil {
+			return true, err
+		}
 		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "chain %s paused\n", chainID)
 		return true, nil
 	default:
@@ -257,11 +280,40 @@ func finalizeRequestedChainStatus(ctx context.Context, store *chain.Store, chain
 		return err
 	}
 	if finalStatus, ok := chain.FinalizeControlStatus(ch.Status); ok {
+		eventType, eventOK := chain.FinalizeControlEventType(ch.Status)
+		if eventOK {
+			return chain.ApplyTerminalChainClosure(ctx, store, chainID, chain.TerminalChainClosure{
+				Status:    finalStatus,
+				EventType: eventType,
+				Extra:     map[string]any{"finalized_from": ch.Status},
+			})
+		}
 		if err := store.SetChainStatus(ctx, chainID, finalStatus); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func closeErroredChainExecution(ctx context.Context, store *chain.Store, chainID string, summary string) error {
+	events := mustListChainEvents(ctx, store, chainID)
+	if _, ok := chain.LatestActiveExecution(events); !ok {
+		return nil
+	}
+	return chain.ApplyTerminalChainClosure(ctx, store, chainID, chain.TerminalChainClosure{
+		Status:    "failed",
+		EventType: chain.EventChainCompleted,
+		Summary:   &summary,
+		Extra:     map[string]any{"summary": summary},
+	})
+}
+
+func mustListChainEvents(ctx context.Context, store *chain.Store, chainID string) []chain.Event {
+	events, err := store.ListEvents(ctx, chainID)
+	if err != nil {
+		return nil
+	}
+	return events
 }
 
 func validateChainFlags(flags chainFlags) error {

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api, ApiError } from "@/lib/api";
 import type { ContextReport, ContextSignalStreamResponse } from "@/types/metrics";
 
-const latestTurnFetchDeferMs = 250;
+const latestTurnFetchDeferMs = 500;
 
 export interface UseContextReportReturn {
   report: ContextReport | null;
@@ -20,7 +20,11 @@ export interface UseContextReportReturn {
   setLiveReport: (report: ContextReport) => void;
 }
 
-export function useContextReport(conversationId?: string): UseContextReportReturn {
+export function useContextReport(
+  conversationId?: string,
+  liveLatestTurnPending = false,
+  enabled = true,
+): UseContextReportReturn {
   const [report, setReport] = useState<ContextReport | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -78,7 +82,18 @@ export function useContextReport(conversationId?: string): UseContextReportRetur
   const reportTurn = report?.turn_number ?? 0;
 
   useEffect(() => {
-    if (currentTurn <= 0 || reportTurn === currentTurn) {
+    if (!enabled || currentTurn <= 0 || reportTurn === currentTurn) {
+      return;
+    }
+
+    const shouldWaitForLiveLatestTurn = (
+      liveLatestTurnPending
+      && isFollowingLatest
+      && currentTurn === totalTurns
+      && reportTurn === 0
+    );
+
+    if (shouldWaitForLiveLatestTurn) {
       return;
     }
 
@@ -98,7 +113,7 @@ export function useContextReport(conversationId?: string): UseContextReportRetur
     }
 
     void fetchReport(currentTurn);
-  }, [currentTurn, fetchReport, isFollowingLatest, reportTurn, totalTurns]);
+  }, [currentTurn, enabled, fetchReport, isFollowingLatest, liveLatestTurnPending, reportTurn, totalTurns]);
 
   const goToTurn = useCallback(
     (turn: number) => {

@@ -182,6 +182,49 @@ func (m *MyStruct) DoThing() {}
 	}
 }
 
+func TestGoAnalyzer_DoesNotEmitImplementsEdgesFromInterfaceDeclarations(t *testing.T) {
+	dir := t.TempDir()
+
+	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/interfaceself\n\ngo 1.21\n")
+	writeFile(t, filepath.Join(dir, "pkg", "backend.go"), `package pkg
+
+type Backend interface {
+	Read() string
+}
+
+type Reader struct{}
+
+func (Reader) Read() string { return "ok" }
+`)
+
+	analyzer, err := NewGoAnalyzer(dir)
+	if err != nil {
+		t.Fatalf("NewGoAnalyzer: %v", err)
+	}
+
+	result, err := analyzer.Analyze()
+	if err != nil {
+		t.Fatalf("Analyze: %v", err)
+	}
+
+	symbolIDs := make(map[string]bool)
+	for _, s := range result.Symbols {
+		symbolIDs[s.ID] = true
+	}
+
+	for _, e := range result.Edges {
+		if e.EdgeType != "IMPLEMENTS" {
+			continue
+		}
+		if !symbolIDs[e.SourceID] {
+			t.Fatalf("IMPLEMENTS edge source %s missing from symbols", e.SourceID)
+		}
+		if e.SourceID == "go:example.com/interfaceself/pkg:type:Backend" {
+			t.Fatalf("unexpected IMPLEMENTS edge emitted from interface declaration: %+v", e)
+		}
+	}
+}
+
 func TestGoAnalyzer_EmptyModule(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/empty\n\ngo 1.21\n")

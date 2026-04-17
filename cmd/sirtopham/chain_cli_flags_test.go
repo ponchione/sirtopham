@@ -84,8 +84,8 @@ func TestValidateChainStatusTransition(t *testing.T) {
 	if err := validateChainStatusTransition("paused", "running", "chain-1"); err != nil {
 		t.Fatalf("resume paused chain error = %v, want nil", err)
 	}
-	if err := validateChainStatusTransition("pause_requested", "running", "chain-1"); err != nil {
-		t.Fatalf("resume pause_requested chain error = %v, want nil", err)
+	if err := validateChainStatusTransition("pause_requested", "running", "chain-1"); err == nil {
+		t.Fatal("expected pause_requested chain resume transition to fail")
 	}
 	if err := validateChainStatusTransition("completed", "running", "chain-1"); err == nil {
 		t.Fatal("expected completed chain resume to fail")
