@@ -14,9 +14,9 @@ func newInstallCmd() *cobra.Command {
 	var configFilename string
 	cmd := &cobra.Command{
 		Use:   "install",
-		Short: "Substitute {{SODORYARD_AGENTS_DIR}} in yard.yaml",
-		Long: `Resolve the {{SODORYARD_AGENTS_DIR}} placeholder that 'yard init'
-leaves in the generated yard.yaml.
+		Short: "Substitute legacy {{SODORYARD_AGENTS_DIR}} placeholders",
+		Long: `Resolve the legacy {{SODORYARD_AGENTS_DIR}} placeholder that older
+yard configs may still contain.
 
 The agents directory is resolved in this order:
   1. The --sodoryard-agents-dir flag value (if set)
@@ -28,7 +28,11 @@ and idempotent (re-running on an already-substituted file is a
 no-op).
 
 Inside the official yard Docker image, SODORYARD_AGENTS_DIR is
-preset to /opt/yard/agents so 'yard install' works with no flags.`,
+preset to /opt/yard/agents so 'yard install' works with no flags.
+
+Stock yard init configs now use built-in prompt markers and do not
+require this command unless you are migrating or maintaining an older
+placeholder-based config.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runInstall(cmd, sodoryardAgentsDir, configFilename)
 		},

@@ -22,7 +22,6 @@ func TestRunInitializesEmptyDirectory(t *testing.T) {
 		t.Fatalf("Run returned nil report")
 	}
 
-	// Files that must exist after init.
 	wantPaths := []string{
 		"yard.yaml",
 		".yard",
@@ -49,27 +48,25 @@ func TestRunInitializesEmptyDirectory(t *testing.T) {
 		}
 	}
 
-	// yard.yaml content checks.
 	configData, err := os.ReadFile(filepath.Join(projectRoot, "yard.yaml"))
 	if err != nil {
 		t.Fatalf("ReadFile yard.yaml: %v", err)
 	}
 	got := string(configData)
 
-	// PROJECT_ROOT was substituted (quoted in YAML for template validity).
 	if !strings.Contains(got, "project_root: \""+projectRoot+"\"") {
 		t.Errorf("expected project_root substituted to %s, got:\n%s", projectRoot, got)
 	}
-	// PROJECT_NAME (basename) was substituted.
 	wantName := filepath.Base(projectRoot)
 	if !strings.Contains(got, "Project: "+wantName) {
 		t.Errorf("expected PROJECT_NAME substituted to %s, got:\n%s", wantName, got)
 	}
-	// SODORYARD_AGENTS_DIR placeholder is preserved.
-	if !strings.Contains(got, "{{SODORYARD_AGENTS_DIR}}/thomas.md") {
-		t.Errorf("expected {{SODORYARD_AGENTS_DIR}} placeholder to be preserved")
+	if !strings.Contains(got, "system_prompt: \"builtin:coder\"") {
+		t.Errorf("expected builtin coder marker in generated config")
 	}
-	// All 13 roles are present in agent_roles.
+	if strings.Contains(got, "{{SODORYARD_AGENTS_DIR}}") {
+		t.Errorf("expected generated config to avoid {{SODORYARD_AGENTS_DIR}} placeholder")
+	}
 	wantRoles := []string{
 		"orchestrator:", "coder:", "planner:", "test-writer:", "resolver:",
 		"correctness-auditor:", "integration-auditor:", "performance-auditor:",
@@ -82,7 +79,6 @@ func TestRunInitializesEmptyDirectory(t *testing.T) {
 		}
 	}
 
-	// .gitignore has the railway entries.
 	gitignoreData, err := os.ReadFile(filepath.Join(projectRoot, ".gitignore"))
 	if err != nil {
 		t.Fatalf("ReadFile .gitignore: %v", err)
@@ -101,7 +97,6 @@ func TestRunIsIdempotent(t *testing.T) {
 		t.Fatalf("first run: %v", err)
 	}
 
-	// Capture file contents after first run.
 	firstYaml, err := os.ReadFile(filepath.Join(projectRoot, "yard.yaml"))
 	if err != nil {
 		t.Fatalf("ReadFile after first run: %v", err)
@@ -111,7 +106,6 @@ func TestRunIsIdempotent(t *testing.T) {
 		t.Fatalf("ReadFile .gitignore after first run: %v", err)
 	}
 
-	// Re-run.
 	report, err := Run(context.Background(), Options{ProjectRoot: projectRoot})
 	if err != nil {
 		t.Fatalf("second run: %v", err)
@@ -120,7 +114,6 @@ func TestRunIsIdempotent(t *testing.T) {
 		t.Fatal("nil report on re-run")
 	}
 
-	// Content of files must not change.
 	secondYaml, err := os.ReadFile(filepath.Join(projectRoot, "yard.yaml"))
 	if err != nil {
 		t.Fatalf("ReadFile after second run: %v", err)

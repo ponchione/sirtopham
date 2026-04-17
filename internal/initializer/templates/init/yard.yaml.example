@@ -2,16 +2,13 @@
 #
 # Project: {{PROJECT_NAME}}
 #
-# This file was created by `yard init`. Two tokens were substituted at
-# generation time: {{PROJECT_ROOT}} and {{PROJECT_NAME}}. The remaining
-# {{PLACEHOLDERS}} below need a one-time hand substitution before the
-# railway can run against this project — most notably:
+# This file was created by `yard init`. `{{PROJECT_ROOT}}` and
+# `{{PROJECT_NAME}}` were substituted at generation time. Stock agent
+# prompts are shipped in the binary and selected below with explicit
+# `builtin:<role>` markers. You only need filesystem prompt paths if you
+# want to override a built-in prompt for a role.
 #
-#   {{SODORYARD_AGENTS_DIR}}  → absolute path to your sodoryard install's
-#                                agents/ directory
-#                                (e.g. /home/you/source/sodoryard/agents)
-#
-# Find-and-replace works fine. After substitution, run:
+# After confirming provider/auth settings, run:
 #
 #   tidmouth index --config yard.yaml
 #   sirtopham chain --config yard.yaml --task "..."
@@ -73,9 +70,10 @@ brain:
   vault_path: .brain
   log_brain_queries: true
 
-# Agent roles — all 13 are seeded by `yard init`. Each system_prompt path
-# uses the {{SODORYARD_AGENTS_DIR}} placeholder; substitute once with your
-# sodoryard install path and every role will resolve.
+# Agent roles — all 13 are seeded by `yard init`. Stock roles use
+# explicit `builtin:<role>` markers so the generated config is runnable
+# without any external prompts directory. Replace a marker with a file path
+# only if you want a custom prompt override for that role.
 #
 # Roles (engine names from the railway):
 #   orchestrator         — Sir Topham Hatt (sirtophamhatt.md)
@@ -94,7 +92,7 @@ brain:
 
 agent_roles:
   orchestrator:
-    system_prompt: "{{SODORYARD_AGENTS_DIR}}/sirtophamhatt.md"
+    system_prompt: "builtin:orchestrator"
     tools:
       - brain
     custom_tools:
@@ -114,7 +112,7 @@ agent_roles:
     max_tokens: 500000
 
   coder:
-    system_prompt: "{{SODORYARD_AGENTS_DIR}}/thomas.md"
+    system_prompt: "builtin:coder"
     tools:
       - brain
       - file
@@ -135,7 +133,7 @@ agent_roles:
     max_tokens: 1000000
 
   planner:
-    system_prompt: "{{SODORYARD_AGENTS_DIR}}/gordon.md"
+    system_prompt: "builtin:planner"
     tools:
       - brain
       - file:read
@@ -154,7 +152,7 @@ agent_roles:
     max_tokens: 300000
 
   test-writer:
-    system_prompt: "{{SODORYARD_AGENTS_DIR}}/rosie.md"
+    system_prompt: "builtin:test-writer"
     tools:
       - brain
       - file
@@ -175,7 +173,7 @@ agent_roles:
     max_tokens: 500000
 
   resolver:
-    system_prompt: "{{SODORYARD_AGENTS_DIR}}/victor.md"
+    system_prompt: "builtin:resolver"
     tools:
       - brain
       - file
@@ -196,7 +194,7 @@ agent_roles:
     max_tokens: 800000
 
   correctness-auditor:
-    system_prompt: "{{SODORYARD_AGENTS_DIR}}/percy.md"
+    system_prompt: "builtin:correctness-auditor"
     tools:
       - brain
       - file:read
@@ -216,7 +214,7 @@ agent_roles:
     max_tokens: 300000
 
   integration-auditor:
-    system_prompt: "{{SODORYARD_AGENTS_DIR}}/toby.md"
+    system_prompt: "builtin:integration-auditor"
     tools:
       - brain
       - file:read
@@ -237,7 +235,7 @@ agent_roles:
     max_tokens: 300000
 
   performance-auditor:
-    system_prompt: "{{SODORYARD_AGENTS_DIR}}/spencer.md"
+    system_prompt: "builtin:performance-auditor"
     tools:
       - brain
       - file:read
@@ -258,7 +256,7 @@ agent_roles:
     max_tokens: 300000
 
   security-auditor:
-    system_prompt: "{{SODORYARD_AGENTS_DIR}}/diesel.md"
+    system_prompt: "builtin:security-auditor"
     tools:
       - brain
       - file:read
@@ -278,7 +276,7 @@ agent_roles:
     max_tokens: 300000
 
   quality-auditor:
-    system_prompt: "{{SODORYARD_AGENTS_DIR}}/james.md"
+    system_prompt: "builtin:quality-auditor"
     tools:
       - brain
       - file:read
@@ -298,7 +296,7 @@ agent_roles:
     max_tokens: 300000
 
   docs-arbiter:
-    system_prompt: "{{SODORYARD_AGENTS_DIR}}/harold.md"
+    system_prompt: "builtin:docs-arbiter"
     tools:
       - brain
       - file:read
@@ -317,7 +315,7 @@ agent_roles:
     max_tokens: 300000
 
   epic-decomposer:
-    system_prompt: "{{SODORYARD_AGENTS_DIR}}/edward.md"
+    system_prompt: "builtin:epic-decomposer"
     tools:
       - brain
       - file:read
@@ -336,7 +334,7 @@ agent_roles:
     max_tokens: 300000
 
   task-decomposer:
-    system_prompt: "{{SODORYARD_AGENTS_DIR}}/emily.md"
+    system_prompt: "builtin:task-decomposer"
     tools:
       - brain
       - file:read

@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/ponchione/sodoryard/internal/agent"
-	"github.com/ponchione/sodoryard/internal/conversation"
 	appconfig "github.com/ponchione/sodoryard/internal/config"
+	"github.com/ponchione/sodoryard/internal/conversation"
 	"github.com/ponchione/sodoryard/internal/role"
 	rtpkg "github.com/ponchione/sodoryard/internal/runtime"
 	"github.com/ponchione/sodoryard/internal/tool"
@@ -127,7 +127,7 @@ func TestLoadRoleSystemPromptResolvesRelativeToProjectRoot(t *testing.T) {
 	if err := os.WriteFile(promptPath, []byte("you are coder"), 0o644); err != nil {
 		t.Fatalf("WriteFile returned error: %v", err)
 	}
-	got, err := rtpkg.LoadRoleSystemPrompt(projectRoot, "agents/coder.md")
+	got, _, err := rtpkg.LoadRoleSystemPrompt("coder", projectRoot, "agents/coder.md")
 	if err != nil {
 		t.Fatalf("loadRoleSystemPrompt returned error: %v", err)
 	}

@@ -132,7 +132,7 @@ func yardRunHeadless(cmd *cobra.Command, configPath string, flags yardRunFlags) 
 	if !ok {
 		return nil, yardRunExitError{code: yardRunExitInfrastructure, err: fmt.Errorf("agent role %q not found in config", flags.Role)}
 	}
-	systemPrompt, err := rtpkg.LoadRoleSystemPrompt(cfg.ProjectRoot, roleCfg.SystemPrompt)
+	systemPrompt, _, err := rtpkg.LoadRoleSystemPrompt(flags.Role, cfg.ProjectRoot, roleCfg.SystemPrompt)
 	if err != nil {
 		return nil, yardRunExitError{code: yardRunExitInfrastructure, err: err}
 	}

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/ponchione/sodoryard/internal/embeddedprompts"
 	"gopkg.in/yaml.v3"
 )
 
@@ -895,8 +896,16 @@ func (c *Config) validateAgentRoles() error {
 		if trimmedName == "" {
 			return errors.New("invalid field agent_roles (role names must be non-empty)")
 		}
-		if strings.TrimSpace(role.SystemPrompt) == "" {
-			return fmt.Errorf("invalid field agent_roles.%s.system_prompt=\"\" (must not be empty)", name)
+		trimmedPrompt := strings.TrimSpace(role.SystemPrompt)
+		if trimmedPrompt == "" {
+			if !embeddedprompts.Has(trimmedName) {
+				return fmt.Errorf("invalid field agent_roles.%s.system_prompt=\"\" (must not be empty unless the role has a built-in default)", name)
+			}
+		} else if strings.HasPrefix(trimmedPrompt, "builtin:") {
+			builtinRole := strings.TrimSpace(strings.TrimPrefix(trimmedPrompt, "builtin:"))
+			if !embeddedprompts.Has(builtinRole) {
+				return fmt.Errorf("invalid field agent_roles.%s.system_prompt=%q (unknown built-in role system prompt)", name, role.SystemPrompt)
+			}
 		}
 		for _, group := range role.Tools {
 			if _, ok := allowedAgentRoleToolGroups[strings.TrimSpace(group)]; !ok {

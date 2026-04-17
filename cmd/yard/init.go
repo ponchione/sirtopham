@@ -23,8 +23,9 @@ func newInitCmd() *cobra.Command {
 
 Safe to re-run — never overwrites existing files or data.
 
-After init, edit yard.yaml to substitute {{SODORYARD_AGENTS_DIR}}
-with the absolute path to your sodoryard install's agents/ dir.`,
+Stock agent prompts are embedded in the binary, so the generated yard.yaml
+works without any prompt-directory setup. Override a role's system_prompt with
+an explicit file path only if you want a custom prompt.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runInit(cmd.Context(), cmd, configFilename)
 		},
@@ -60,11 +61,9 @@ func runInit(ctx context.Context, cmd *cobra.Command, configFilename string) err
 
 	_, _ = fmt.Fprintln(out, "\nDone.")
 	_, _ = fmt.Fprintln(out, "Next steps:")
-	_, _ = fmt.Fprintln(out, "  1. Edit yard.yaml — replace {{SODORYARD_AGENTS_DIR}} with the absolute")
-	_, _ = fmt.Fprintln(out, "     path to your sodoryard install's agents/ directory.")
-	_, _ = fmt.Fprintln(out, "  2. Confirm the provider block matches your auth setup")
+	_, _ = fmt.Fprintln(out, "  1. Confirm the provider block matches your auth setup")
 	_, _ = fmt.Fprintln(out, "     (default is codex via ~/.sirtopham/auth.json).")
-	_, _ = fmt.Fprintln(out, "  3. Run `tidmouth index` to populate the code search index.")
-	_, _ = fmt.Fprintln(out, "  4. Run `sirtopham chain --task \"...\"` to start your first chain.")
+	_, _ = fmt.Fprintln(out, "  2. Run `tidmouth index` to populate the code search index.")
+	_, _ = fmt.Fprintln(out, "  3. Run `sirtopham chain --task \"...\"` to start your first chain.")
 	return nil
 }
