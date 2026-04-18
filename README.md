@@ -169,6 +169,9 @@ make all
 # Binaries land in bin/
 ls bin/
 # tidmouth  sirtopham  knapford  yard
+
+# Copy the current build into ~/bin for normal shell use
+make install-user-bin
 ```
 
 ### Initialize a project
