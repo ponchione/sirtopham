@@ -8,7 +8,7 @@ LANCEDB_CGO_LDFLAGS := -L$(LANCEDB_LIB_DIR) -llancedb_go -lm -ldl -lpthread
 CGO_TEST_ENV        := CGO_ENABLED=1 CGO_LDFLAGS="$(LANCEDB_CGO_LDFLAGS)" LD_LIBRARY_PATH="$(LANCEDB_LIB_DIR)"
 CGO_BUILD_ENV       := CGO_ENABLED=1 CGO_LDFLAGS="$(LANCEDB_CGO_LDFLAGS) -Wl,-rpath,$(LANCEDB_LIB_DIR)"
 
-.PHONY: all build tidmouth sirtopham knapford yard test dev-backend dev-frontend dev frontend-deps frontend-build frontend-typecheck clean
+.PHONY: all build tidmouth sirtopham knapford yard install-user-bin test dev-backend dev-frontend dev frontend-deps frontend-build frontend-typecheck clean
 
 # `make all` builds every monorepo binary. `make build` is an alias for
 # `make tidmouth` to preserve the single-binary workflow during Phase 1/2.
@@ -41,6 +41,9 @@ knapford:
 yard:
 	mkdir -p $(BIN_DIR)
 	$(CGO_BUILD_ENV) go build $(GOFLAGS_DB) -o $(BIN_DIR)/yard ./cmd/yard
+
+install-user-bin:
+	bash ./scripts/install-user-bin.sh
 
 test:
 	$(CGO_TEST_ENV) go test $(GOFLAGS_DB) ./...
