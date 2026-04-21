@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"os/signal"
 	"strings"
 	"syscall"
@@ -73,62 +72,6 @@ var buildYardChainRuntime = rtpkg.BuildOrchestratorRuntime
 var buildYardChainRegistry = rtpkg.BuildOrchestratorRegistry
 var newYardChainTurnRunner = func(deps agent.AgentLoopDeps) chainTurnRunner { return agent.NewAgentLoop(deps) }
 
-type yardBackgroundChainExecutionRequest struct {
-	ChainID     string
-	IsNew       bool
-	Resumed     bool
-	ProjectRoot string
-	Brain       string
-}
-
-type yardBackgroundChainChildHandle struct {
-	wait <-chan error
-}
-
-var launchYardChainBackgroundChild = func(configPath string, req yardBackgroundChainExecutionRequest) (*yardBackgroundChainChildHandle, error) {
-	exePath, err := os.Executable()
-	if err != nil {
-		return nil, fmt.Errorf("resolve executable: %w", err)
-	}
-	devNull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
-	if err != nil {
-		return nil, fmt.Errorf("open %s: %w", os.DevNull, err)
-	}
-	defer devNull.Close()
-	args := make([]string, 0, 10)
-	if strings.TrimSpace(configPath) != "" {
-		args = append(args, "--config", configPath)
-	}
-	args = append(args, "chain", "_run-background", "--chain-id", req.ChainID)
-	if strings.TrimSpace(req.ProjectRoot) != "" {
-		args = append(args, "--project", req.ProjectRoot)
-	}
-	if strings.TrimSpace(req.Brain) != "" {
-		args = append(args, "--brain", req.Brain)
-	}
-	if req.IsNew {
-		args = append(args, "--is-new")
-	}
-	if req.Resumed {
-		args = append(args, "--resumed")
-	}
-	cmd := exec.Command(exePath, args...)
-	cmd.Stdin = devNull
-	cmd.Stdout = devNull
-	cmd.Stderr = devNull
-	cmd.Env = os.Environ()
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("start background chain child: %w", err)
-	}
-	waitCh := make(chan error, 1)
-	go func() {
-		waitCh <- cmd.Wait()
-		close(waitCh)
-	}()
-	return &yardBackgroundChainChildHandle{wait: waitCh}, nil
-}
-
 func newYardChainCmd(configPath *string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "chain",
@@ -142,7 +85,6 @@ func newYardChainCmd(configPath *string) *cobra.Command {
 		newYardChainCancelCmd(configPath),
 		newYardChainPauseCmd(configPath),
 		newYardChainResumeCmd(configPath),
-		newYardChainRunBackgroundCmd(configPath),
 	)
 	return cmd
 }
@@ -174,34 +116,23 @@ func newYardChainStartCmd(configPath *string) *cobra.Command {
 	return cmd
 }
 
-func newYardChainRunBackgroundCmd(configPath *string) *cobra.Command {
-	var req yardBackgroundChainExecutionRequest
-	cmd := &cobra.Command{
-		Use:    "_run-background",
-		Short:  "Run a chain execution in hidden background worker mode",
-		Hidden: true,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if strings.TrimSpace(req.ChainID) == "" {
-				return fmt.Errorf("--chain-id is required")
-			}
-			return yardRunChainBackgroundWorker(cmd.Context(), *configPath, req, cmd)
-		},
-	}
-	cmd.Flags().StringVar(&req.ChainID, "chain-id", "", "Chain execution identifier")
-	cmd.Flags().StringVar(&req.ProjectRoot, "project", "", "Override project root")
-	cmd.Flags().StringVar(&req.Brain, "brain", "", "Override brain vault path")
-	cmd.Flags().BoolVar(&req.IsNew, "is-new", false, "Whether this background execution owns a newly created chain")
-	cmd.Flags().BoolVar(&req.Resumed, "resumed", false, "Whether this background execution is resuming a paused chain")
-	return cmd
-}
-
-func yardRunChain(ctx context.Context, configPath string, flags yardChainFlags, cmd *cobra.Command) error {
+func yardRunChain(ctx context.Context, configPath string, flags yardChainFlags, cmd *cobra.Command) (err error) {
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt)
+	defer stop()
 	cfg, err := appconfig.Load(configPath)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
 	applyYardChainOverrides(cfg, flags)
 	if err := cfg.Validate(); err != nil {
+		return err
+	}
+	roleCfg, ok := cfg.AgentRoles["orchestrator"]
+	if !ok {
+		return fmt.Errorf("agent role %q not found in config", "orchestrator")
+	}
+	systemPrompt, _, err := rtpkg.LoadRoleSystemPrompt("orchestrator", cfg.ProjectRoot, roleCfg.SystemPrompt)
+	if err != nil {
 		return err
 	}
 	rt, err := buildYardChainRuntime(ctx, cfg)
@@ -219,13 +150,14 @@ func yardRunChain(ctx context.Context, configPath string, flags yardChainFlags, 
 	if err != nil {
 		return err
 	}
-	launchReq := yardBackgroundChainExecutionRequest{ChainID: chainID, IsNew: existing == nil, ProjectRoot: strings.TrimSpace(flags.ProjectRoot), Brain: strings.TrimSpace(flags.Brain)}
+	isNew := existing == nil
+	resumed := false
 	if existing != nil {
 		flags, err = populateYardChainFlagsFromExisting(flags, existing)
 		if err != nil {
 			return err
 		}
-		launchReq.Resumed = existing.Status == "paused"
+		resumed = existing.Status == "paused"
 		if err := prepareYardExistingChainForExecution(ctx, rt.ChainStore, existing, cmd); err != nil {
 			return err
 		}
@@ -236,82 +168,26 @@ func yardRunChain(ctx context.Context, configPath string, flags yardChainFlags, 
 		_ = rt.ChainStore.LogEvent(ctx, chainID, "", chain.EventChainStarted, map[string]any{"specs": yardParseSpecs(flags.Specs), "task": flags.Task})
 	}
 
-	if flags.DryRun {
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s\n", chainID)
-		return nil
-	}
-	child, err := launchYardChainBackgroundChild(configPath, launchReq)
-	if err != nil {
-		return err
-	}
 	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s\n", chainID)
-	if err := waitForYardChainBackgroundHandshake(ctx, rt.ChainStore, chainID, os.Getpid(), child, 5*time.Second); err != nil {
-		return err
-	}
-	if !flags.Watch {
+	if flags.DryRun {
 		return nil
 	}
-	watchCtx, stop := signal.NotifyContext(ctx, os.Interrupt)
-	defer stop()
-	watch := startYardChainWatch(watchCtx, cmd.ErrOrStderr(), rt.ChainStore, chainID, true, chainRenderOptions{Verbosity: normalizeChainVerbosity(flags.Verbosity)})
-	if err := watch.wait(yardChainWatchFlushTimeout); err != nil {
-		return err
-	}
-	if watchCtx.Err() != nil {
-		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "detached from live output; chain %s continues running\n", chainID)
-	}
-	return nil
-}
 
-func yardRunChainBackgroundWorker(ctx context.Context, configPath string, req yardBackgroundChainExecutionRequest, cmd *cobra.Command) (err error) {
-	ctx, stop := signal.NotifyContext(ctx, os.Interrupt)
-	defer stop()
-	cfg, err := appconfig.Load(configPath)
-	if err != nil {
-		return fmt.Errorf("load config: %w", err)
-	}
-	applyYardChainOverrides(cfg, yardChainFlags{ProjectRoot: req.ProjectRoot, Brain: req.Brain})
-	if err := cfg.Validate(); err != nil {
-		return err
-	}
-	roleCfg, ok := cfg.AgentRoles["orchestrator"]
-	if !ok {
-		return fmt.Errorf("agent role %q not found in config", "orchestrator")
-	}
-	systemPrompt, _, err := rtpkg.LoadRoleSystemPrompt("orchestrator", cfg.ProjectRoot, roleCfg.SystemPrompt)
-	if err != nil {
-		return err
-	}
-	rt, err := buildYardChainRuntime(ctx, cfg)
-	if err != nil {
-		return err
-	}
-	defer rt.Cleanup()
-	existing, err := resolveYardExistingChain(ctx, rt.ChainStore, req.ChainID)
-	if err != nil {
-		return err
-	}
-	if existing == nil {
-		return fmt.Errorf("chain %s not found", req.ChainID)
-	}
-	flags, err := populateYardChainFlagsFromExisting(yardChainFlags{ChainID: req.ChainID}, existing)
-	if err != nil {
-		return err
-	}
 	executionRegistered := false
 	defer func() {
 		if err == nil || !executionRegistered {
 			return
 		}
-		if closeErr := closeErroredYardChainExecution(context.WithoutCancel(ctx), rt.ChainStore, req.ChainID, err.Error()); closeErr != nil {
+		if closeErr := closeErroredYardChainExecution(context.WithoutCancel(ctx), rt.ChainStore, chainID, err.Error()); closeErr != nil {
 			err = fmt.Errorf("%w (while closing active execution: %v)", err, closeErr)
 		}
 	}()
-	if err := registerYardActiveChainExecution(ctx, rt.ChainStore, req.ChainID, req.IsNew, req.Resumed); err != nil {
+	if err := registerYardActiveChainExecution(ctx, rt.ChainStore, chainID, isNew, resumed); err != nil {
 		return err
 	}
 	executionRegistered = true
-	registry, err := buildYardChainRegistry(rt, roleCfg, req.ChainID)
+
+	registry, err := buildYardChainRegistry(rt, roleCfg, chainID)
 	if err != nil {
 		return err
 	}
@@ -325,63 +201,35 @@ func yardRunChainBackgroundWorker(ctx context.Context, configPath string, req ya
 	}
 	loop := newYardChainTurnRunner(agent.AgentLoopDeps{ContextAssembler: rt.ContextAssembler, ConversationManager: rt.ConversationManager, ProviderRouter: rt.ProviderRouter, ToolExecutor: &rtpkg.RegistryToolExecutor{Registry: registry, ProjectRoot: cfg.ProjectRoot}, ToolDefinitions: registry.ToolDefinitions(), PromptBuilder: agent.NewPromptBuilder(rt.Logger), TitleGenerator: conversation.NewTitleGen(rt.ConversationManager, rt.ProviderRouter, cfg.Routing.Default.Model, rt.Logger), Config: agent.AgentLoopConfig{MaxIterations: roleCfg.MaxTurns, BasePrompt: systemPrompt, ProviderName: cfg.Routing.Default.Provider, ModelName: cfg.Routing.Default.Model, ContextConfig: cfg.Context}, Logger: rt.Logger})
 	defer loop.Close()
-	steps, err := rt.ChainStore.ListSteps(ctx, req.ChainID)
+	watch := startYardChainWatch(ctx, cmd.ErrOrStderr(), rt.ChainStore, chainID, flags.Watch, chainRenderOptions{Verbosity: normalizeChainVerbosity(flags.Verbosity)})
+	steps, err := rt.ChainStore.ListSteps(ctx, chainID)
 	if err != nil {
 		return err
 	}
-	turnTask := yardBuildChainTask(flags, req.ChainID, existingReceiptPaths(steps))
+	turnTask := yardBuildChainTask(flags, chainID, existingReceiptPaths(steps))
 	if _, err := loop.RunTurn(ctx, agent.RunTurnRequest{ConversationID: conv.ID, TurnNumber: 1, Message: turnTask, ModelContextLimit: limit}); err != nil {
-		if handled, handleErr := handleYardChainRunInterruption(ctx, rt.ChainStore, req.ChainID, err, cmd); handled || handleErr != nil {
-			return handleErr
+		if handled, handleErr := handleYardChainRunInterruption(ctx, rt.ChainStore, chainID, err, cmd); handled || handleErr != nil {
+			if handleErr != nil {
+				return handleErr
+			}
+			return watch.wait(yardChainWatchFlushTimeout)
 		}
 		return err
 	}
-	if err := finalizeYardRequestedChainStatus(ctx, rt.ChainStore, req.ChainID); err != nil {
+	if err := finalizeYardRequestedChainStatus(ctx, rt.ChainStore, chainID); err != nil {
 		return err
 	}
-	stored, err := rt.ChainStore.GetChain(ctx, req.ChainID)
+	stored, err := rt.ChainStore.GetChain(ctx, chainID)
 	if err != nil {
 		return err
 	}
 	if stored.Status == "failed" {
-		return fmt.Errorf("chain %s failed", req.ChainID)
+		return fmt.Errorf("chain %s failed", chainID)
+	}
+	if err := watch.wait(yardChainWatchFlushTimeout); err != nil {
+		return err
 	}
 	return nil
-}
-
-func waitForYardChainBackgroundHandshake(ctx context.Context, store *chain.Store, chainID string, parentPID int, child *yardBackgroundChainChildHandle, timeout time.Duration) error {
-	if timeout <= 0 {
-		timeout = 5 * time.Second
-	}
-	deadline := time.Now().Add(timeout)
-	for {
-		events, err := store.ListEvents(ctx, chainID)
-		if err == nil {
-			if exec, ok := chain.LatestActiveExecution(events); ok && exec.OrchestratorPID > 0 && exec.OrchestratorPID != parentPID {
-				return nil
-			}
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case waitErr, ok := <-child.wait:
-			if ok {
-				events, _ := store.ListEvents(context.WithoutCancel(ctx), chainID)
-				if exec, active := chain.LatestActiveExecution(events); active && exec.OrchestratorPID > 0 && exec.OrchestratorPID != parentPID {
-					return nil
-				}
-				if waitErr != nil {
-					return fmt.Errorf("background chain child exited before registering execution: %w", waitErr)
-				}
-				return fmt.Errorf("background chain child exited before registering execution")
-			}
-		default:
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("background chain child did not register active execution for chain %s", chainID)
-		}
-		time.Sleep(25 * time.Millisecond)
-	}
 }
 
 func yardBuildChainTask(flags yardChainFlags, chainID string, receiptPaths []string) string {
@@ -553,6 +401,15 @@ func handleYardChainRunInterruption(ctx context.Context, store *chain.Store, cha
 		}
 		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "chain %s paused\n", chainID)
 		return true, nil
+	case "running":
+		if ctx.Err() != nil {
+			if err := chain.ApplyTerminalChainClosure(cleanupCtx, store, chainID, chain.TerminalChainClosure{Status: "cancelled", EventType: chain.EventChainCancelled, Extra: map[string]any{"finalized_from": "interrupted"}}); err != nil {
+				return true, err
+			}
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "chain %s cancelled\n", chainID)
+			return true, nil
+		}
+		return false, nil
 	default:
 		return false, nil
 	}

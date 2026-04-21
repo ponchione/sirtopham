@@ -303,18 +303,20 @@ func TestGetAccessToken_ExpiredTokenTriggersDirectRefreshWithoutShellingOut(t *t
 	}
 }
 
-func TestGetAccessToken_PrefersNewerSharedStoreOverStalePrivateStore(t *testing.T) {
+func TestGetAccessToken_PrivateStoreWinsWhenSharedStoreLooksNewer(t *testing.T) {
 	tmpDir := t.TempDir()
 	overrideHomeDir(t, tmpDir)
 
+	privateToken := testJWT(t, time.Now().Add(2*time.Hour).UTC())
 	sharedToken := testJWT(t, time.Now().Add(24*time.Hour).UTC())
-	writeAuthFile(t, tmpDir, `{"auth_mode":"chatgpt","last_refresh":"2026-04-10T00:43:46Z","tokens":{"access_token": "`+sharedToken+`","refresh_token": "shared-refresh"}}`)
+	writeAuthFile(t, tmpDir, `{"auth_mode":"chatgpt","last_refresh":"2026-04-10T00:43:46Z","tokens":{"access_token": "`+sharedToken+`","refresh_token": "shared_refresh_token"}}`)
 	writePrivateAuthStore(t, tmpDir, codexAuthFile{
 		AuthMode:    "chatgpt",
-		ExpiresAt:   time.Now().Add(-2 * time.Hour).UTC().Format(time.RFC3339),
+		ExpiresAt:   time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339),
 		LastRefresh: "2026-04-03T17:56:16Z",
 		Tokens: codexAuthTokens{
-			AccessToken: testJWT(t, time.Now().Add(-24*time.Hour).UTC()),
+			AccessToken:  privateToken,
+			RefreshToken: "private_refresh_token",
 		},
 	})
 
@@ -323,15 +325,82 @@ func TestGetAccessToken_PrefersNewerSharedStoreOverStalePrivateStore(t *testing.
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if token != sharedToken {
-		t.Fatalf("expected newer shared-store token, got %q", token)
+	if token != privateToken {
+		t.Fatalf("expected private-store token, got %q", token)
 	}
+
 	status, err := p.AuthStatus(context.Background())
 	if err != nil {
 		t.Fatalf("AuthStatus() error: %v", err)
 	}
 	if status.Source != "sirtopham_store" || status.StorePath == "" {
-		t.Fatalf("expected imported private auth state after runtime use, got %+v", status)
+		t.Fatalf("expected private auth state after runtime use, got %+v", status)
+	}
+}
+
+func TestGetAccessToken_ImportsSharedStoreOnceThenUsesPrivateStore(t *testing.T) {
+	tmpDir := t.TempDir()
+	overrideHomeDir(t, tmpDir)
+
+	sharedToken := testJWT(t, time.Now().Add(2*time.Hour).UTC())
+	writeAuthFile(t, tmpDir, `{"auth_mode":"chatgpt","last_refresh":"2026-04-10T00:43:46Z","tokens":{"access_token": "`+sharedToken+`","refresh_token": "shared_refresh_token"}}`)
+
+	p := &CodexProvider{}
+	firstToken, err := p.getAccessToken(context.Background())
+	if err != nil {
+		t.Fatalf("first getAccessToken() error: %v", err)
+	}
+	if firstToken != sharedToken {
+		t.Fatalf("expected imported shared token, got %q", firstToken)
+	}
+
+	privateState, err := readCodexStoreState(sirtophamAuthStorePath(tmpDir))
+	if err != nil {
+		t.Fatalf("readCodexStoreState() error: %v", err)
+	}
+	if privateState.token != sharedToken {
+		t.Fatalf("expected imported private-store token %q, got %q", sharedToken, privateState.token)
+	}
+
+	newerSharedToken := testJWT(t, time.Now().Add(24*time.Hour).UTC())
+	writeAuthFile(t, tmpDir, `{"auth_mode":"chatgpt","last_refresh":"2026-04-11T00:43:46Z","tokens":{"access_token": "`+newerSharedToken+`","refresh_token": "newer_shared_refresh_token"}}`)
+
+	p = &CodexProvider{}
+	secondToken, err := p.getAccessToken(context.Background())
+	if err != nil {
+		t.Fatalf("second getAccessToken() error: %v", err)
+	}
+	if secondToken != sharedToken {
+		t.Fatalf("expected imported private-store token to remain authoritative, got %q", secondToken)
+	}
+}
+
+func TestAuthStatus_ReportsPrivateStoreAfterRuntimeImport(t *testing.T) {
+	tmpDir := t.TempDir()
+	overrideHomeDir(t, tmpDir)
+
+	sharedToken := testJWT(t, time.Now().Add(2*time.Hour).UTC())
+	writeAuthFile(t, tmpDir, `{"auth_mode":"chatgpt","tokens":{"access_token": "`+sharedToken+`","refresh_token": "shared_refresh_token"}}`)
+
+	p := &CodexProvider{}
+	if _, err := p.getAccessToken(context.Background()); err != nil {
+		t.Fatalf("getAccessToken() error: %v", err)
+	}
+
+	writeAuthFile(t, tmpDir, `{"auth_mode":"chatgpt","last_refresh":"2026-04-11T00:43:46Z","tokens":{"access_token": "`+testJWT(t, time.Now().Add(24*time.Hour).UTC())+`","refresh_token": "newer_shared_refresh_token"}}`)
+
+	status, err := p.AuthStatus(context.Background())
+	if err != nil {
+		t.Fatalf("AuthStatus() error: %v", err)
+	}
+	if status.Source != "sirtopham_store" {
+		t.Fatalf("expected private-store source after runtime import, got %+v", status)
+	}
+	if status.StorePath == "" {
+		t.Fatalf("expected private store path after runtime import, got %+v", status)
+	}
+	if !strings.HasSuffix(status.StorePath, filepath.Join(".sirtopham", "auth.json")) {
+		t.Fatalf("expected private auth store path, got %+v", status)
 	}
 }
 

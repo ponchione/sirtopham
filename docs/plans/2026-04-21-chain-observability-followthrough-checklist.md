@@ -62,13 +62,13 @@ Verification
 
 ---
 
-## Phase 1 — Fix Ctrl-C / detach semantics first
+## Phase 1 — Fix Ctrl-C semantics first
 
 Why this is first
 - This is the only issue from the observed run that can directly turn a normal operator action into an incorrect failed execution.
 
 Objective
-- Make Ctrl-C during `yard chain start` / `yard chain resume` / `sirtopham chain` detach from live watch output instead of implicitly failing the run.
+- Make Ctrl-C during `yard chain start` / `yard chain resume` / `sirtopham chain` stop the active foreground run cleanly instead of detaching or surfacing as an unexpected failure.
 
 Current known evidence
 - `cmd/yard/chain.go` wraps the run context with `signal.NotifyContext(..., os.Interrupt)` and passes that same context into `RunTurn(...)`.
@@ -86,15 +86,15 @@ Files
 Checklist
 1. Add failing tests first for both CLIs proving that Ctrl-C during watch does not close the active execution as failed.
 2. Drive the real `yardRunChain(...)` / `runChain(...)` path with a blocking fake loop where the command is interrupted while the chain is still running.
-3. Refactor signal handling so the first interrupt detaches local watch/output instead of canceling the underlying orchestrator turn context.
-4. Ensure the CLI exits cleanly with the chain ID still usable for reattach.
+3. Refactor signal handling so the interrupt reaches the real foreground orchestrator run.
+4. Ensure the CLI exits cleanly without leaving the chain running in the background.
 5. Keep explicit `chain cancel` / `pause` semantics unchanged.
-6. Do not silently reinterpret detach as cancel.
+6. It is acceptable to finalize a plain Ctrl-C interruption as a user-facing cancellation.
 7. Mirror the fix in both `yard` and `sirtopham`.
 
 Recommended acceptance language
-- Something like: `detached from live output; chain <id> continues running`
-- Avoid raw `agent loop: turn cancelled` surfacing for simple detach.
+- Something like: `chain <id> cancelled`
+- Avoid raw `agent loop: turn cancelled` surfacing for ordinary Ctrl-C.
 
 Verification commands
 - Focused:
@@ -106,11 +106,11 @@ Verification commands
 
 Done means
 - Ctrl-C during live watch no longer produces a failed chain execution by default.
-- The chain remains runnable/reattachable after detaching.
+- Ctrl-C no longer leaves the chain running due to accidental detach.
 - Explicit cancel still behaves as cancel.
 
 Stop rule
-- Do not add a second-interrupt-to-cancel UX in this slice unless required to complete the first-interrupt detach fix cleanly.
+- Do not add a detach or second-interrupt UX in this slice unless there is a fresh explicit request for it.
 
 ---
 

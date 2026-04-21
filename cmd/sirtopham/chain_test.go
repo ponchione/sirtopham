@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -246,17 +245,19 @@ func TestSignalActiveChainProcessUsesLatestRegisteredOrchestratorPID(t *testing.
 	}
 }
 
-func TestRunChainLaunchesBackgroundChildAndParentDoesNotRegisterActiveExecution(t *testing.T) {
+func TestRunChainWatchFalseRunsInForegroundWithoutHiddenChild(t *testing.T) {
 	ctx := context.Background()
 	cfgPath, projectRoot := writeChainRunConfig(t)
 	db := newChainControlTestDB(t)
 	store := chain.NewStore(db)
 
 	originalBuildRuntime := buildChainRuntime
-	originalLaunch := launchChainBackgroundChild
+	originalBuildRegistry := buildChainRegistry
+	originalNewTurnRunner := newChainTurnRunner
 	defer func() {
 		buildChainRuntime = originalBuildRuntime
-		launchChainBackgroundChild = originalLaunch
+		buildChainRegistry = originalBuildRegistry
+		newChainTurnRunner = originalNewTurnRunner
 	}()
 
 	buildChainRuntime = func(ctx context.Context, cfg *appconfig.Config) (*orchestratorRuntime, error) {
@@ -275,28 +276,18 @@ func TestRunChainLaunchesBackgroundChildAndParentDoesNotRegisterActiveExecution(
 			Cleanup:             func() {},
 		}, nil
 	}
+	buildChainRegistry = func(rt *orchestratorRuntime, roleCfg appconfig.AgentRoleConfig, chainID string) (*tool.Registry, error) {
+		return tool.NewRegistry(), nil
+	}
 
-	const chainID = "chain-run-background-parent"
-	launchChainBackgroundChild = func(configPath string, req backgroundChainExecutionRequest) (*backgroundChainChildHandle, error) {
-		if configPath != cfgPath {
-			t.Fatalf("configPath = %q, want %q", configPath, cfgPath)
-		}
-		if req.ChainID != chainID {
-			t.Fatalf("req.ChainID = %q, want %q", req.ChainID, chainID)
-		}
-		if !req.IsNew || req.Resumed {
-			t.Fatalf("request = %+v, want new non-resumed launch", req)
-		}
-		waitCh := make(chan error, 1)
-		go func() {
-			time.Sleep(25 * time.Millisecond)
-			if err := store.LogEvent(context.Background(), chainID, "", chain.EventChainStarted, map[string]any{"orchestrator_pid": 7777, "execution_id": "exec-child", "active_execution": true}); err != nil {
-				waitCh <- err
-				return
+	const chainID = "chain-run-foreground"
+	newChainTurnRunner = func(deps agent.AgentLoopDeps) chainTurnRunner {
+		return &blockingChainTurnRunner{run: func(ctx context.Context, req agent.RunTurnRequest) (*agent.TurnResult, error) {
+			if err := store.SetChainStatus(ctx, chainID, "completed"); err != nil {
+				t.Fatalf("SetChainStatus returned error: %v", err)
 			}
-			waitCh <- nil
-		}()
-		return &backgroundChainChildHandle{wait: waitCh}, nil
+			return &agent.TurnResult{FinalText: "done", IterationCount: 1, Duration: time.Second}, nil
+		}}
 	}
 
 	var stdout, stderr bytes.Buffer
@@ -304,7 +295,7 @@ func TestRunChainLaunchesBackgroundChildAndParentDoesNotRegisterActiveExecution(
 	cmd.SetOut(&stdout)
 	cmd.SetErr(&stderr)
 
-	if err := runChain(ctx, cfgPath, chainFlags{Task: "launch child", ChainID: chainID, Watch: false}, cmd); err != nil {
+	if err := runChain(ctx, cfgPath, chainFlags{Task: "foreground run", ChainID: chainID, Watch: false}, cmd); err != nil {
 		t.Fatalf("runChain returned error: %v", err)
 	}
 	if stdout.String() != chainID+"\n" {
@@ -318,17 +309,12 @@ func TestRunChainLaunchesBackgroundChildAndParentDoesNotRegisterActiveExecution(
 		t.Fatalf("ListEvents returned error: %v", err)
 	}
 	exec, ok := chain.LatestActiveExecution(finalEvents)
-	if !ok || exec.OrchestratorPID != 7777 {
-		t.Fatalf("LatestActiveExecution() = (%+v, %t), want child pid 7777", exec, ok)
-	}
-	for _, event := range finalEvents {
-		if strings.Contains(event.EventData, `"active_execution":true`) && strings.Contains(event.EventData, fmt.Sprintf(`"orchestrator_pid":%d`, os.Getpid())) {
-			t.Fatalf("event data = %s, want parent process to avoid active_execution registration", event.EventData)
-		}
+	if !ok || exec.OrchestratorPID != os.Getpid() {
+		t.Fatalf("LatestActiveExecution() = (%+v, %t), want current pid %d", exec, ok, os.Getpid())
 	}
 }
 
-func TestRunChainWatchInterruptDetachesWithoutClosingBackgroundExecution(t *testing.T) {
+func TestRunChainWatchInterruptCancelsForegroundExecution(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	cfgPath, projectRoot := writeChainRunConfig(t)
@@ -336,10 +322,12 @@ func TestRunChainWatchInterruptDetachesWithoutClosingBackgroundExecution(t *test
 	store := chain.NewStore(db)
 
 	originalBuildRuntime := buildChainRuntime
-	originalLaunch := launchChainBackgroundChild
+	originalBuildRegistry := buildChainRegistry
+	originalNewTurnRunner := newChainTurnRunner
 	defer func() {
 		buildChainRuntime = originalBuildRuntime
-		launchChainBackgroundChild = originalLaunch
+		buildChainRegistry = originalBuildRegistry
+		newChainTurnRunner = originalNewTurnRunner
 	}()
 
 	buildChainRuntime = func(ctx context.Context, cfg *appconfig.Config) (*orchestratorRuntime, error) {
@@ -358,17 +346,20 @@ func TestRunChainWatchInterruptDetachesWithoutClosingBackgroundExecution(t *test
 			Cleanup:             func() {},
 		}, nil
 	}
+	buildChainRegistry = func(rt *orchestratorRuntime, roleCfg appconfig.AgentRoleConfig, chainID string) (*tool.Registry, error) {
+		return tool.NewRegistry(), nil
+	}
 
-	const chainID = "chain-run-detach"
-	launchChainBackgroundChild = func(configPath string, req backgroundChainExecutionRequest) (*backgroundChainChildHandle, error) {
-		waitCh := make(chan error)
-		go func() {
-			time.Sleep(25 * time.Millisecond)
-			_ = store.LogEvent(context.Background(), chainID, "", chain.EventChainStarted, map[string]any{"orchestrator_pid": 8888, "execution_id": "exec-child", "active_execution": true})
-			time.Sleep(25 * time.Millisecond)
-			_ = store.LogEvent(context.Background(), chainID, "", chain.EventStepStarted, map[string]any{"role": "planner", "task": "background task"})
-		}()
-		return &backgroundChainChildHandle{wait: waitCh}, nil
+	const chainID = "chain-run-interrupt"
+	started := make(chan struct{})
+	newChainTurnRunner = func(deps agent.AgentLoopDeps) chainTurnRunner {
+		return &blockingChainTurnRunner{started: started, run: func(ctx context.Context, req agent.RunTurnRequest) (*agent.TurnResult, error) {
+			if err := store.LogEvent(context.Background(), chainID, "", chain.EventStepStarted, map[string]any{"role": "planner", "task": "foreground task"}); err != nil {
+				t.Fatalf("LogEvent returned error: %v", err)
+			}
+			<-ctx.Done()
+			return nil, agent.ErrTurnCancelled
+		}}
 	}
 
 	var stdout, stderr bytes.Buffer
@@ -378,8 +369,14 @@ func TestRunChainWatchInterruptDetachesWithoutClosingBackgroundExecution(t *test
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- runChain(ctx, cfgPath, chainFlags{Task: "detach", ChainID: chainID, Watch: true}, cmd)
+		errCh <- runChain(ctx, cfgPath, chainFlags{Task: "interrupt", ChainID: chainID, Watch: true}, cmd)
 	}()
+
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for blocked chain turn to start")
+	}
 
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
@@ -389,44 +386,41 @@ func TestRunChainWatchInterruptDetachesWithoutClosingBackgroundExecution(t *test
 		time.Sleep(10 * time.Millisecond)
 	}
 	if !strings.Contains(stderr.String(), "step_started") {
-		t.Fatalf("stderr = %q, want streamed watch output before detach", stderr.String())
+		t.Fatalf("stderr = %q, want streamed watch output before interrupt", stderr.String())
 	}
+
 	cancel()
 	if err := <-errCh; err != nil {
 		t.Fatalf("runChain returned error: %v", err)
 	}
-	if !strings.Contains(stderr.String(), "detached from live output; chain "+chainID+" continues running") {
-		t.Fatalf("stderr = %q, want detach message", stderr.String())
+	if strings.Contains(stderr.String(), "detached from live output") {
+		t.Fatalf("stderr = %q, did not want detach message", stderr.String())
 	}
 	stored, err := store.GetChain(context.Background(), chainID)
 	if err != nil {
 		t.Fatalf("GetChain returned error: %v", err)
 	}
-	if stored.Status != "running" {
-		t.Fatalf("status = %q, want running after detach", stored.Status)
+	if stored.Status == "running" {
+		t.Fatalf("status = %q, want non-running status after interrupt", stored.Status)
+	}
+	if stored.Status != "cancelled" {
+		t.Fatalf("status = %q, want cancelled after interrupt", stored.Status)
 	}
 	finalEvents, err := store.ListEvents(context.Background(), chainID)
 	if err != nil {
 		t.Fatalf("ListEvents returned error: %v", err)
 	}
-	exec, ok := chain.LatestActiveExecution(finalEvents)
-	if !ok || exec.OrchestratorPID != 8888 {
-		t.Fatalf("LatestActiveExecution() = (%+v, %t), want child pid 8888 still active", exec, ok)
+	if exec, ok := chain.LatestActiveExecution(finalEvents); ok || exec.ExecutionID != "" || exec.OrchestratorPID != 0 {
+		t.Fatalf("LatestActiveExecution() = (%+v, %t), want empty,false", exec, ok)
 	}
 }
 
-func TestRunChainBackgroundWorkerRegistersActiveExecutionWithOwnPID(t *testing.T) {
+func TestRunChainRegistersActiveExecutionWithOwnPID(t *testing.T) {
 	ctx := context.Background()
 	cfgPath, projectRoot := writeChainRunConfig(t)
 	db := newChainControlTestDB(t)
 	store := chain.NewStore(db)
-	const chainID = "chain-worker-registers"
-	if _, err := store.StartChain(ctx, chainSpecFromFlags(chainID, chainFlags{Task: "worker task", MaxSteps: 100, MaxResolverLoops: 3, MaxDuration: 4 * time.Hour, TokenBudget: 5_000_000})); err != nil {
-		t.Fatalf("StartChain returned error: %v", err)
-	}
-	if err := store.LogEvent(ctx, chainID, "", chain.EventChainStarted, map[string]any{"task": "worker task"}); err != nil {
-		t.Fatalf("LogEvent returned error: %v", err)
-	}
+	const chainID = "chain-registers-own-pid"
 
 	originalBuildRuntime := buildChainRuntime
 	originalBuildRegistry := buildChainRegistry
@@ -470,8 +464,8 @@ func TestRunChainBackgroundWorkerRegistersActiveExecutionWithOwnPID(t *testing.T
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
 
-	if err := runChainBackgroundWorker(ctx, cfgPath, backgroundChainExecutionRequest{ChainID: chainID, IsNew: true}, cmd); err != nil {
-		t.Fatalf("runChainBackgroundWorker returned error: %v", err)
+	if err := runChain(ctx, cfgPath, chainFlags{Task: "worker task", ChainID: chainID, Watch: false}, cmd); err != nil {
+		t.Fatalf("runChain returned error: %v", err)
 	}
 	events, err := store.ListEvents(context.Background(), chainID)
 	if err != nil {
@@ -491,12 +485,6 @@ func TestRunChainCancelRequestedInterruptionClosesActiveExecution(t *testing.T) 
 	db := newChainControlTestDB(t)
 	store := chain.NewStore(db)
 	const chainID = "chain-run-cancel"
-	if _, err := store.StartChain(ctx, chainSpecFromFlags(chainID, chainFlags{Task: "prove cancellation cleanup", MaxSteps: 100, MaxResolverLoops: 3, MaxDuration: 4 * time.Hour, TokenBudget: 5_000_000})); err != nil {
-		t.Fatalf("StartChain returned error: %v", err)
-	}
-	if err := store.LogEvent(ctx, chainID, "", chain.EventChainStarted, map[string]any{"task": "prove cancellation cleanup"}); err != nil {
-		t.Fatalf("LogEvent returned error: %v", err)
-	}
 
 	originalBuildRuntime := buildChainRuntime
 	originalBuildRegistry := buildChainRegistry
@@ -545,7 +533,7 @@ func TestRunChainCancelRequestedInterruptionClosesActiveExecution(t *testing.T) 
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- runChainBackgroundWorker(ctx, cfgPath, backgroundChainExecutionRequest{ChainID: chainID, IsNew: true}, cmd)
+		errCh <- runChain(ctx, cfgPath, chainFlags{Task: "prove cancellation cleanup", ChainID: chainID, Watch: false}, cmd)
 	}()
 
 	select {

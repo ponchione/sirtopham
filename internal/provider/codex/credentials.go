@@ -68,7 +68,7 @@ var codexOAuthClientID = "app_EMoamEEZ73f0CkXaXp7hrann"
 var codexOAuthTokenURL = "https://auth.openai.com/oauth/token"
 
 func codexAuthRemediation() string {
-	return "Run `codex auth` to refresh Codex login. Sirtopham keeps its own copy in ~/.sirtopham/auth.json and only imports from ~/.codex/auth.json when its store is empty."
+	return "Run `codex auth` to refresh Codex login. Sirtopham imports from ~/.codex/auth.json only when ~/.sirtopham/auth.json is absent; once imported, the Sirtopham store is authoritative."
 }
 
 // getAccessToken obtains a valid access token, refreshing Sirtopham's private
@@ -128,16 +128,6 @@ func (p *CodexProvider) readAuthStateWithImport(allowImport bool) (*codexAuthSta
 	storePath := sirtophamAuthStorePath(home)
 	privateState, err := readCodexStoreState(storePath)
 	if err == nil {
-		if !allowImport {
-			return privateState, nil
-		}
-		sharedState, sharedErr := p.readSharedCodexAuthState(home, storePath, allowImport)
-		if sharedErr == nil && shouldPreferSharedCodexAuthState(privateState, sharedState) {
-			if err := writeCodexStore(storePath, sharedState.auth); err != nil {
-				return nil, fmt.Errorf("codex: failed to persist imported auth state to %s: %w", storePath, err)
-			}
-			return sharedState, nil
-		}
 		return privateState, nil
 	}
 	if err != nil && !errors.Is(err, os.ErrNotExist) && !errors.Is(err, errCodexStoreStateNotFound) {
@@ -176,32 +166,6 @@ func (p *CodexProvider) readSharedCodexAuthState(home, storePath string, allowIm
 		return nil, err
 	}
 	return sharedState, nil
-}
-
-func shouldPreferSharedCodexAuthState(privateState, sharedState *codexAuthState) bool {
-	if privateState == nil || sharedState == nil {
-		return false
-	}
-	sharedRefresh, sharedOK := codexLastRefresh(sharedState.auth)
-	privateRefresh, privateOK := codexLastRefresh(privateState.auth)
-	if !sharedOK {
-		return false
-	}
-	if !privateOK {
-		return true
-	}
-	return sharedRefresh.After(privateRefresh)
-}
-
-func codexLastRefresh(auth codexAuthFile) (time.Time, bool) {
-	if strings.TrimSpace(auth.LastRefresh) == "" {
-		return time.Time{}, false
-	}
-	t, err := time.Parse(time.RFC3339, auth.LastRefresh)
-	if err != nil {
-		return time.Time{}, false
-	}
-	return t, true
 }
 
 func buildCodexAuthState(path, sourcePath string, version int, activeProvider string, fromSharedCLI bool, auth codexAuthFile) (*codexAuthState, error) {
