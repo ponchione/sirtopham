@@ -91,10 +91,7 @@ func (p *CodexProvider) Stream(ctx context.Context, req *provider.Request) (<-ch
 		return nil, err
 	}
 
-	model := req.Model
-	if model == "" {
-		model = "o3"
-	}
+	model := codexRequestModel(req.Model)
 
 	apiReq := buildResponsesRequest(model, req, true)
 	body, err := json.Marshal(apiReq)

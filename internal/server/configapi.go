@@ -252,6 +252,10 @@ func (h *ConfigHandler) handlePutConfig(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 	}
+	if !runtimeDefaultOverrideAllowed(provider, model) {
+		writeError(w, http.StatusBadRequest, "runtime default override is locked to codex/gpt-5.4")
+		return
+	}
 	h.defaults.Set(provider, model)
 
 	h.handleGetConfig(w, r)
