@@ -1,5 +1,10 @@
 # Chain Detach / Background Execution Protocol Slice
 
+Update 2026-04-21
+- This detach experiment was intentionally reverted.
+- The product contract is now conventional foreground CLI behavior: Ctrl-C cancels the active `yard chain start` / `yard chain resume` / `sirtopham chain` run instead of detaching it into a background child.
+- Keep this document only as historical design context; do not treat it as current implementation guidance unless there is a fresh explicit request for an opt-in detach mode.
+
 > For Hermes / next worker agent: this is a narrow design-first slice for the Phase 1 blocker discovered during the 2026-04-21 chain observability follow-through. Do not treat this as permission for a broad chain-architecture rewrite. Preserve the current event model and stored `step_output` behavior. Do not push.
 
 Goal
