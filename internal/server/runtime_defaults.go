@@ -15,11 +15,27 @@ type RuntimeDefaults struct {
 	model    string
 }
 
+const (
+	forcedRuntimeDefaultProvider = "codex"
+	forcedRuntimeDefaultModel    = "gpt-5.4"
+)
+
+func normalizeRuntimeDefaultOverride(_ string, _ string) (provider string, model string) {
+	return forcedRuntimeDefaultProvider, forcedRuntimeDefaultModel
+}
+
+func runtimeDefaultOverrideAllowed(provider string, model string) bool {
+	normalizedProvider, normalizedModel := normalizeRuntimeDefaultOverride(provider, model)
+	return provider == normalizedProvider && model == normalizedModel
+}
+
 func NewRuntimeDefaults(cfg *config.Config) *RuntimeDefaults {
 	rd := &RuntimeDefaults{}
+	provider, model := normalizeRuntimeDefaultOverride("", "")
+	rd.provider = provider
+	rd.model = model
 	if cfg != nil {
-		rd.provider = cfg.Routing.Default.Provider
-		rd.model = cfg.Routing.Default.Model
+		rd.provider, rd.model = normalizeRuntimeDefaultOverride(cfg.Routing.Default.Provider, cfg.Routing.Default.Model)
 	}
 	return rd
 }
@@ -37,6 +53,7 @@ func (r *RuntimeDefaults) Set(provider string, model string) {
 	if r == nil {
 		return
 	}
+	provider, model = normalizeRuntimeDefaultOverride(provider, model)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if provider != "" {

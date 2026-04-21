@@ -17,6 +17,7 @@ import (
 	"github.com/ponchione/sodoryard/internal/agent"
 	"github.com/ponchione/sodoryard/internal/config"
 	"github.com/ponchione/sodoryard/internal/conversation"
+	"github.com/ponchione/sodoryard/internal/provider"
 	"github.com/ponchione/sodoryard/internal/server"
 )
 
@@ -334,8 +335,8 @@ func TestWebSocketNewConversationPersistsResolvedRuntimeDefaults(t *testing.T) {
 	}
 	select {
 	case req := <-turnStarted:
-		if req.Provider != "local" || req.Model != "qwen-coder" {
-			t.Fatalf("RunTurn provider/model = %q/%q, want local/qwen-coder", req.Provider, req.Model)
+		if req.Provider != "codex" || req.Model != "gpt-5.4" {
+			t.Fatalf("RunTurn provider/model = %q/%q, want codex/gpt-5.4", req.Provider, req.Model)
 		}
 	case <-ctx.Done():
 		t.Fatal("timed out waiting for RunTurn")
@@ -344,11 +345,11 @@ func TestWebSocketNewConversationPersistsResolvedRuntimeDefaults(t *testing.T) {
 	for _, opt := range convMock.lastCreateOpts {
 		opt(createOpts)
 	}
-	if createOpts.Provider == nil || *createOpts.Provider != "local" {
-		t.Fatalf("created provider default = %#v, want local", createOpts.Provider)
+	if createOpts.Provider == nil || *createOpts.Provider != "codex" {
+		t.Fatalf("created provider default = %#v, want codex", createOpts.Provider)
 	}
-	if createOpts.Model == nil || *createOpts.Model != "qwen-coder" {
-		t.Fatalf("created model default = %#v, want qwen-coder", createOpts.Model)
+	if createOpts.Model == nil || *createOpts.Model != "gpt-5.4" {
+		t.Fatalf("created model default = %#v, want gpt-5.4", createOpts.Model)
 	}
 }
 
@@ -379,14 +380,20 @@ func TestWebSocketExistingConversationUsesStoredRuntimeDefaults(t *testing.T) {
 	}
 	select {
 	case req := <-turnStarted:
-		if req.Provider != "local" || req.Model != "qwen-coder" {
-			t.Fatalf("RunTurn provider/model = %q/%q, want local/qwen-coder", req.Provider, req.Model)
+		if req.Provider != "codex" || req.Model != "gpt-5.4" {
+			t.Fatalf("RunTurn provider/model = %q/%q, want codex/gpt-5.4", req.Provider, req.Model)
 		}
 	case <-ctx.Done():
 		t.Fatal("timed out waiting for RunTurn")
 	}
-	if convMock.lastSetID != "" {
-		t.Fatalf("unexpected runtime-default persistence for unchanged conversation: %q", convMock.lastSetID)
+	if convMock.lastSetID != "conv-1" {
+		t.Fatalf("persisted runtime defaults for conversation = %q, want conv-1", convMock.lastSetID)
+	}
+	if convMock.lastSetProvider == nil || *convMock.lastSetProvider != "codex" {
+		t.Fatalf("persisted provider default = %#v, want codex", convMock.lastSetProvider)
+	}
+	if convMock.lastSetModel == nil || *convMock.lastSetModel != "gpt-5.4" {
+		t.Fatalf("persisted model default = %#v, want gpt-5.4", convMock.lastSetModel)
 	}
 }
 
@@ -433,11 +440,11 @@ func TestWebSocketUsesRoutingDefaultProvider(t *testing.T) {
 
 	select {
 	case req := <-turnStarted:
-		if req.Provider != "anthropic" {
-			t.Fatalf("Provider = %q, want anthropic", req.Provider)
+		if req.Provider != "codex" {
+			t.Fatalf("Provider = %q, want codex", req.Provider)
 		}
-		if req.Model != "claude-sonnet-4-6-20250514" {
-			t.Fatalf("Model = %q, want claude-sonnet-4-6-20250514", req.Model)
+		if req.Model != "gpt-5.4" {
+			t.Fatalf("Model = %q, want gpt-5.4", req.Model)
 		}
 		if req.ModelContextLimit != 200000 {
 			t.Fatalf("ModelContextLimit = %d, want 200000", req.ModelContextLimit)
@@ -449,7 +456,7 @@ func TestWebSocketUsesRoutingDefaultProvider(t *testing.T) {
 	conn.Close(websocket.StatusNormalClosure, "test done")
 }
 
-func TestWebSocketUsesUpdatedRuntimeDefaultsFromConfigAPI(t *testing.T) {
+func TestWebSocketIgnoresConfigAPIOverrideAndStaysOnForcedCodexGPT54(t *testing.T) {
 	turnStarted := make(chan agent.RunTurnRequest, 1)
 	agentMock := &mockAgentService{
 		runTurnFn: func(ctx context.Context, req agent.RunTurnRequest) (*agent.TurnResult, error) {
@@ -461,38 +468,31 @@ func TestWebSocketUsesUpdatedRuntimeDefaultsFromConfigAPI(t *testing.T) {
 	srv := server.New(server.Config{Host: "127.0.0.1", Port: 0, DevMode: true}, newTestLogger())
 	cfg := &config.Config{
 		ProjectRoot: "test-project",
-		Routing:     config.RoutingConfig{Default: config.RouteConfig{Provider: "codex", Model: "old-default-model"}},
+		Routing:     config.RoutingConfig{Default: config.RouteConfig{Provider: "codex", Model: "gpt-5.4"}},
 		Providers: map[string]config.ProviderConfig{
-			"codex": {Type: "codex", ContextLength: 200000},
-			"local": {Type: "openai-compatible", ContextLength: 32768},
+			"codex": {Type: "codex", Model: "gpt-5.4", ContextLength: 200000},
+			"local": {Type: "openai-compatible", Model: "new-runtime-model", ContextLength: 32768},
 		},
 	}
+	runtime := &stubRuntimeInspector{models: []provider.Model{{ID: "gpt-5.4", Provider: "codex"}, {ID: "new-runtime-model", Provider: "local"}}}
 	defaults := server.NewRuntimeDefaults(cfg)
-	server.NewConfigHandler(srv, cfg, nil, defaults, newTestLogger())
+	server.NewConfigHandler(srv, cfg, runtime, defaults, newTestLogger())
 	server.NewWebSocketHandler(srv, agentMock, convMock, cfg, defaults, newTestLogger())
 	_, base := startServer(t, srv)
 
 	updateBody := []byte(`{"default_provider":"local","default_model":"new-runtime-model"}`)
-	resp, err := http.Post(base+"/api/config", "application/json", bytes.NewReader(updateBody))
-	if err != nil {
-		t.Fatalf("update config request failed: %v", err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusMethodNotAllowed {
-		// ignore; wrong method safety check for future accidental route changes
-	}
 	req, err := http.NewRequest(http.MethodPut, base+"/api/config", bytes.NewReader(updateBody))
 	if err != nil {
 		t.Fatalf("new PUT request: %v", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err = http.DefaultClient.Do(req)
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("PUT /api/config failed: %v", err)
 	}
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("PUT /api/config status = %d, want 200", resp.StatusCode)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("PUT /api/config status = %d, want 400", resp.StatusCode)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -517,14 +517,69 @@ func TestWebSocketUsesUpdatedRuntimeDefaultsFromConfigAPI(t *testing.T) {
 
 	select {
 	case runReq := <-turnStarted:
-		if runReq.Provider != "local" {
-			t.Fatalf("Provider = %q, want local", runReq.Provider)
+		if runReq.Provider != "codex" {
+			t.Fatalf("Provider = %q, want codex", runReq.Provider)
 		}
-		if runReq.Model != "new-runtime-model" {
-			t.Fatalf("Model = %q, want new-runtime-model", runReq.Model)
+		if runReq.Model != "gpt-5.4" {
+			t.Fatalf("Model = %q, want gpt-5.4", runReq.Model)
 		}
-		if runReq.ModelContextLimit != 32768 {
-			t.Fatalf("ModelContextLimit = %d, want 32768", runReq.ModelContextLimit)
+		if runReq.ModelContextLimit != 200000 {
+			t.Fatalf("ModelContextLimit = %d, want 200000", runReq.ModelContextLimit)
+		}
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for RunTurn")
+	}
+}
+
+func TestWebSocketIgnoresPerConnectionModelOverrideAndStaysOnForcedCodexGPT54(t *testing.T) {
+	turnStarted := make(chan agent.RunTurnRequest, 1)
+	agentMock := &mockAgentService{
+		runTurnFn: func(ctx context.Context, req agent.RunTurnRequest) (*agent.TurnResult, error) {
+			turnStarted <- req
+			return &agent.TurnResult{}, nil
+		},
+	}
+	convMock := &mockConversationService{}
+	srv := server.New(server.Config{Host: "127.0.0.1", Port: 0, DevMode: true}, newTestLogger())
+	cfg := &config.Config{ProjectRoot: "test-project", Routing: config.RoutingConfig{Default: config.RouteConfig{Provider: "codex", Model: "gpt-5.4"}}, Providers: map[string]config.ProviderConfig{
+		"codex": {Type: "codex", Model: "gpt-5.4", ContextLength: 200000},
+		"local": {Type: "openai-compatible", Model: "other-model", ContextLength: 32768},
+	}}
+	server.NewWebSocketHandler(srv, agentMock, convMock, cfg, server.NewRuntimeDefaults(cfg), newTestLogger())
+	_, base := startServer(t, srv)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	wsURL := "ws" + base[4:] + "/api/ws"
+	conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	if err != nil {
+		t.Fatalf("websocket dial failed: %v", err)
+	}
+	defer conn.CloseNow()
+
+	overrideMsg := map[string]string{"type": "model_override", "provider": "local", "model": "other-model"}
+	overrideData, _ := json.Marshal(overrideMsg)
+	if err := conn.Write(ctx, websocket.MessageText, overrideData); err != nil {
+		t.Fatalf("write override failed: %v", err)
+	}
+
+	msg := map[string]string{"type": "message", "content": "hello"}
+	data, _ := json.Marshal(msg)
+	if err := conn.Write(ctx, websocket.MessageText, data); err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+	_, _, err = conn.Read(ctx)
+	if err != nil {
+		t.Fatalf("read conversation_created failed: %v", err)
+	}
+
+	select {
+	case runReq := <-turnStarted:
+		if runReq.Provider != "codex" {
+			t.Fatalf("Provider = %q, want codex", runReq.Provider)
+		}
+		if runReq.Model != "gpt-5.4" {
+			t.Fatalf("Model = %q, want gpt-5.4", runReq.Model)
 		}
 	case <-ctx.Done():
 		t.Fatal("timed out waiting for RunTurn")

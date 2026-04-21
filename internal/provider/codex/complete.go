@@ -84,10 +84,7 @@ func (p *CodexProvider) Complete(ctx context.Context, req *provider.Request) (*p
 		return nil, err
 	}
 
-	model := req.Model
-	if model == "" {
-		model = "o3"
-	}
+	model := codexRequestModel(req.Model)
 
 	streamResponse := p.usesChatGPTCodexEndpoint()
 	apiReq := buildResponsesRequest(model, req, streamResponse)

@@ -58,11 +58,11 @@ func TestGetConfigIncludesToolOutputLimitAndStoreRoot(t *testing.T) {
 		t.Fatalf("decode response: %v", err)
 	}
 
-	if body.DefaultProvider != cfg.Routing.Default.Provider {
-		t.Fatalf("default_provider = %q, want %q", body.DefaultProvider, cfg.Routing.Default.Provider)
+	if body.DefaultProvider != "codex" {
+		t.Fatalf("default_provider = %q, want %q", body.DefaultProvider, "codex")
 	}
-	if body.DefaultModel != cfg.Routing.Default.Model {
-		t.Fatalf("default_model = %q, want %q", body.DefaultModel, cfg.Routing.Default.Model)
+	if body.DefaultModel != "gpt-5.4" {
+		t.Fatalf("default_model = %q, want %q", body.DefaultModel, "gpt-5.4")
 	}
 	if body.FallbackProvider != cfg.Routing.Fallback.Provider {
 		t.Fatalf("fallback_provider = %q, want %q", body.FallbackProvider, cfg.Routing.Fallback.Provider)
@@ -112,6 +112,51 @@ func (s *stubRuntimeInspector) AuthStatuses(_ context.Context) (map[string]*prov
 
 func (s *stubRuntimeInspector) ProviderHealthMap() map[string]*router.ProviderHealth {
 	return s.health
+}
+
+func TestPutConfigRejectsRuntimeDefaultOverrideAwayFromForcedCodexGPT54(t *testing.T) {
+	cfg := &config.Config{
+		ProjectRoot: t.TempDir(),
+		Routing:     config.RoutingConfig{Default: config.RouteConfig{Provider: "codex", Model: "gpt-5.4"}},
+		Providers: map[string]config.ProviderConfig{
+			"codex": {Type: "codex", Model: "gpt-5.4"},
+			"local": {Type: "openai-compatible", Model: "other-model"},
+		},
+	}
+	runtime := &stubRuntimeInspector{models: []provider.Model{{ID: "gpt-5.4", Provider: "codex"}, {ID: "other-model", Provider: "local"}}}
+	defaults := server.NewRuntimeDefaults(cfg)
+	
+	srv := server.New(server.Config{Host: "127.0.0.1", Port: 0}, newTestLogger())
+	server.NewConfigHandler(srv, cfg, runtime, defaults, newTestLogger())
+	_, base := startServer(t, srv)
+	
+	body := []byte(`{"default_provider":"local","default_model":"other-model"}`)
+	req, err := http.NewRequest(http.MethodPut, base+"/api/config", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PUT /api/config failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusBadRequest)
+	}
+	var errBody struct {
+		Error string `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&errBody); err != nil {
+		t.Fatalf("decode error response: %v", err)
+	}
+	if !strings.Contains(errBody.Error, "locked") {
+		t.Fatalf("error = %q, want locked message", errBody.Error)
+	}
+	provider, model := defaults.Get()
+	if provider != "codex" || model != "gpt-5.4" {
+		t.Fatalf("runtime defaults = (%q, %q), want (%q, %q)", provider, model, "codex", "gpt-5.4")
+	}
 }
 
 func TestProvidersEndpointGroupsModelsByProvider(t *testing.T) {

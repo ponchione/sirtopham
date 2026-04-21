@@ -223,12 +223,8 @@ func (h *WebSocketHandler) readLoop(ctx context.Context, cancel context.CancelFu
 			}()
 
 		case "model_override":
-			// Store the model/provider override for the next "message" turn.
-			override.mu.Lock()
-			override.model = msg.Model
-			override.provider = msg.Provider
-			override.mu.Unlock()
-			h.logger.Info("model override set",
+			// Runtime is intentionally pinned for now; ignore per-connection overrides.
+			h.logger.Info("model override ignored; runtime locked",
 				"model", msg.Model,
 				"provider", msg.Provider,
 			)
@@ -337,6 +333,7 @@ func (h *WebSocketHandler) handleMessage(ctx context.Context, conn *websocket.Co
 	if model == "" && prov == defaultProvider {
 		model = defaultModel
 	}
+	prov, model = normalizeRuntimeDefaultOverride(prov, model)
 
 	if convID == "" {
 		var opts []conversation.CreateOption

@@ -201,39 +201,36 @@ func TestBuildResponsesRequest_ToolDefinitions(t *testing.T) {
 	}
 }
 
-func TestBuildResponsesRequest_ReasoningForO3(t *testing.T) {
+func TestBuildResponsesRequest_ForcesGPT54AndXHighReasoning(t *testing.T) {
 	req := &provider.Request{}
 	rr := buildResponsesRequest("o3", req, false)
 
-	if rr.Reasoning == nil {
-		t.Fatal("expected reasoning config for o3")
+	if rr.Model != "gpt-5.4" {
+		t.Fatalf("expected model %q, got %q", "gpt-5.4", rr.Model)
 	}
-	if rr.Reasoning.Effort != "high" {
-		t.Errorf("expected effort %q, got %q", "high", rr.Reasoning.Effort)
+	if rr.Reasoning == nil {
+		t.Fatal("expected reasoning config for forced gpt-5.4 model")
+	}
+	if rr.Reasoning.Effort != "xhigh" {
+		t.Errorf("expected effort %q, got %q", "xhigh", rr.Reasoning.Effort)
 	}
 	if rr.Reasoning.EncryptedContent != "retain" {
 		t.Errorf("expected encrypted_content %q, got %q", "retain", rr.Reasoning.EncryptedContent)
 	}
 }
 
-func TestBuildResponsesRequest_ReasoningForO4Mini(t *testing.T) {
-	req := &provider.Request{}
-	rr := buildResponsesRequest("o4-mini", req, false)
-
-	if rr.Reasoning == nil {
-		t.Fatal("expected reasoning config for o4-mini")
-	}
-	if rr.Reasoning.Effort != "high" {
-		t.Errorf("expected effort %q, got %q", "high", rr.Reasoning.Effort)
-	}
-}
-
-func TestBuildResponsesRequest_NoReasoningForGPT41(t *testing.T) {
+func TestBuildResponsesRequest_ForcesGPT54EvenWhenRequestedModelDiffers(t *testing.T) {
 	req := &provider.Request{}
 	rr := buildResponsesRequest("gpt-4.1", req, false)
 
-	if rr.Reasoning != nil {
-		t.Error("expected no reasoning config for gpt-4.1")
+	if rr.Model != "gpt-5.4" {
+		t.Fatalf("expected model %q, got %q", "gpt-5.4", rr.Model)
+	}
+	if rr.Reasoning == nil {
+		t.Fatal("expected reasoning config for forced gpt-5.4 model")
+	}
+	if rr.Reasoning.Effort != "xhigh" {
+		t.Errorf("expected effort %q, got %q", "xhigh", rr.Reasoning.Effort)
 	}
 }
 
@@ -271,8 +268,8 @@ func TestBuildResponsesRequest_JSONOutput(t *testing.T) {
 		t.Fatalf("failed to unmarshal: %v", err)
 	}
 
-	if raw["model"] != "o3" {
-		t.Errorf("expected model %q, got %v", "o3", raw["model"])
+	if raw["model"] != "gpt-5.4" {
+		t.Errorf("expected model %q, got %v", "gpt-5.4", raw["model"])
 	}
 	if raw["instructions"] != "You are helpful." {
 		t.Errorf("expected instructions %q, got %v", "You are helpful.", raw["instructions"])

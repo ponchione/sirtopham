@@ -11,12 +11,12 @@ server:
 routing:
   default:
     provider: codex
-    model: gpt-5.4-mini
+    model: gpt-5.4
 
 providers:
   codex:
     type: codex
-    model: gpt-5.4-mini
+    model: gpt-5.4
 
 index:
   include:
@@ -60,7 +60,7 @@ brain:
 
 agent_roles:
   orchestrator:
-    system_prompt: agents/orchestrator.md
+    system_prompt: builtin:orchestrator
     tools:
       - brain
     custom_tools:
@@ -78,7 +78,7 @@ agent_roles:
     max_tokens: 500000
 
   epic-decomposer:
-    system_prompt: agents/epic-decomposer.md
+    system_prompt: builtin:epic-decomposer
     tools:
       - brain
     brain_write_paths:
@@ -95,7 +95,7 @@ agent_roles:
     max_tokens: 200000
 
   task-decomposer:
-    system_prompt: agents/task-decomposer.md
+    system_prompt: builtin:task-decomposer
     tools:
       - brain
     brain_write_paths:
@@ -112,7 +112,7 @@ agent_roles:
     max_tokens: 200000
 
   planner:
-    system_prompt: agents/planner.md
+    system_prompt: builtin:planner
     tools:
       - brain
       - search
@@ -130,7 +130,7 @@ agent_roles:
     max_tokens: 300000
 
   coder:
-    system_prompt: agents/coder.md
+    system_prompt: builtin:coder
     tools:
       - brain
       - file
@@ -151,7 +151,7 @@ agent_roles:
     max_tokens: 1000000
 
   correctness-auditor:
-    system_prompt: agents/correctness-auditor.md
+    system_prompt: builtin:correctness-auditor
     tools:
       - brain
       - file:read
@@ -170,7 +170,7 @@ agent_roles:
     max_tokens: 300000
 
   quality-auditor:
-    system_prompt: agents/quality-auditor.md
+    system_prompt: builtin:quality-auditor
     tools:
       - brain
       - file:read
@@ -189,7 +189,7 @@ agent_roles:
     max_tokens: 300000
 
   performance-auditor:
-    system_prompt: agents/performance-auditor.md
+    system_prompt: builtin:performance-auditor
     tools:
       - brain
       - file:read
@@ -208,7 +208,7 @@ agent_roles:
     max_tokens: 200000
 
   security-auditor:
-    system_prompt: agents/security-auditor.md
+    system_prompt: builtin:security-auditor
     tools:
       - brain
       - file:read
@@ -227,7 +227,7 @@ agent_roles:
     max_tokens: 200000
 
   integration-auditor:
-    system_prompt: agents/integration-auditor.md
+    system_prompt: builtin:integration-auditor
     tools:
       - brain
       - file:read
@@ -246,7 +246,7 @@ agent_roles:
     max_tokens: 200000
 
   test-writer:
-    system_prompt: agents/test-writer.md
+    system_prompt: builtin:test-writer
     tools:
       - brain
       - file
@@ -266,7 +266,7 @@ agent_roles:
     max_tokens: 500000
 
   resolver:
-    system_prompt: agents/resolver.md
+    system_prompt: builtin:resolver
     tools:
       - brain
       - file
@@ -286,7 +286,7 @@ agent_roles:
     max_tokens: 500000
 
   docs-arbiter:
-    system_prompt: agents/docs-arbiter.md
+    system_prompt: builtin:docs-arbiter
     tools:
       - brain
     brain_write_paths:

@@ -7,6 +7,15 @@ import (
 	"github.com/ponchione/sodoryard/internal/provider"
 )
 
+const (
+	forcedCodexModel           = "gpt-5.4"
+	forcedCodexReasoningEffort = "xhigh"
+)
+
+func codexRequestModel(_ string) string {
+	return forcedCodexModel
+}
+
 // responsesRequest is the top-level JSON body for POST /v1/responses.
 type responsesRequest struct {
 	Model        string              `json:"model"`
@@ -48,6 +57,7 @@ type responsesReasoning struct {
 // buildResponsesRequest translates a unified Request into the Responses API
 // request body. The model parameter comes from the provider config or request.
 func buildResponsesRequest(model string, req *provider.Request, streamResponse bool) responsesRequest {
+	model = codexRequestModel(model)
 	rr := responsesRequest{
 		Model:        model,
 		Instructions: "You are a helpful assistant.",
@@ -139,12 +149,10 @@ func buildResponsesRequest(model string, req *provider.Request, streamResponse b
 		}
 	}
 
-	// Reasoning configuration for reasoning models
-	if model == "o3" || model == "o4-mini" {
-		rr.Reasoning = &responsesReasoning{
-			Effort:           "high",
-			EncryptedContent: "retain",
-		}
+	// Reasoning configuration is currently pinned for the forced Codex daily-driver model.
+	rr.Reasoning = &responsesReasoning{
+		Effort:           forcedCodexReasoningEffort,
+		EncryptedContent: "retain",
 	}
 
 	return rr
