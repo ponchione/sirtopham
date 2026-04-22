@@ -1,50 +1,20 @@
 package main
 
 import (
-	"context"
-	"errors"
 	"fmt"
-	"io"
-	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
-	"github.com/ponchione/sodoryard/internal/agent"
-	appconfig "github.com/ponchione/sodoryard/internal/config"
-	"github.com/ponchione/sodoryard/internal/conversation"
 	"github.com/ponchione/sodoryard/internal/headless"
-	"github.com/ponchione/sodoryard/internal/id"
-	"github.com/ponchione/sodoryard/internal/role"
-	rtpkg "github.com/ponchione/sodoryard/internal/runtime"
-	"github.com/ponchione/sodoryard/internal/tool"
 )
 
 const (
-	runExitOK             = 0
-	runExitInfrastructure = 1
-	runExitSafetyLimit    = 2
-	runExitEscalation     = 3
+	runExitOK             = int(headless.ExitOK)
+	runExitInfrastructure = int(headless.ExitInfrastructure)
+	runExitSafetyLimit    = int(headless.ExitSafetyLimit)
+	runExitEscalation     = int(headless.ExitEscalation)
 )
-
-var buildRunRuntime = buildAppRuntime
-var buildRunRoleRegistry = role.BuildRegistry
-var createRunConversation = func(ctx context.Context, manager *conversation.Manager, projectRoot string, opts ...conversation.CreateOption) (*conversation.Conversation, error) {
-	return manager.Create(ctx, projectRoot, opts...)
-}
-
-type runAgentLoop interface {
-	RunTurn(ctx context.Context, req agent.RunTurnRequest) (*agent.TurnResult, error)
-	Close()
-}
-
-var newRunAgentLoop = func(deps agent.AgentLoopDeps) runAgentLoop {
-	return agent.NewAgentLoop(deps)
-}
-
-type exitCoder interface {
-	ExitCode() int
-}
 
 type runExitError struct {
 	code int
@@ -114,194 +84,21 @@ func newRunCmd(configPath *string) *cobra.Command {
 }
 
 func runHeadless(cmd *cobra.Command, configPath string, flags runFlags) (*runExecutionResult, error) {
-	if strings.TrimSpace(flags.Role) == "" {
-		return nil, runExitError{code: runExitInfrastructure, err: fmt.Errorf("--role is required")}
-	}
-	if (strings.TrimSpace(flags.Task) == "") == (strings.TrimSpace(flags.TaskFile) == "") {
-		return nil, runExitError{code: runExitInfrastructure, err: fmt.Errorf("exactly one of --task or --task-file is required")}
-	}
-	if flags.MaxTurns < 0 {
-		return nil, runExitError{code: runExitInfrastructure, err: fmt.Errorf("--max-turns must be > 0 when supplied")}
-	}
-	if flags.MaxTokens < 0 {
-		return nil, runExitError{code: runExitInfrastructure, err: fmt.Errorf("--max-tokens must be > 0 when supplied")}
-	}
-	if flags.Timeout <= 0 {
-		return nil, runExitError{code: runExitInfrastructure, err: fmt.Errorf("--timeout must be > 0")}
-	}
-
-	taskText, err := readTask(flags.Task, flags.TaskFile)
+	result, err := headless.RunSession(cmd.Context(), cmd.ErrOrStderr(), configPath, headless.RunRequest{
+		Role:        flags.Role,
+		Task:        flags.Task,
+		TaskFile:    flags.TaskFile,
+		ChainID:     flags.ChainID,
+		Brain:       flags.Brain,
+		MaxTurns:    flags.MaxTurns,
+		MaxTokens:   flags.MaxTokens,
+		Timeout:     flags.Timeout,
+		ReceiptPath: flags.ReceiptPath,
+		Quiet:       flags.Quiet,
+		ProjectRoot: flags.ProjectRoot,
+	}, headless.Deps{})
 	if err != nil {
 		return nil, runExitError{code: runExitInfrastructure, err: err}
 	}
-	cfg, err := appconfig.Load(configPath)
-	if err != nil {
-		return nil, runExitError{code: runExitInfrastructure, err: fmt.Errorf("load config: %w", err)}
-	}
-	if strings.TrimSpace(flags.ProjectRoot) != "" {
-		cfg.ProjectRoot = strings.TrimSpace(flags.ProjectRoot)
-	}
-	if strings.TrimSpace(flags.Brain) != "" {
-		cfg.Brain.VaultPath = strings.TrimSpace(flags.Brain)
-	}
-	if err := cfg.Validate(); err != nil {
-		return nil, runExitError{code: runExitInfrastructure, err: err}
-	}
-
-	roleCfg, ok := cfg.AgentRoles[flags.Role]
-	if !ok {
-		return nil, runExitError{code: runExitInfrastructure, err: fmt.Errorf("agent role %q not found in config", flags.Role)}
-	}
-	systemPrompt, _, err := rtpkg.LoadRoleSystemPrompt(flags.Role, cfg.ProjectRoot, roleCfg.SystemPrompt)
-	if err != nil {
-		return nil, runExitError{code: runExitInfrastructure, err: err}
-	}
-	chainID := resolveChainID(flags.ChainID)
-	ctx, cancel := context.WithTimeout(cmd.Context(), flags.Timeout)
-	defer cancel()
-
-	runtimeBundle, err := buildRunRuntime(ctx, cfg)
-	if err != nil {
-		return nil, runExitError{code: runExitInfrastructure, err: err}
-	}
-	defer runtimeBundle.Cleanup()
-
-	registry, scopedBrainCfg, err := buildRunRoleRegistry(cfg, roleCfg, role.BuilderDeps{
-		BrainBackend:     runtimeBundle.BrainBackend,
-		BrainSearcher:    runtimeBundle.BrainSearcher,
-		SemanticSearcher: runtimeBundle.SemanticSearcher,
-		ProviderRuntime:  runtimeBundle.ProviderRouter,
-		Queries:          runtimeBundle.Queries,
-		ProjectID:        cfg.ProjectRoot,
-	})
-	if err != nil {
-		return nil, runExitError{code: runExitInfrastructure, err: err}
-	}
-
-	executor := tool.NewExecutor(registry, tool.ExecutorConfig{MaxOutputTokens: cfg.Agent.ToolOutputMaxTokens, ProjectRoot: cfg.ProjectRoot}, runtimeBundle.Logger)
-	executor.SetRecorder(tool.NewToolExecutionRecorder(runtimeBundle.Queries))
-	adapter := tool.NewAgentLoopAdapter(executor)
-	var sink agent.EventSink
-	if !flags.Quiet {
-		sink = newRunProgressSink(cmd.ErrOrStderr())
-	}
-	loopMaxTurns := roleCfg.MaxTurns
-	if flags.MaxTurns > 0 {
-		loopMaxTurns = flags.MaxTurns
-	}
-	maxTokens := roleCfg.MaxTokens
-	if flags.MaxTokens > 0 {
-		maxTokens = flags.MaxTokens
-	}
-	if loopMaxTurns == 0 {
-		loopMaxTurns = cfg.Agent.MaxIterationsPerTurn
-	}
-
-	titleGen := conversation.NewTitleGen(runtimeBundle.ConversationManager, runtimeBundle.ProviderRouter, cfg.Routing.Default.Model, runtimeBundle.Logger)
-	agentLoop := newRunAgentLoop(agent.AgentLoopDeps{
-		ContextAssembler:    runtimeBundle.ContextAssembler,
-		ConversationManager: runtimeBundle.ConversationManager,
-		ProviderRouter:      runtimeBundle.ProviderRouter,
-		ToolExecutor:        adapter,
-		ToolDefinitions:     registry.ToolDefinitions(),
-		PromptBuilder:       agent.NewPromptBuilder(runtimeBundle.Logger),
-		TitleGenerator:      titleGen,
-		EventSink:           sink,
-		Config: agent.AgentLoopConfig{
-			MaxIterations:              loopMaxTurns,
-			LoopDetectionThreshold:     cfg.Agent.LoopDetectionThreshold,
-			ExtendedThinking:           cfg.Agent.ExtendedThinking,
-			BasePrompt:                 systemPrompt,
-			ProviderName:               cfg.Routing.Default.Provider,
-			ModelName:                  cfg.Routing.Default.Model,
-			EmitContextDebug:           cfg.Context.EmitContextDebug,
-			ContextConfig:              cfg.Context,
-			ToolResultStoreRoot:        cfg.Agent.ToolResultStoreRoot,
-			CacheSystemPrompt:          cfg.Agent.CacheSystemPrompt,
-			CacheAssembledContext:      cfg.Agent.CacheAssembledContext,
-			CacheConversationHistory:   cfg.Agent.CacheConversationHistory,
-			CompressHistoricalResults:  cfg.Agent.CompressHistoricalResults,
-			StripHistoricalLineNumbers: cfg.Agent.StripHistoricalLineNumbers,
-			ElideDuplicateReads:        cfg.Agent.ElideDuplicateReads,
-			HistorySummarizeAfterTurns: cfg.Agent.HistorySummarizeAfterTurns,
-		},
-		Logger: runtimeBundle.Logger,
-	})
-	defer agentLoop.Close()
-
-	convOpts := []conversation.CreateOption{}
-	if cfg.Routing.Default.Provider != "" {
-		convOpts = append(convOpts, conversation.WithProvider(cfg.Routing.Default.Provider))
-	}
-	if cfg.Routing.Default.Model != "" {
-		convOpts = append(convOpts, conversation.WithModel(cfg.Routing.Default.Model))
-	}
-	conv, err := createRunConversation(ctx, runtimeBundle.ConversationManager, cfg.ProjectRoot, convOpts...)
-	if err != nil {
-		return nil, runExitError{code: runExitInfrastructure, err: fmt.Errorf("create conversation: %w", err)}
-	}
-	modelContextLimit, err := rtpkg.ResolveModelContextLimit(cfg, cfg.Routing.Default.Provider)
-	if err != nil {
-		return nil, runExitError{code: runExitInfrastructure, err: err}
-	}
-	turnResult, turnErr := agentLoop.RunTurn(ctx, agent.RunTurnRequest{
-		ConversationID:    conv.ID,
-		TurnNumber:        1,
-		Message:           taskText,
-		ModelContextLimit: modelContextLimit,
-	})
-
-	receiptVerdict := "completed_no_receipt"
-	exitCode := runExitOK
-	if turnErr != nil {
-		if errors.Is(turnErr, agent.ErrTurnCancelled) && errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			receiptVerdict = "safety_limit"
-			exitCode = runExitSafetyLimit
-		} else {
-			return nil, runExitError{code: runExitInfrastructure, err: turnErr}
-		}
-	} else if (loopMaxTurns > 0 && turnResult.IterationCount >= loopMaxTurns) || exceededMaxTokens(turnResult, maxTokens) {
-		receiptVerdict = "safety_limit"
-		exitCode = runExitSafetyLimit
-	}
-
-	receiptPath, receipt, err := ensureReceipt(ctx, runtimeBundle.BrainBackend, scopedBrainCfg, flags.Role, chainID, resolveReceiptPath(flags.Role, chainID, flags.ReceiptPath), receiptVerdict, finalText(turnResult), turnResult)
-	if err != nil {
-		return nil, runExitError{code: runExitInfrastructure, err: err}
-	}
-	if receipt != nil {
-		switch receipt.Verdict {
-		case "escalate":
-			exitCode = runExitEscalation
-		case "safety_limit":
-			exitCode = runExitSafetyLimit
-		}
-	}
-	return &runExecutionResult{ReceiptPath: receiptPath, ExitCode: exitCode}, nil
-}
-
-func readTask(task string, taskFile string) (string, error) {
-	return headless.ReadTask(task, taskFile)
-}
-
-func resolveChainID(input string) string {
-	if strings.TrimSpace(input) != "" {
-		return strings.TrimSpace(input)
-	}
-	return id.New()
-}
-
-func exceededMaxTokens(turnResult *agent.TurnResult, maxTokens int) bool {
-	return headless.ExceededMaxTokens(turnResult, maxTokens)
-}
-
-func finalText(turnResult *agent.TurnResult) string {
-	return headless.FinalText(turnResult)
-}
-
-func writeString(out io.Writer, value string) {
-	if out == nil {
-		return
-	}
-	_, _ = fmt.Fprintln(out, value)
+	return &runExecutionResult{ReceiptPath: result.ReceiptPath, ExitCode: int(result.ExitCode)}, nil
 }
