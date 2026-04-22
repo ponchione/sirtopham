@@ -47,15 +47,10 @@ func buildIterationPersistMessages(assistantContentJSON string, toolResults []pr
 }
 
 func (l *AgentLoop) persistToolIteration(ctx stdctx.Context, turnExec *turnExecution, iteration int, assistantContentJSON string, persistMessages []conversation.IterationMessage) error {
-	cleanupTurn := inflightTurn{
-		ConversationID:           turnExec.req.ConversationID,
-		TurnNumber:               turnExec.req.TurnNumber,
-		Iteration:                iteration,
-		CompletedIterations:      turnExec.completedIterations,
-		AssistantResponseStarted: true,
-		AssistantMessageContent:  assistantContentJSON,
-		ToolMessages:             append([]conversation.IterationMessage(nil), persistMessages[1:]...),
-	}
+	cleanupTurn := cleanupInflightTurnBase(turnExec, iteration)
+	cleanupTurn.AssistantResponseStarted = true
+	cleanupTurn.AssistantMessageContent = assistantContentJSON
+	cleanupTurn.ToolMessages = append([]conversation.IterationMessage(nil), persistMessages[1:]...)
 	if err := l.conversationManager.PersistIteration(ctx, turnExec.req.ConversationID, turnExec.req.TurnNumber, iteration, persistMessages); err != nil {
 		if isCancelled(ctx) {
 			return l.handleTurnCancellation(cleanupTurn, ctx.Err())

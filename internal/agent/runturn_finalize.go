@@ -34,14 +34,10 @@ func (l *AgentLoop) completeTextOnlyIteration(ctx stdctx.Context, turnExec *turn
 	}}
 	if err := l.conversationManager.PersistIteration(ctx, turnExec.req.ConversationID, turnExec.req.TurnNumber, iteration, persistMessages); err != nil {
 		if isCancelled(ctx) {
-			return nil, l.handleTurnCancellation(inflightTurn{
-				ConversationID:           turnExec.req.ConversationID,
-				TurnNumber:               turnExec.req.TurnNumber,
-				Iteration:                iteration,
-				CompletedIterations:      turnExec.completedIterations,
-				AssistantResponseStarted: true,
-				AssistantMessageContent:  assistantContentJSON,
-			}, ctx.Err())
+			cleanupTurn := cleanupInflightTurnBase(turnExec, iteration)
+			cleanupTurn.AssistantResponseStarted = true
+			cleanupTurn.AssistantMessageContent = assistantContentJSON
+			return nil, l.handleTurnCancellation(cleanupTurn, ctx.Err())
 		}
 		return nil, fmt.Errorf("agent loop: persist final iteration %d: %w", iteration, err)
 	}

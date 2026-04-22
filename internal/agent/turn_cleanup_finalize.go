@@ -22,22 +22,13 @@ func cleanupReasonEventValue(reason turnCleanupReason) string {
 // assistant/tool state, emits TurnCancelledEvent and StatusEvent(StateIdle),
 // and returns ErrTurnCancelled wrapping the underlying cause.
 func (l *AgentLoop) handleCancellation(conversationID string, turnNumber, currentIteration, completedIterations int, cause error) error {
-	return l.handleTurnCancellation(inflightTurn{
-		ConversationID:           conversationID,
-		TurnNumber:               turnNumber,
-		Iteration:                currentIteration,
-		CompletedIterations:      completedIterations,
-		AssistantResponseStarted: currentIteration > 0,
-	}, cause)
+	cleanupTurn := cleanupInflightTurn(conversationID, turnNumber, currentIteration, completedIterations)
+	cleanupTurn.AssistantResponseStarted = currentIteration > 0
+	return l.handleTurnCancellation(cleanupTurn, cause)
 }
 
 func (l *AgentLoop) handleIterationSetupCancellation(conversationID string, turnNumber, currentIteration, completedIterations int, cause error) error {
-	return l.handleTurnCancellation(inflightTurn{
-		ConversationID:      conversationID,
-		TurnNumber:          turnNumber,
-		Iteration:           currentIteration,
-		CompletedIterations: completedIterations,
-	}, cause)
+	return l.handleTurnCancellation(cleanupInflightTurn(conversationID, turnNumber, currentIteration, completedIterations), cause)
 }
 
 func (l *AgentLoop) handleTurnCancellation(turn inflightTurn, cause error) error {
