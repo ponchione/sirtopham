@@ -18,10 +18,7 @@ func (l *AgentLoop) runSingleIteration(ctx stdctx.Context, turnExec *turnExecuti
 
 	iterExec, err := l.prepareIteration(ctx, turnExec, iteration)
 	if err != nil {
-		if isCancelled(ctx) {
-			return nil, l.handleIterationSetupCancellation(turnExec.req.ConversationID, turnExec.req.TurnNumber, iteration, turnExec.completedIterations, ctx.Err())
-		}
-		return nil, err
+		return nil, l.normalizeIterationSetupError(ctx, turnExec, iteration, err)
 	}
 
 	result, err := l.runProviderIteration(ctx, turnExec, iterExec)
@@ -58,16 +55,9 @@ func (l *AgentLoop) runSingleIteration(ctx stdctx.Context, turnExec *turnExecuti
 		return &iterationOutcome{done: true, result: earlyResult}, nil
 	}
 
-	toolResults = l.applyToolResultBudget(ctx, turnExec.req, iteration, toolResults, result.ToolCalls)
-
-	persistMessages := buildIterationPersistMessages(assistantContentJSON, toolResults, result.ToolCalls)
-	if err := l.persistToolIteration(ctx, turnExec, iteration, assistantContentJSON, persistMessages); err != nil {
+	if err := l.completeToolIteration(ctx, turnExec, iteration, assistantContentJSON, result.ToolCalls, toolResults); err != nil {
 		return nil, err
 	}
-
-	turnExec.completedIterations = iteration
-	appendIterationMessages(turnExec, assistantContentJSON, toolResults, result.ToolCalls)
-	l.injectLoopNudgeIfNeeded(turnExec, iteration, result.ToolCalls)
 	return &iterationOutcome{}, nil
 }
 

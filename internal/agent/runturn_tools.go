@@ -14,15 +14,10 @@ type validatedToolCalls struct {
 }
 
 func newInflightToolTurn(req RunTurnRequest, iteration, completedIterations int, result *streamResult, assistantContentJSON string) inflightTurn {
-	inflight := inflightTurn{
-		ConversationID:           req.ConversationID,
-		TurnNumber:               req.TurnNumber,
-		Iteration:                iteration,
-		CompletedIterations:      completedIterations,
-		AssistantResponseStarted: true,
-		AssistantMessageContent:  assistantContentJSON,
-		ToolCalls:                make([]inflightToolCall, len(result.ToolCalls)),
-	}
+	inflight := cleanupInflightTurn(req.ConversationID, req.TurnNumber, iteration, completedIterations)
+	inflight.AssistantResponseStarted = true
+	inflight.AssistantMessageContent = assistantContentJSON
+	inflight.ToolCalls = make([]inflightToolCall, len(result.ToolCalls))
 	for i, tc := range result.ToolCalls {
 		inflight.ToolCalls[i] = inflightToolCall{ToolCallID: tc.ID, ToolName: tc.Name}
 	}

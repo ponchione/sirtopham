@@ -96,29 +96,15 @@ func (l *AgentLoop) runProviderIteration(ctx stdctx.Context, turnExec *turnExecu
 	if err != nil {
 		if isCancelled(ctx) {
 			if result != nil {
-				cleanupTurn := cleanupInflightTurnBase(turnExec, iterExec.number)
-				cleanupTurn.AssistantResponseStarted = result.TextContent != "" || len(result.ContentBlocks) > 0
-				cleanupTurn.AssistantMessageContent = assistantContentJSONForCleanup(result)
-				return nil, l.handleTurnCancellation(cleanupTurn, ctx.Err())
+				return nil, l.handleTurnCancellation(partialAssistantCleanupTurn(turnExec, iterExec.number, result), ctx.Err())
 			}
 			return nil, l.handleIterationSetupCancellation(turnExec.req.ConversationID, turnExec.req.TurnNumber, iterExec.number, turnExec.completedIterations, ctx.Err())
 		}
 
-		if l.isContextOverflowError(err) {
-			if retryResult, retryErr := l.tryEmergencyCompression(ctx, turnExec.req, turnExec.turnCtx, turnExec.currentTurnMessages, iterExec.number, iterExec.disableTools); retryResult != nil || retryErr != nil {
-				if retryErr != nil {
-					return nil, retryErr
-				}
-				result = retryResult
-				err = nil
-			}
-		}
+		result, err = l.normalizeOverflowRecovery(ctx, turnExec, iterExec, result, err)
 		if err != nil {
 			if result != nil && (result.TextContent != "" || len(result.ContentBlocks) > 0) {
-				cleanupTurn := cleanupInflightTurnBase(turnExec, iterExec.number)
-				cleanupTurn.AssistantResponseStarted = true
-				cleanupTurn.AssistantMessageContent = assistantContentJSONForCleanup(result)
-				return nil, l.handleTurnStreamFailure(cleanupTurn, err)
+				return nil, l.handleTurnStreamFailure(partialAssistantCleanupTurn(turnExec, iterExec.number, result), err)
 			}
 			return nil, err
 		}
@@ -127,6 +113,57 @@ func (l *AgentLoop) runProviderIteration(ctx stdctx.Context, turnExec *turnExecu
 	turnExec.totalUsage = turnExec.totalUsage.Add(result.Usage)
 	l.tryPostResponseCompression(ctx, turnExec.req.ConversationID, result.Usage.InputTokens, turnExec.req.ModelContextLimit)
 	return result, nil
+}
+
+func (l *AgentLoop) normalizeOverflowRecovery(
+	ctx stdctx.Context,
+	turnExec *turnExecution,
+	iterExec *iterationExecution,
+	result *streamResult,
+	err error,
+) (*streamResult, error) {
+	if err == nil || !l.isContextOverflowError(err) {
+		return result, err
+	}
+
+	retryResult, retryErr := l.tryEmergencyCompression(
+		ctx,
+		turnExec.req,
+		turnExec.turnCtx,
+		turnExec.currentTurnMessages,
+		iterExec.number,
+		iterExec.disableTools,
+	)
+	if retryResult == nil && retryErr == nil {
+		return result, err
+	}
+	if retryErr != nil {
+		return nil, retryErr
+	}
+	return retryResult, nil
+}
+
+func (l *AgentLoop) normalizeIterationSetupError(ctx stdctx.Context, turnExec *turnExecution, iteration int, err error) error {
+	if err == nil {
+		return nil
+	}
+	if !isCancelled(ctx) {
+		return err
+	}
+	return l.handleIterationSetupCancellation(
+		turnExec.req.ConversationID,
+		turnExec.req.TurnNumber,
+		iteration,
+		turnExec.completedIterations,
+		ctx.Err(),
+	)
+}
+
+func partialAssistantCleanupTurn(turnExec *turnExecution, iteration int, result *streamResult) inflightTurn {
+	cleanupTurn := cleanupInflightTurnBase(turnExec, iteration)
+	cleanupTurn.AssistantResponseStarted = result != nil && (result.TextContent != "" || len(result.ContentBlocks) > 0)
+	cleanupTurn.AssistantMessageContent = assistantContentJSONForCleanup(result)
+	return cleanupTurn
 }
 
 func assistantContentJSONForCleanup(result *streamResult) string {
