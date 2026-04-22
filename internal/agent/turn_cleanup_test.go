@@ -34,6 +34,35 @@ func TestCleanupInflightTurnBaseCopiesSharedFieldsOnly(t *testing.T) {
 	}
 }
 
+func TestPartialAssistantCleanupTurnBuildsCleanupStateFromStreamResult(t *testing.T) {
+	turnExec := &turnExecution{
+		req: RunTurnRequest{
+			ConversationID: "conv-partial-helper",
+			TurnNumber:     4,
+		},
+		completedIterations: 1,
+	}
+
+	result := &streamResult{
+		TextContent: "partial",
+		ContentBlocks: []provider.ContentBlock{
+			provider.NewThinkingBlock("reasoning"),
+			provider.NewTextBlock("partial"),
+		},
+	}
+
+	got := partialAssistantCleanupTurn(turnExec, 2, result)
+	if got.ConversationID != "conv-partial-helper" || got.TurnNumber != 4 || got.Iteration != 2 || got.CompletedIterations != 1 {
+		t.Fatalf("partialAssistantCleanupTurn base fields = %#v, want conv-partial-helper/4/2/1", got)
+	}
+	if !got.AssistantResponseStarted {
+		t.Fatal("AssistantResponseStarted = false, want true")
+	}
+	if !strings.Contains(got.AssistantMessageContent, `"type":"thinking"`) || !strings.Contains(got.AssistantMessageContent, `"type":"text"`) {
+		t.Fatalf("AssistantMessageContent = %q, want serialized cleanup content blocks", got.AssistantMessageContent)
+	}
+}
+
 func TestBuildCleanupPlanSkipsCompletedIteration(t *testing.T) {
 	plan := buildCleanupPlan(inflightTurn{
 		ConversationID:           "conv-1",

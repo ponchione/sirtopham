@@ -60,6 +60,25 @@ func (l *AgentLoop) persistToolIteration(ctx stdctx.Context, turnExec *turnExecu
 	return nil
 }
 
+func (l *AgentLoop) completeToolIteration(
+	ctx stdctx.Context,
+	turnExec *turnExecution,
+	iteration int,
+	assistantContentJSON string,
+	toolCalls []provider.ToolCall,
+	toolResults []provider.ToolResult,
+) error {
+	toolResults = l.applyToolResultBudget(ctx, turnExec.req, iteration, toolResults, toolCalls)
+	persistMessages := buildIterationPersistMessages(assistantContentJSON, toolResults, toolCalls)
+	if err := l.persistToolIteration(ctx, turnExec, iteration, assistantContentJSON, persistMessages); err != nil {
+		return err
+	}
+	turnExec.completedIterations = iteration
+	appendIterationMessages(turnExec, assistantContentJSON, toolResults, toolCalls)
+	l.injectLoopNudgeIfNeeded(turnExec, iteration, toolCalls)
+	return nil
+}
+
 func appendIterationMessages(turnExec *turnExecution, assistantContentJSON string, toolResults []provider.ToolResult, toolCalls []provider.ToolCall) {
 	assistantMsg := provider.Message{
 		Role:    provider.RoleAssistant,
