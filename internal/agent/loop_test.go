@@ -50,6 +50,7 @@ type loopConversationManagerStub struct {
 	history               []db.Message
 	err                   error
 	persistErr            error
+	persistFn             func(ctx stdctx.Context, conversationID string, turnNumber int, message string) error
 	persistIterErr        error
 	persistIterFn         func(ctx stdctx.Context, conversationID string, turnNumber, iteration int, messages []conversation.IterationMessage) error
 	cancelIterErr         error
@@ -63,13 +64,16 @@ type loopConversationManagerStub struct {
 	seen                  contextpkg.SeenFileLookup
 }
 
-func (s *loopConversationManagerStub) PersistUserMessage(_ stdctx.Context, conversationID string, turnNumber int, message string) error {
+func (s *loopConversationManagerStub) PersistUserMessage(ctx stdctx.Context, conversationID string, turnNumber int, message string) error {
 	s.persistCalls = append(s.persistCalls, persistedUserMessageCall{
 		conversationID: conversationID,
 		turnNumber:     turnNumber,
 		message:        message,
 	})
 	s.callOrder = append(s.callOrder, "persist")
+	if s.persistFn != nil {
+		return s.persistFn(ctx, conversationID, turnNumber, message)
+	}
 	return s.persistErr
 }
 
@@ -122,11 +126,12 @@ type loopContextAssemblerStub struct {
 	historyTokenCount int
 	pkg               *contextpkg.FullContextPackage
 	compressionNeeded bool
+	assembleFn        func(ctx stdctx.Context, message string, history []db.Message, scope contextpkg.AssemblyScope, modelContextLimit int, historyTokenCount int) (*contextpkg.FullContextPackage, bool, error)
 	err               error
 }
 
 func (s *loopContextAssemblerStub) Assemble(
-	_ stdctx.Context,
+	ctx stdctx.Context,
 	message string,
 	history []db.Message,
 	scope contextpkg.AssemblyScope,
@@ -138,6 +143,9 @@ func (s *loopContextAssemblerStub) Assemble(
 	s.scope = scope
 	s.modelContextLimit = modelContextLimit
 	s.historyTokenCount = historyTokenCount
+	if s.assembleFn != nil {
+		return s.assembleFn(ctx, message, history, scope, modelContextLimit, historyTokenCount)
+	}
 	return s.pkg, s.compressionNeeded, s.err
 }
 
@@ -151,9 +159,13 @@ type providerRouterStub struct {
 	callIndex    int
 	streamErr    error
 	requests     []*provider.Request
+	streamFn     func(ctx stdctx.Context, req *provider.Request) (<-chan provider.StreamEvent, error)
 }
 
-func (s *providerRouterStub) Stream(_ stdctx.Context, req *provider.Request) (<-chan provider.StreamEvent, error) {
+func (s *providerRouterStub) Stream(ctx stdctx.Context, req *provider.Request) (<-chan provider.StreamEvent, error) {
+	if s.streamFn != nil {
+		return s.streamFn(ctx, req)
+	}
 	if s.streamErr != nil {
 		return nil, s.streamErr
 	}
@@ -750,6 +762,126 @@ func TestRunTurnReturnsErrorEventWhenPersistenceFails(t *testing.T) {
 	}
 	if errEvent.ErrorCode != "persist_user_message_failed" {
 		t.Fatalf("ErrorCode = %q, want persist_user_message_failed", errEvent.ErrorCode)
+	}
+}
+
+func TestRunTurnCancelsDuringPersistUserMessage(t *testing.T) {
+	sink := NewChannelSink(8)
+	ctx, cancel := stdctx.WithCancel(stdctx.Background())
+	defer cancel()
+
+	loop := NewAgentLoop(AgentLoopDeps{
+		ContextAssembler: &loopContextAssemblerStub{},
+		ConversationManager: &loopConversationManagerStub{
+			persistFn: func(callCtx stdctx.Context, conversationID string, turnNumber int, message string) error {
+				cancel()
+				return callCtx.Err()
+			},
+		},
+		ProviderRouter: &providerRouterStub{},
+		ToolExecutor:   &toolExecutorStub{},
+		PromptBuilder:  NewPromptBuilder(nil),
+		EventSink:      sink,
+	})
+	loop.now = func() time.Time { return time.Unix(1700000701, 0).UTC() }
+
+	_, err := loop.RunTurn(ctx, RunTurnRequest{
+		ConversationID:    "conversation-cancel-persist",
+		TurnNumber:        1,
+		Message:           "hello",
+		ModelContextLimit: 200000,
+	})
+	if !errors.Is(err, ErrTurnCancelled) {
+		t.Fatalf("RunTurn error = %v, want ErrTurnCancelled", err)
+	}
+
+	events := drainEvents(sink, 8)
+	if got := eventTypes(events); len(got) < 2 || got[len(got)-2] != "turn_cancelled" || got[len(got)-1] != "status:idle" {
+		t.Fatalf("event sequence = %v, want ... turn_cancelled, status:idle", got)
+	}
+}
+
+func TestRunTurnCancelsDuringPrepareTurnContext(t *testing.T) {
+	sink := NewChannelSink(8)
+	ctx, cancel := stdctx.WithCancel(stdctx.Background())
+	defer cancel()
+
+	assembler := &loopContextAssemblerStub{
+		assembleFn: func(callCtx stdctx.Context, message string, history []db.Message, scope contextpkg.AssemblyScope, modelContextLimit int, historyTokenCount int) (*contextpkg.FullContextPackage, bool, error) {
+			cancel()
+			return nil, false, callCtx.Err()
+		},
+	}
+	loop := NewAgentLoop(AgentLoopDeps{
+		ContextAssembler:    assembler,
+		ConversationManager: &loopConversationManagerStub{},
+		ProviderRouter:      &providerRouterStub{},
+		ToolExecutor:        &toolExecutorStub{},
+		PromptBuilder:       NewPromptBuilder(nil),
+		EventSink:           sink,
+	})
+	loop.now = func() time.Time { return time.Unix(1700000702, 0).UTC() }
+
+	_, err := loop.RunTurn(ctx, RunTurnRequest{
+		ConversationID:    "conversation-cancel-prepare",
+		TurnNumber:        1,
+		Message:           "hello",
+		ModelContextLimit: 200000,
+	})
+	if !errors.Is(err, ErrTurnCancelled) {
+		t.Fatalf("RunTurn error = %v, want ErrTurnCancelled", err)
+	}
+
+	events := drainEvents(sink, 8)
+	if got := eventTypes(events); len(got) < 2 || got[len(got)-2] != "turn_cancelled" || got[len(got)-1] != "status:idle" {
+		t.Fatalf("event sequence = %v, want ... turn_cancelled, status:idle", got)
+	}
+}
+
+func TestRunTurnCancelsBeforeIterationExecution(t *testing.T) {
+	sink := NewChannelSink(8)
+	ctx, cancel := stdctx.WithCancel(stdctx.Background())
+	defer cancel()
+
+	conversations := &loopConversationManagerStub{
+		history: []db.Message{},
+		seen:    loopSeenFilesStub{},
+	}
+	conversations.reconstructFn = func(callCtx stdctx.Context, conversationID string) ([]db.Message, error) {
+		if len(conversations.reconstructCalls) == 2 {
+			cancel()
+			return nil, callCtx.Err()
+		}
+		return nil, nil
+	}
+	router := &providerRouterStub{
+		streamFn: func(callCtx stdctx.Context, req *provider.Request) (<-chan provider.StreamEvent, error) {
+			t.Fatal("provider stream should not be called after iteration-setup cancellation")
+			return nil, nil
+		},
+	}
+
+	loop := NewAgentLoop(AgentLoopDeps{
+		ContextAssembler:    &loopContextAssemblerStub{pkg: &contextpkg.FullContextPackage{Content: "context", Frozen: true}},
+		ConversationManager: conversations,
+		ProviderRouter:      router,
+		ToolExecutor:        &toolExecutorStub{},
+		PromptBuilder:       NewPromptBuilder(nil),
+		EventSink:           sink,
+	})
+	loop.now = func() time.Time { return time.Unix(1700000703, 0).UTC() }
+
+	_, err := loop.RunTurn(ctx, RunTurnRequest{
+		ConversationID:    "conversation-cancel-iteration",
+		TurnNumber:        1,
+		Message:           "hello",
+		ModelContextLimit: 200000,
+	})
+	if !errors.Is(err, ErrTurnCancelled) {
+		t.Fatalf("RunTurn error = %v, want ErrTurnCancelled", err)
+	}
+	if len(conversations.persistIterCalls) != 0 {
+		t.Fatalf("PersistIteration calls = %d, want 0", len(conversations.persistIterCalls))
 	}
 }
 
