@@ -1,0 +1,127 @@
+package agent
+
+import (
+	"encoding/json"
+	"strings"
+
+	"github.com/ponchione/sodoryard/internal/conversation"
+	"github.com/ponchione/sodoryard/internal/provider"
+)
+
+// buildCleanupPlan preserves already-materialized assistant/tool state when it
+// would be useful to future turns, and only falls back to CancelIteration when
+// nothing durable should remain from the interrupted iteration.
+func buildCleanupPlan(turn inflightTurn, reason turnCleanupReason) cleanupPlan {
+	plan := cleanupPlan{Reason: reason}
+	if turn.Iteration <= 0 || turn.Iteration <= turn.CompletedIterations {
+		return plan
+	}
+	if !turn.AssistantResponseStarted && len(turn.ToolCalls) == 0 {
+		return plan
+	}
+
+	if messages := buildInterruptedIterationMessages(turn, reason); len(messages) > 0 {
+		plan.Actions = append(plan.Actions, cleanupAction{
+			Kind:      cleanupActionPersistIteration,
+			Iteration: turn.Iteration,
+			Messages:  messages,
+		})
+		return plan
+	}
+
+	plan.Actions = append(plan.Actions, cleanupAction{
+		Kind:      cleanupActionCancelIteration,
+		Iteration: turn.Iteration,
+	})
+	return plan
+}
+
+func buildInterruptedIterationMessages(turn inflightTurn, reason turnCleanupReason) []conversation.IterationMessage {
+	if turn.AssistantMessageContent == "" {
+		return nil
+	}
+
+	assistantContent := turn.AssistantMessageContent
+	if len(turn.ToolCalls) == 0 && len(turn.ToolMessages) == 0 {
+		assistantContent = interruptedAssistantMessageContent(turn.AssistantMessageContent, reason)
+	}
+
+	messages := []conversation.IterationMessage{{
+		Role:    "assistant",
+		Content: assistantContent,
+	}}
+	messages = append(messages, append([]conversation.IterationMessage(nil), turn.ToolMessages...)...)
+
+	for _, tc := range turn.ToolCalls {
+		if tc.ResultStored {
+			continue
+		}
+		messages = append(messages, conversation.IterationMessage{
+			Role:      "tool",
+			Content:   interruptedToolResultContent(tc, reason),
+			ToolUseID: tc.ToolCallID,
+			ToolName:  tc.ToolName,
+		})
+	}
+
+	return messages
+}
+
+func interruptedAssistantMessageContent(raw string, reason turnCleanupReason) string {
+	kind := "[interrupted_assistant]"
+	messageText := "Assistant output was interrupted before turn completion."
+	if reason == cleanupReasonStreamFailure {
+		kind = "[failed_assistant]"
+		messageText = "Assistant output ended due to a stream failure before turn completion."
+	}
+	message := kind + "\nreason=" + string(reason) + "\nmessage=" + messageText
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return raw
+	}
+
+	blocks, err := provider.ContentBlocksFromRaw(json.RawMessage(raw))
+	if err != nil {
+		return strings.Replace(raw, `"text":"`, `"text":"`+message+`\npartial_text=`, 1)
+	}
+	hadTextBlock := false
+	for i := range blocks {
+		if blocks[i].Type != "text" {
+			continue
+		}
+		hadTextBlock = true
+		if strings.TrimSpace(blocks[i].Text) == "" {
+			blocks[i].Text = message
+		} else {
+			blocks[i].Text = message + "\npartial_text=" + blocks[i].Text
+		}
+		encoded, err := contentBlocksToJSON(blocks)
+		if err == nil {
+			return encoded
+		}
+		break
+	}
+	if !hadTextBlock {
+		blocks = append(blocks, provider.NewTextBlock(message))
+		encoded, err := contentBlocksToJSON(blocks)
+		if err == nil {
+			return encoded
+		}
+	}
+	return raw
+}
+
+func interruptedToolResultContent(tc inflightToolCall, reason turnCleanupReason) string {
+	status := "cancelled_before_execution"
+	if tc.Started {
+		status = "interrupted_during_execution"
+	}
+	return strings.Join([]string{
+		"[interrupted_tool_result]",
+		"reason=" + string(reason),
+		"tool=" + tc.ToolName,
+		"tool_use_id=" + tc.ToolCallID,
+		"status=" + status,
+		"message=Tool execution did not complete before the turn ended.",
+	}, "\n")
+}

@@ -1,29 +1,19 @@
 package main
 
 import (
-	"context"
-	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
-	"github.com/ponchione/sodoryard/internal/agent"
-	appconfig "github.com/ponchione/sodoryard/internal/config"
-	"github.com/ponchione/sodoryard/internal/conversation"
 	"github.com/ponchione/sodoryard/internal/headless"
-	"github.com/ponchione/sodoryard/internal/id"
-	"github.com/ponchione/sodoryard/internal/role"
-	rtpkg "github.com/ponchione/sodoryard/internal/runtime"
-	"github.com/ponchione/sodoryard/internal/tool"
 )
 
 const (
-	yardRunExitOK             = 0
-	yardRunExitInfrastructure = 1
-	yardRunExitSafetyLimit    = 2
-	yardRunExitEscalation     = 3
+	yardRunExitOK             = int(headless.ExitOK)
+	yardRunExitInfrastructure = int(headless.ExitInfrastructure)
+	yardRunExitSafetyLimit    = int(headless.ExitSafetyLimit)
+	yardRunExitEscalation     = int(headless.ExitEscalation)
 )
 
 type yardRunExitError struct {
@@ -94,175 +84,21 @@ func newYardRunCmd(configPath *string) *cobra.Command {
 }
 
 func yardRunHeadless(cmd *cobra.Command, configPath string, flags yardRunFlags) (*yardRunResult, error) {
-	if strings.TrimSpace(flags.Role) == "" {
-		return nil, yardRunExitError{code: yardRunExitInfrastructure, err: fmt.Errorf("--role is required")}
-	}
-	if (strings.TrimSpace(flags.Task) == "") == (strings.TrimSpace(flags.TaskFile) == "") {
-		return nil, yardRunExitError{code: yardRunExitInfrastructure, err: fmt.Errorf("exactly one of --task or --task-file is required")}
-	}
-	if flags.MaxTurns < 0 {
-		return nil, yardRunExitError{code: yardRunExitInfrastructure, err: fmt.Errorf("--max-turns must be > 0 when supplied")}
-	}
-	if flags.MaxTokens < 0 {
-		return nil, yardRunExitError{code: yardRunExitInfrastructure, err: fmt.Errorf("--max-tokens must be > 0 when supplied")}
-	}
-	if flags.Timeout <= 0 {
-		return nil, yardRunExitError{code: yardRunExitInfrastructure, err: fmt.Errorf("--timeout must be > 0")}
-	}
-
-	taskText, err := yardReadTask(flags.Task, flags.TaskFile)
+	result, err := headless.RunSession(cmd.Context(), cmd.ErrOrStderr(), configPath, headless.RunRequest{
+		Role:        flags.Role,
+		Task:        flags.Task,
+		TaskFile:    flags.TaskFile,
+		ChainID:     flags.ChainID,
+		Brain:       flags.Brain,
+		MaxTurns:    flags.MaxTurns,
+		MaxTokens:   flags.MaxTokens,
+		Timeout:     flags.Timeout,
+		ReceiptPath: flags.ReceiptPath,
+		Quiet:       flags.Quiet,
+		ProjectRoot: flags.ProjectRoot,
+	}, headless.Deps{})
 	if err != nil {
 		return nil, yardRunExitError{code: yardRunExitInfrastructure, err: err}
 	}
-	cfg, err := appconfig.Load(configPath)
-	if err != nil {
-		return nil, yardRunExitError{code: yardRunExitInfrastructure, err: fmt.Errorf("load config: %w", err)}
-	}
-	if strings.TrimSpace(flags.ProjectRoot) != "" {
-		cfg.ProjectRoot = strings.TrimSpace(flags.ProjectRoot)
-	}
-	if strings.TrimSpace(flags.Brain) != "" {
-		cfg.Brain.VaultPath = strings.TrimSpace(flags.Brain)
-	}
-	if err := cfg.Validate(); err != nil {
-		return nil, yardRunExitError{code: yardRunExitInfrastructure, err: err}
-	}
-
-	roleCfg, ok := cfg.AgentRoles[flags.Role]
-	if !ok {
-		return nil, yardRunExitError{code: yardRunExitInfrastructure, err: fmt.Errorf("agent role %q not found in config", flags.Role)}
-	}
-	systemPrompt, _, err := rtpkg.LoadRoleSystemPrompt(flags.Role, cfg.ProjectRoot, roleCfg.SystemPrompt)
-	if err != nil {
-		return nil, yardRunExitError{code: yardRunExitInfrastructure, err: err}
-	}
-	chainID := strings.TrimSpace(flags.ChainID)
-	if chainID == "" {
-		chainID = id.New()
-	}
-	ctx, cancel := context.WithTimeout(cmd.Context(), flags.Timeout)
-	defer cancel()
-
-	rt, err := rtpkg.BuildEngineRuntime(ctx, cfg)
-	if err != nil {
-		return nil, yardRunExitError{code: yardRunExitInfrastructure, err: err}
-	}
-	defer rt.Cleanup()
-
-	registry, scopedBrainCfg, err := role.BuildRegistry(cfg, roleCfg, role.BuilderDeps{
-		BrainBackend:     rt.BrainBackend,
-		BrainSearcher:    rt.BrainSearcher,
-		SemanticSearcher: rt.SemanticSearcher,
-		ProviderRuntime:  rt.ProviderRouter,
-		Queries:          rt.Queries,
-		ProjectID:        cfg.ProjectRoot,
-	})
-	if err != nil {
-		return nil, yardRunExitError{code: yardRunExitInfrastructure, err: err}
-	}
-
-	executor := tool.NewExecutor(registry, tool.ExecutorConfig{MaxOutputTokens: cfg.Agent.ToolOutputMaxTokens, ProjectRoot: cfg.ProjectRoot}, rt.Logger)
-	executor.SetRecorder(tool.NewToolExecutionRecorder(rt.Queries))
-	adapter := tool.NewAgentLoopAdapter(executor)
-	var sink agent.EventSink
-	if !flags.Quiet {
-		sink = newYardRunProgressSink(cmd.ErrOrStderr())
-	}
-	loopMaxTurns := roleCfg.MaxTurns
-	if flags.MaxTurns > 0 {
-		loopMaxTurns = flags.MaxTurns
-	}
-	maxTokens := roleCfg.MaxTokens
-	if flags.MaxTokens > 0 {
-		maxTokens = flags.MaxTokens
-	}
-	if loopMaxTurns == 0 {
-		loopMaxTurns = cfg.Agent.MaxIterationsPerTurn
-	}
-
-	titleGen := conversation.NewTitleGen(rt.ConversationManager, rt.ProviderRouter, cfg.Routing.Default.Model, rt.Logger)
-	agentLoop := agent.NewAgentLoop(agent.AgentLoopDeps{
-		ContextAssembler:    rt.ContextAssembler,
-		ConversationManager: rt.ConversationManager,
-		ProviderRouter:      rt.ProviderRouter,
-		ToolExecutor:        adapter,
-		ToolDefinitions:     registry.ToolDefinitions(),
-		PromptBuilder:       agent.NewPromptBuilder(rt.Logger),
-		TitleGenerator:      titleGen,
-		EventSink:           sink,
-		Config: agent.AgentLoopConfig{
-			MaxIterations:              loopMaxTurns,
-			LoopDetectionThreshold:     cfg.Agent.LoopDetectionThreshold,
-			ExtendedThinking:           cfg.Agent.ExtendedThinking,
-			BasePrompt:                 systemPrompt,
-			ProviderName:               cfg.Routing.Default.Provider,
-			ModelName:                  cfg.Routing.Default.Model,
-			EmitContextDebug:           cfg.Context.EmitContextDebug,
-			ContextConfig:              cfg.Context,
-			ToolResultStoreRoot:        cfg.Agent.ToolResultStoreRoot,
-			CacheSystemPrompt:          cfg.Agent.CacheSystemPrompt,
-			CacheAssembledContext:      cfg.Agent.CacheAssembledContext,
-			CacheConversationHistory:   cfg.Agent.CacheConversationHistory,
-			CompressHistoricalResults:  cfg.Agent.CompressHistoricalResults,
-			StripHistoricalLineNumbers: cfg.Agent.StripHistoricalLineNumbers,
-			ElideDuplicateReads:        cfg.Agent.ElideDuplicateReads,
-			HistorySummarizeAfterTurns: cfg.Agent.HistorySummarizeAfterTurns,
-		},
-		Logger: rt.Logger,
-	})
-	defer agentLoop.Close()
-
-	convOpts := []conversation.CreateOption{}
-	if cfg.Routing.Default.Provider != "" {
-		convOpts = append(convOpts, conversation.WithProvider(cfg.Routing.Default.Provider))
-	}
-	if cfg.Routing.Default.Model != "" {
-		convOpts = append(convOpts, conversation.WithModel(cfg.Routing.Default.Model))
-	}
-	conv, err := rt.ConversationManager.Create(ctx, cfg.ProjectRoot, convOpts...)
-	if err != nil {
-		return nil, yardRunExitError{code: yardRunExitInfrastructure, err: fmt.Errorf("create conversation: %w", err)}
-	}
-	modelContextLimit, err := rtpkg.ResolveModelContextLimit(cfg, cfg.Routing.Default.Provider)
-	if err != nil {
-		return nil, yardRunExitError{code: yardRunExitInfrastructure, err: err}
-	}
-	turnResult, turnErr := agentLoop.RunTurn(ctx, agent.RunTurnRequest{
-		ConversationID:    conv.ID,
-		TurnNumber:        1,
-		Message:           taskText,
-		ModelContextLimit: modelContextLimit,
-	})
-
-	receiptVerdict := "completed_no_receipt"
-	exitCode := yardRunExitOK
-	if turnErr != nil {
-		if errors.Is(turnErr, agent.ErrTurnCancelled) && errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			receiptVerdict = "safety_limit"
-			exitCode = yardRunExitSafetyLimit
-		} else {
-			return nil, yardRunExitError{code: yardRunExitInfrastructure, err: turnErr}
-		}
-	} else if (loopMaxTurns > 0 && turnResult.IterationCount >= loopMaxTurns) || yardExceededMaxTokens(turnResult, maxTokens) {
-		receiptVerdict = "safety_limit"
-		exitCode = yardRunExitSafetyLimit
-	}
-
-	receiptPath, r, err := yardEnsureReceipt(ctx, rt.BrainBackend, scopedBrainCfg, flags.Role, chainID, yardResolveReceiptPath(flags.Role, chainID, flags.ReceiptPath), receiptVerdict, yardFinalText(turnResult), turnResult)
-	if err != nil {
-		return nil, yardRunExitError{code: yardRunExitInfrastructure, err: err}
-	}
-	if r != nil {
-		switch r.Verdict {
-		case "escalate":
-			exitCode = yardRunExitEscalation
-		case "safety_limit":
-			exitCode = yardRunExitSafetyLimit
-		}
-	}
-	return &yardRunResult{ReceiptPath: receiptPath, ExitCode: exitCode}, nil
-}
-
-func yardReadTask(task string, taskFile string) (string, error) {
-	return headless.ReadTask(task, taskFile)
+	return &yardRunResult{ReceiptPath: result.ReceiptPath, ExitCode: int(result.ExitCode)}, nil
 }
