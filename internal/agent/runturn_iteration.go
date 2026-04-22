@@ -96,14 +96,10 @@ func (l *AgentLoop) runProviderIteration(ctx stdctx.Context, turnExec *turnExecu
 	if err != nil {
 		if isCancelled(ctx) {
 			if result != nil {
-				return nil, l.handleTurnCancellation(inflightTurn{
-					ConversationID:           turnExec.req.ConversationID,
-					TurnNumber:               turnExec.req.TurnNumber,
-					Iteration:                iterExec.number,
-					CompletedIterations:      turnExec.completedIterations,
-					AssistantResponseStarted: result.TextContent != "" || len(result.ContentBlocks) > 0,
-					AssistantMessageContent:  assistantContentJSONForCleanup(result),
-				}, ctx.Err())
+				cleanupTurn := cleanupInflightTurnBase(turnExec, iterExec.number)
+				cleanupTurn.AssistantResponseStarted = result.TextContent != "" || len(result.ContentBlocks) > 0
+				cleanupTurn.AssistantMessageContent = assistantContentJSONForCleanup(result)
+				return nil, l.handleTurnCancellation(cleanupTurn, ctx.Err())
 			}
 			return nil, l.handleIterationSetupCancellation(turnExec.req.ConversationID, turnExec.req.TurnNumber, iterExec.number, turnExec.completedIterations, ctx.Err())
 		}
@@ -119,14 +115,10 @@ func (l *AgentLoop) runProviderIteration(ctx stdctx.Context, turnExec *turnExecu
 		}
 		if err != nil {
 			if result != nil && (result.TextContent != "" || len(result.ContentBlocks) > 0) {
-				return nil, l.handleTurnStreamFailure(inflightTurn{
-					ConversationID:           turnExec.req.ConversationID,
-					TurnNumber:               turnExec.req.TurnNumber,
-					Iteration:                iterExec.number,
-					CompletedIterations:      turnExec.completedIterations,
-					AssistantResponseStarted: true,
-					AssistantMessageContent:  assistantContentJSONForCleanup(result),
-				}, err)
+				cleanupTurn := cleanupInflightTurnBase(turnExec, iterExec.number)
+				cleanupTurn.AssistantResponseStarted = true
+				cleanupTurn.AssistantMessageContent = assistantContentJSONForCleanup(result)
+				return nil, l.handleTurnStreamFailure(cleanupTurn, err)
 			}
 			return nil, err
 		}

@@ -4,6 +4,7 @@ import (
 	stdctx "context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +12,27 @@ import (
 	"github.com/ponchione/sodoryard/internal/conversation"
 	"github.com/ponchione/sodoryard/internal/provider"
 )
+
+func TestCleanupInflightTurnBaseCopiesSharedFieldsOnly(t *testing.T) {
+	turnExec := &turnExecution{
+		req: RunTurnRequest{
+			ConversationID: "conv-helper",
+			TurnNumber:     7,
+		},
+		completedIterations: 2,
+	}
+
+	got := cleanupInflightTurnBase(turnExec, 3)
+	want := inflightTurn{
+		ConversationID:      "conv-helper",
+		TurnNumber:          7,
+		Iteration:           3,
+		CompletedIterations: 2,
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("cleanupInflightTurnBase() = %#v, want %#v", got, want)
+	}
+}
 
 func TestBuildCleanupPlanSkipsCompletedIteration(t *testing.T) {
 	plan := buildCleanupPlan(inflightTurn{
@@ -174,6 +196,144 @@ func TestBuildCleanupPlanPersistsInterruptedToolResults(t *testing.T) {
 	}
 	if plan.Actions[0].Messages[1].ToolUseID != "tool-1" {
 		t.Fatalf("tool result = %#v, want tool_use_id tool-1", plan.Actions[0].Messages[1])
+	}
+}
+
+func TestHandleTurnCancellationPersistsInterruptedAssistant(t *testing.T) {
+	conversations := &loopConversationManagerStub{}
+	loop := NewAgentLoop(AgentLoopDeps{
+		ContextAssembler:    &loopContextAssemblerStub{},
+		ConversationManager: conversations,
+		ProviderRouter:      &providerRouterStub{},
+		ToolExecutor:        &toolExecutorStub{},
+		PromptBuilder:       NewPromptBuilder(nil),
+	})
+
+	err := loop.handleTurnCancellation(inflightTurn{
+		ConversationID:           "conv-partial-stream",
+		TurnNumber:               1,
+		Iteration:                1,
+		CompletedIterations:      0,
+		AssistantResponseStarted: true,
+		AssistantMessageContent:  `[{"type":"text","text":"hello"}]`,
+	}, stdctx.Canceled)
+	if err == nil || !errors.Is(err, ErrTurnCancelled) {
+		t.Fatalf("error = %v, want ErrTurnCancelled", err)
+	}
+	if len(conversations.persistIterCalls) != 1 {
+		t.Fatalf("PersistIteration calls = %d, want 1 interrupted assistant iteration", len(conversations.persistIterCalls))
+	}
+	if len(conversations.cancelIterCalls) != 0 {
+		t.Fatalf("CancelIteration calls = %d, want 0", len(conversations.cancelIterCalls))
+	}
+	pi := conversations.persistIterCalls[0]
+	if len(pi.messages) != 1 || pi.messages[0].Role != "assistant" || !strings.Contains(pi.messages[0].Content, "[interrupted_assistant]") || !strings.Contains(pi.messages[0].Content, "hello") {
+		t.Fatalf("persisted interrupted assistant messages = %#v, want interrupted assistant tombstone with partial text", pi.messages)
+	}
+}
+
+func TestHandleTurnStreamFailurePersistsFailedAssistant(t *testing.T) {
+	conversations := &loopConversationManagerStub{}
+	loop := NewAgentLoop(AgentLoopDeps{
+		ContextAssembler:    &loopContextAssemblerStub{},
+		ConversationManager: conversations,
+		ProviderRouter:      &providerRouterStub{},
+		ToolExecutor:        &toolExecutorStub{},
+		PromptBuilder:       NewPromptBuilder(nil),
+	})
+
+	err := loop.handleTurnStreamFailure(inflightTurn{
+		ConversationID:           "conv-stream-fail",
+		TurnNumber:               1,
+		Iteration:                1,
+		CompletedIterations:      0,
+		AssistantResponseStarted: true,
+		AssistantMessageContent:  `[{"type":"text","text":"partial"}]`,
+	}, errors.New("stream error: connection reset"))
+	if err == nil {
+		t.Fatal("error = nil, want stream failure error")
+	}
+	if len(conversations.persistIterCalls) != 1 {
+		t.Fatalf("PersistIteration calls = %d, want 1 failed assistant iteration", len(conversations.persistIterCalls))
+	}
+	pi := conversations.persistIterCalls[0]
+	if len(pi.messages) != 1 || !strings.Contains(pi.messages[0].Content, "[failed_assistant]") || !strings.Contains(pi.messages[0].Content, "reason=stream_failure") {
+		t.Fatalf("persisted failed assistant messages = %#v, want failed assistant tombstone", pi.messages)
+	}
+}
+
+func TestHandleTurnCancellationEmitsInterruptReasonAndIdle(t *testing.T) {
+	sink := NewChannelSink(8)
+	loop := NewAgentLoop(AgentLoopDeps{
+		ContextAssembler:    &loopContextAssemblerStub{},
+		ConversationManager: &loopConversationManagerStub{},
+		ProviderRouter:      &providerRouterStub{},
+		ToolExecutor:        &toolExecutorStub{},
+		PromptBuilder:       NewPromptBuilder(nil),
+		EventSink:           sink,
+	})
+	loop.now = func() time.Time { return time.Unix(1700000900, 0).UTC() }
+	loop.interruptRequested = true
+
+	err := loop.handleTurnCancellation(inflightTurn{ConversationID: "conv-interrupt", TurnNumber: 9, Iteration: 2}, stdctx.Canceled)
+	if !errors.Is(err, ErrTurnCancelled) {
+		t.Fatalf("handleTurnCancellation error = %v, want ErrTurnCancelled", err)
+	}
+
+	events := drainCleanupEvents(sink)
+	if len(events) != 2 {
+		t.Fatalf("event count = %d, want 2", len(events))
+	}
+	cancelled, ok := events[0].(TurnCancelledEvent)
+	if !ok {
+		t.Fatalf("first event = %T, want TurnCancelledEvent", events[0])
+	}
+	if cancelled.Reason != "user_interrupted" {
+		t.Fatalf("TurnCancelledEvent reason = %q, want user_interrupted", cancelled.Reason)
+	}
+	status, ok := events[1].(StatusEvent)
+	if !ok {
+		t.Fatalf("second event = %T, want StatusEvent", events[1])
+	}
+	if status.State != StateIdle {
+		t.Fatalf("StatusEvent state = %q, want %q", status.State, StateIdle)
+	}
+}
+
+func TestHandleTurnCancellationEmitsDeadlineReasonAndIdle(t *testing.T) {
+	sink := NewChannelSink(8)
+	loop := NewAgentLoop(AgentLoopDeps{
+		ContextAssembler:    &loopContextAssemblerStub{},
+		ConversationManager: &loopConversationManagerStub{},
+		ProviderRouter:      &providerRouterStub{},
+		ToolExecutor:        &toolExecutorStub{},
+		PromptBuilder:       NewPromptBuilder(nil),
+		EventSink:           sink,
+	})
+	loop.now = func() time.Time { return time.Unix(1700000950, 0).UTC() }
+
+	err := loop.handleTurnCancellation(inflightTurn{ConversationID: "conv-deadline", TurnNumber: 10, Iteration: 3}, stdctx.DeadlineExceeded)
+	if !errors.Is(err, ErrTurnCancelled) {
+		t.Fatalf("handleTurnCancellation error = %v, want ErrTurnCancelled", err)
+	}
+
+	events := drainCleanupEvents(sink)
+	if len(events) != 2 {
+		t.Fatalf("event count = %d, want 2", len(events))
+	}
+	cancelled, ok := events[0].(TurnCancelledEvent)
+	if !ok {
+		t.Fatalf("first event = %T, want TurnCancelledEvent", events[0])
+	}
+	if cancelled.Reason != "context_deadline_exceeded" {
+		t.Fatalf("TurnCancelledEvent reason = %q, want context_deadline_exceeded", cancelled.Reason)
+	}
+	status, ok := events[1].(StatusEvent)
+	if !ok {
+		t.Fatalf("second event = %T, want StatusEvent", events[1])
+	}
+	if status.State != StateIdle {
+		t.Fatalf("StatusEvent state = %q, want %q", status.State, StateIdle)
 	}
 }
 
