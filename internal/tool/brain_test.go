@@ -434,6 +434,32 @@ func TestBrainSearchFormatsMultiHopGraphAndHybridGraphLabels(t *testing.T) {
 	}
 }
 
+func TestBrainSearchRuntimeTagFilterMatchesNormalizedTagsWithoutReadingDocument(t *testing.T) {
+	backend := newFakeBackend(map[string]string{})
+	backend.readErr = fmt.Errorf("should not read document")
+	runtime := &fakeRuntimeBrainSearcher{resultsByMode: map[string][]appcontext.BrainSearchResult{
+		"auto": {{
+			DocumentPath: "notes/debug-loop.md",
+			Title:        "Debug Loop",
+			Snippet:      "Generated barrel loop notes.",
+			MatchMode:    "semantic",
+			MatchSources: []string{"semantic"},
+			Tags:         []string{"debug-history", "runtime_cache"},
+		}},
+	}}
+	tool := NewBrainSearchWithRuntime(backend, runtime, brainConfig(true))
+	result, err := tool.Execute(context.Background(), "/tmp", json.RawMessage(`{"query":"vite rebuild loop","mode":"auto","tags":["debug history","runtime cache"]}`))
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("Success = false, content = %q", result.Content)
+	}
+	if !strings.Contains(result.Content, "notes/debug-loop.md") {
+		t.Fatalf("content = %q, want runtime-tag-filtered hit", result.Content)
+	}
+}
+
 func TestBrainSearchWithTagsFiltersHitsByTag(t *testing.T) {
 	docs := map[string]string{
 		"_log.md":                "## [2026-04-07T16:41:44Z] query | vite rebuild loop fix (tags: debug history) Returned 0 results via keyword search.",
