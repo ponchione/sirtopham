@@ -22,7 +22,7 @@ type codexAuthTokens struct {
 	RefreshToken string `json:"refresh_token,omitempty"`
 }
 
-// codexAuthFile represents the JSON structure persisted in Sirtopham's own
+// codexAuthFile represents the JSON structure persisted in Yard's compatibility
 // auth store for the Codex provider.
 type codexAuthFile struct {
 	AuthMode     string          `json:"auth_mode,omitempty"`
@@ -68,11 +68,11 @@ var codexOAuthClientID = "app_EMoamEEZ73f0CkXaXp7hrann"
 var codexOAuthTokenURL = "https://auth.openai.com/oauth/token"
 
 func codexAuthRemediation() string {
-	return "Run `codex auth` to refresh Codex login. Sirtopham imports from ~/.codex/auth.json only when ~/.sirtopham/auth.json is absent; once imported, the Sirtopham store is authoritative."
+	return "Run `codex auth` to refresh Codex login. Yard imports from ~/.codex/auth.json only when the compatibility store at ~/.sirtopham/auth.json is absent; once imported, that private store is authoritative."
 }
 
-// getAccessToken obtains a valid access token, refreshing Sirtopham's private
-// Codex auth store when needed.
+// getAccessToken obtains a valid access token, refreshing Yard's private Codex
+// auth store when needed.
 func (p *CodexProvider) getAccessToken(ctx context.Context) (string, error) {
 	p.mu.RLock()
 	if p.cachedToken != "" && (p.tokenExpiry.IsZero() || time.Until(p.tokenExpiry) > 120*time.Second) {
@@ -131,7 +131,7 @@ func (p *CodexProvider) readAuthStateWithImport(allowImport bool) (*codexAuthSta
 		return privateState, nil
 	}
 	if err != nil && !errors.Is(err, os.ErrNotExist) && !errors.Is(err, errCodexStoreStateNotFound) {
-		return nil, fmt.Errorf("codex: invalid Sirtopham auth store %s: %w", storePath, err)
+		return nil, fmt.Errorf("codex: invalid Yard Codex auth store %s: %w", storePath, err)
 	}
 
 	sharedState, err := p.readSharedCodexAuthState(home, storePath, allowImport)
@@ -209,7 +209,7 @@ func codexTokenExpiry(auth codexAuthFile, token string) (time.Time, bool, error)
 	return time.Time{}, false, nil
 }
 
-// readAuthFile reads and parses Sirtopham's Codex auth store, importing the
+// readAuthFile reads and parses Yard's Codex auth store, importing the
 // user's Codex CLI auth once when the local store is empty.
 func (p *CodexProvider) readAuthFile() (string, time.Time, error) {
 	state, err := p.readAuthState()
@@ -239,7 +239,7 @@ func jwtExpiry(token string) (time.Time, error) {
 }
 
 // refreshToken refreshes Codex OAuth credentials via the token endpoint and
-// persists them only to Sirtopham's private auth store.
+// persists them only to Yard's private auth store.
 func (p *CodexProvider) refreshToken(ctx context.Context) error {
 	state, err := p.readAuthState()
 	if err != nil {

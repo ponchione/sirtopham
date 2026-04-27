@@ -417,74 +417,45 @@ function QueriesList({ needs }: { needs?: ContextNeeds }) {
 }
 
 function ExplicitFilesList({ results }: { results: ExplicitFileResult[] }) {
-  if (results.length === 0) {
-    return <p className="text-xs text-muted-foreground">No explicit file retrievals for this turn</p>;
-  }
-
-  const includedCount = results.filter((result) => result.included).length;
-  const excludedCount = results.length - includedCount;
-
-  return (
-    <div className="space-y-2">
-      <ResultSummary includedCount={includedCount} excludedCount={excludedCount} />
-      <div className="space-y-1">
-        {results.map((result, index) => (
-          <IncludedCard
-            key={`${result.file_path}-${index}`}
-            included={result.included}
-            scoreLabel={result.token_count != null ? `${result.token_count} tok` : result.truncated ? "truncated" : undefined}
-            title={result.file_path}
-            meta={[
-              result.truncated ? "truncated" : undefined,
-              result.exclusion_reason,
-            ].filter(Boolean) as string[]}
-          />
-        ))}
-      </div>
-    </div>
-  );
+  return <ResultList emptyLabel="No explicit file retrievals for this turn" results={results} render={explicitFileItem} />;
 }
 
 function RAGResultsList({ results }: { results: RAGResult[] }) {
-  if (results.length === 0) {
-    return <p className="text-xs text-muted-foreground">No code chunks</p>;
-  }
-
-  const includedCount = results.filter((result) => result.included).length;
-  const excludedCount = results.length - includedCount;
-
-  return (
-    <div className="space-y-2">
-      <ResultSummary includedCount={includedCount} excludedCount={excludedCount} />
-      <div className="space-y-1">
-        {results.map((result, index) => (
-          <IncludedCard
-            key={`${result.file_path}-${result.chunk_id ?? result.chunk_name ?? index}`}
-            included={result.included}
-            scoreLabel={result.similarity_score != null ? result.similarity_score.toFixed(2) : result.score?.toFixed(2)}
-            title={result.chunk_name ?? result.name ?? result.file_path}
-            subtitle={result.file_path}
-            meta={[
-              result.chunk_type,
-              result.signature,
-              result.reason,
-              result.exclusion_reason,
-              result.line_start != null && result.line_end != null
-                ? `lines ${result.line_start}-${result.line_end}`
-                : undefined,
-              result.matched_by,
-              result.from_hop ? "structural hop" : undefined,
-            ].filter(Boolean) as string[]}
-          />
-        ))}
-      </div>
-    </div>
-  );
+  return <ResultList emptyLabel="No code chunks" results={results} render={ragItem} />;
 }
 
 function BrainResultsList({ results }: { results: BrainResult[] }) {
+  return <ResultList emptyLabel="No brain results for this turn" results={results} render={brainItem} />;
+}
+
+function GraphResultsList({ results }: { results: GraphResult[] }) {
+  return <ResultList emptyLabel="No graph results for this turn" results={results} render={graphItem} />;
+}
+
+interface ContextResult {
+  included?: boolean;
+}
+
+interface ResultCardData {
+  key: string;
+  included?: boolean;
+  scoreLabel?: string;
+  title: string;
+  subtitle?: string;
+  meta?: string[];
+}
+
+function ResultList<T extends ContextResult>({
+  emptyLabel,
+  results,
+  render,
+}: {
+  emptyLabel: string;
+  results: T[];
+  render: (result: T, index: number) => ResultCardData;
+}) {
   if (results.length === 0) {
-    return <p className="text-xs text-muted-foreground">No brain results for this turn</p>;
+    return <p className="text-xs text-muted-foreground">{emptyLabel}</p>;
   }
 
   const includedCount = results.filter((result) => result.included).length;
@@ -494,57 +465,85 @@ function BrainResultsList({ results }: { results: BrainResult[] }) {
     <div className="space-y-2">
       <ResultSummary includedCount={includedCount} excludedCount={excludedCount} />
       <div className="space-y-1">
-        {results.map((result, index) => (
-          <IncludedCard
-            key={`${result.vault_path ?? result.document_path}-${index}`}
-            included={result.included}
-            scoreLabel={(result.score ?? result.match_score)?.toFixed(2)}
-            title={result.title ?? result.vault_path ?? result.document_path ?? "untitled brain result"}
-            subtitle={result.vault_path ?? result.document_path}
-            meta={[
-              result.match_mode,
-              result.graph_hop_depth != null ? `hop ${result.graph_hop_depth}` : undefined,
-              result.graph_source_path ? `via ${result.graph_source_path}` : undefined,
-              result.exclusion_reason,
-            ].filter(Boolean) as string[]}
-          />
-        ))}
+        {results.map((result, index) => {
+          const item = render(result, index);
+          const { key, ...card } = item;
+          return <IncludedCard key={key} {...card} />;
+        })}
       </div>
     </div>
   );
 }
 
-function GraphResultsList({ results }: { results: GraphResult[] }) {
-  if (results.length === 0) {
-    return <p className="text-xs text-muted-foreground">No graph results for this turn</p>;
-  }
+function explicitFileItem(result: ExplicitFileResult, index: number): ResultCardData {
+  return {
+    key: `${result.file_path}-${index}`,
+    included: result.included,
+    scoreLabel: result.token_count != null ? `${result.token_count} tok` : result.truncated ? "truncated" : undefined,
+    title: result.file_path,
+    meta: compactMeta([
+      result.truncated ? "truncated" : undefined,
+      result.exclusion_reason,
+    ]),
+  };
+}
 
-  const includedCount = results.filter((result) => result.included).length;
-  const excludedCount = results.length - includedCount;
+function ragItem(result: RAGResult, index: number): ResultCardData {
+  return {
+    key: `${result.file_path}-${result.chunk_id ?? result.chunk_name ?? index}`,
+    included: result.included,
+    scoreLabel: result.similarity_score != null ? result.similarity_score.toFixed(2) : result.score?.toFixed(2),
+    title: result.chunk_name ?? result.name ?? result.file_path,
+    subtitle: result.file_path,
+    meta: compactMeta([
+      result.chunk_type,
+      result.signature,
+      result.reason,
+      result.exclusion_reason,
+      result.line_start != null && result.line_end != null
+        ? `lines ${result.line_start}-${result.line_end}`
+        : undefined,
+      result.matched_by,
+      result.from_hop ? "structural hop" : undefined,
+    ]),
+  };
+}
 
-  return (
-    <div className="space-y-2">
-      <ResultSummary includedCount={includedCount} excludedCount={excludedCount} />
-      <div className="space-y-1">
-        {results.map((result, index) => (
-          <IncludedCard
-            key={`${result.symbol ?? result.symbol_name}-${result.file_path}-${index}`}
-            included={result.included}
-            scoreLabel={`depth ${result.depth ?? 0}`}
-            title={result.symbol ?? result.symbol_name ?? "unknown symbol"}
-            subtitle={result.file_path}
-            meta={[
-              result.relationship ?? result.relationship_type,
-              result.exclusion_reason,
-              result.line_start != null && result.line_end != null
-                ? `lines ${result.line_start}-${result.line_end}`
-                : undefined,
-            ].filter(Boolean) as string[]}
-          />
-        ))}
-      </div>
-    </div>
-  );
+function brainItem(result: BrainResult, index: number): ResultCardData {
+  return {
+    key: `${result.vault_path ?? result.document_path}-${index}`,
+    included: result.included,
+    scoreLabel: (result.score ?? result.match_score)?.toFixed(2),
+    title: result.title ?? result.vault_path ?? result.document_path ?? "untitled brain result",
+    subtitle: result.vault_path ?? result.document_path,
+    meta: compactMeta([
+      result.match_mode,
+      result.graph_hop_depth != null ? `hop ${result.graph_hop_depth}` : undefined,
+      result.graph_source_path ? `via ${result.graph_source_path}` : undefined,
+      result.exclusion_reason,
+    ]),
+  };
+}
+
+function graphItem(result: GraphResult, index: number): ResultCardData {
+  return {
+    key: `${result.symbol ?? result.symbol_name}-${result.file_path}-${index}`,
+    included: result.included,
+    scoreLabel: `depth ${result.depth ?? 0}`,
+    title: result.symbol ?? result.symbol_name ?? "unknown symbol",
+    subtitle: result.file_path,
+    meta: compactMeta([
+      result.relationship ?? result.relationship_type,
+      result.exclusion_reason,
+      result.line_start != null && result.line_end != null
+        ? `lines ${result.line_start}-${result.line_end}`
+        : undefined,
+    ]),
+  };
+}
+
+function compactMeta(values: Array<string | undefined | null | false>): string[] {
+  return values.filter(Boolean) as string[];
 }
 
 function ResultSummary({

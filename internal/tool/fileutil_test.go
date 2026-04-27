@@ -32,6 +32,48 @@ func TestResolvePathTraversal(t *testing.T) {
 	}
 }
 
+func TestResolvePathAllowsDotDotPrefixFilename(t *testing.T) {
+	dir := t.TempDir()
+	got, err := resolvePath(dir, "..foo")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := filepath.Join(dir, "..foo")
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestResolvePathRejectsSymlinkToOutsideFile(t *testing.T) {
+	dir := t.TempDir()
+	outside := t.TempDir()
+	outsideFile := filepath.Join(outside, "secret.txt")
+	if err := os.WriteFile(outsideFile, []byte("secret"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	if err := os.Symlink(outsideFile, filepath.Join(dir, "link.txt")); err != nil {
+		t.Fatalf("Symlink returned error: %v", err)
+	}
+
+	_, err := resolvePath(dir, "link.txt")
+	if err == nil {
+		t.Fatal("expected error for symlink escaping project root")
+	}
+}
+
+func TestResolvePathRejectsSymlinkParentToOutsideForNewFile(t *testing.T) {
+	dir := t.TempDir()
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(dir, "external")); err != nil {
+		t.Fatalf("Symlink returned error: %v", err)
+	}
+
+	_, err := resolvePath(dir, "external/new.txt")
+	if err == nil {
+		t.Fatal("expected error for symlink parent escaping project root")
+	}
+}
+
 func TestResolvePathEmpty(t *testing.T) {
 	_, err := resolvePath("/tmp", "")
 	if err == nil {

@@ -67,6 +67,16 @@ func TestRunInitializesEmptyDirectory(t *testing.T) {
 	if strings.Contains(got, "{{SODORYARD_AGENTS_DIR}}") {
 		t.Errorf("expected generated config to avoid {{SODORYARD_AGENTS_DIR}} placeholder")
 	}
+	for _, want := range []string{"yard index --config yard.yaml", "yard chain start --config yard.yaml"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("expected generated config to contain %q", want)
+		}
+	}
+	for _, stale := range []string{"tidmouth index", "sirtopham chain"} {
+		if strings.Contains(got, stale) {
+			t.Errorf("expected generated config to avoid stale command %q", stale)
+		}
+	}
 	wantRoles := []string{
 		"orchestrator:", "coder:", "planner:", "test-writer:", "resolver:",
 		"correctness-auditor:", "integration-auditor:", "performance-auditor:",

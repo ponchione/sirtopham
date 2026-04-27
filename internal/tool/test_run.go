@@ -17,11 +17,11 @@ import (
 type TestRun struct{}
 
 type testRunInput struct {
-	Ecosystem      string  `json:"ecosystem,omitempty"`
-	Path           string  `json:"path,omitempty"`
-	Filter         string  `json:"filter,omitempty"`
-	Verbose        bool    `json:"verbose,omitempty"`
-	TimeoutSeconds *int    `json:"timeout_seconds,omitempty"`
+	Ecosystem      string `json:"ecosystem,omitempty"`
+	Path           string `json:"path,omitempty"`
+	Filter         string `json:"filter,omitempty"`
+	Verbose        bool   `json:"verbose,omitempty"`
+	TimeoutSeconds *int   `json:"timeout_seconds,omitempty"`
 }
 
 func (TestRun) Name() string        { return "test_run" }
@@ -196,12 +196,7 @@ func runPythonTests(ctx context.Context, projectRoot string, params testRunInput
 		result = parsePytestShort(stdout.String())
 	}
 
-	if stderr.Len() > 0 && len(result.BuildErrors) == 0 && result.Passed == 0 && result.Failed == 0 {
-		stderrStr := strings.TrimSpace(stderr.String())
-		if stderrStr != "" {
-			result.BuildErrors = append(result.BuildErrors, stderrStr)
-		}
-	}
+	appendStderrBuildError(&result, stderr.String())
 
 	return &ToolResult{Success: true, Content: formatTestResult(result)}, nil
 }
@@ -252,14 +247,19 @@ func runTypeScriptTests(ctx context.Context, projectRoot string, params testRunI
 
 	result := parseJestJSON(stdout.String())
 
-	if stderr.Len() > 0 && len(result.BuildErrors) == 0 && result.Passed == 0 && result.Failed == 0 {
-		stderrStr := strings.TrimSpace(stderr.String())
-		if stderrStr != "" {
-			result.BuildErrors = append(result.BuildErrors, stderrStr)
-		}
-	}
+	appendStderrBuildError(&result, stderr.String())
 
 	return &ToolResult{Success: true, Content: formatTestResult(result)}, nil
+}
+
+func appendStderrBuildError(result *testRunResult, stderr string) {
+	if stderr == "" || len(result.BuildErrors) > 0 || result.Passed > 0 || result.Failed > 0 {
+		return
+	}
+	stderr = strings.TrimSpace(stderr)
+	if stderr != "" {
+		result.BuildErrors = append(result.BuildErrors, stderr)
+	}
 }
 
 // detectTSTestRunner returns the test runner and any extra args based on config files present.
@@ -331,4 +331,3 @@ func (TestRun) runGoTests(ctx context.Context, projectRoot, targetDir, pathParam
 		Content: content,
 	}, nil
 }
-

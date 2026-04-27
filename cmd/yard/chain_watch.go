@@ -14,6 +14,17 @@ type yardChainWatchHandle struct {
 	done   <-chan error
 }
 
+type yardChainWatchAdapter struct {
+	handle *yardChainWatchHandle
+}
+
+func (a yardChainWatchAdapter) Wait(timeout time.Duration) error {
+	if a.handle == nil {
+		return nil
+	}
+	return a.handle.wait(timeout)
+}
+
 func startYardChainWatch(ctx context.Context, out io.Writer, store *chain.Store, chainID string, enabled bool, opts chainRenderOptions) *yardChainWatchHandle {
 	if !enabled {
 		return &yardChainWatchHandle{}

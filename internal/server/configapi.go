@@ -298,17 +298,7 @@ func (h *ConfigHandler) handleProviders(w http.ResponseWriter, r *http.Request) 
 		if !ok {
 			continue
 		}
-		status := "unavailable"
-		healthy := false
-		lastError := ""
-		if hp, ok := health[name]; ok && hp != nil {
-			healthy = hp.Healthy
-			if healthy {
-				status = "available"
-			} else if hp.LastError != nil {
-				lastError = hp.LastError.Error()
-			}
-		}
+		status, healthy, lastError := providerHealthSummary(health[name])
 		ps := providerStatus{
 			Name:      name,
 			Type:      pc.Type,
@@ -352,17 +342,7 @@ func (h *ConfigHandler) handleAuthProviders(w http.ResponseWriter, r *http.Reque
 		if !ok {
 			continue
 		}
-		status := "unavailable"
-		healthy := false
-		lastError := ""
-		if hp, ok := health[name]; ok && hp != nil {
-			healthy = hp.Healthy
-			if healthy {
-				status = "available"
-			} else if hp.LastError != nil {
-				lastError = hp.LastError.Error()
-			}
-		}
+		status, healthy, lastError := providerHealthSummary(health[name])
 		result = append(result, authProviderStatus{
 			Name:      name,
 			Type:      pc.Type,
@@ -373,4 +353,17 @@ func (h *ConfigHandler) handleAuthProviders(w http.ResponseWriter, r *http.Reque
 		})
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+func providerHealthSummary(hp *routerpkg.ProviderHealth) (string, bool, string) {
+	if hp == nil {
+		return "unavailable", false, ""
+	}
+	if hp.Healthy {
+		return "available", true, ""
+	}
+	if hp.LastError != nil {
+		return "unavailable", false, hp.LastError.Error()
+	}
+	return "unavailable", false, ""
 }

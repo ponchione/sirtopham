@@ -69,35 +69,19 @@ func (b *BrainUpdate) Schema() json.RawMessage {
 
 func (b *BrainUpdate) Execute(ctx context.Context, projectRoot string, input json.RawMessage) (*ToolResult, error) {
 	if !b.config.Enabled {
-		return &ToolResult{
-			Success: false,
-			Content: "Project brain is not configured. See the project's YAML config brain section.",
-			Error:   "brain not configured",
-		}, nil
+		return brainDisabledResult(), nil
 	}
 
 	var params brainUpdateInput
 	if err := json.Unmarshal(input, &params); err != nil {
-		return &ToolResult{
-			Success: false,
-			Content: fmt.Sprintf("Invalid input: %v", err),
-			Error:   err.Error(),
-		}, nil
+		return invalidInputResult(err), nil
 	}
 
-	if params.Path == "" {
-		return &ToolResult{
-			Success: false,
-			Content: "path is required",
-			Error:   "empty path",
-		}, nil
+	if result := validateBrainPath(params.Path); result != nil {
+		return result, nil
 	}
-	if params.Content == "" {
-		return &ToolResult{
-			Success: false,
-			Content: "content is required",
-			Error:   "empty content",
-		}, nil
+	if result := validateBrainContent(params.Content); result != nil {
+		return result, nil
 	}
 
 	switch params.Operation {
@@ -203,4 +187,3 @@ func (b *BrainUpdate) Execute(ctx context.Context, projectRoot string, input jso
 		Content: fmt.Sprintf("Updated brain document: %s (%s)\n\n%s\n\nContent preview:\n%s", params.Path, params.Operation, brainIndexStaleReminder(), formatBrainDocumentPreview(updated, 100)),
 	}, nil
 }
-

@@ -45,6 +45,8 @@ type RunResult struct {
 	ExitCode    ExitCode
 }
 
+const defaultRunTimeout = 30 * time.Minute
+
 type AgentLoop interface {
 	RunTurn(ctx context.Context, req agent.RunTurnRequest) (*agent.TurnResult, error)
 	Close()
@@ -105,7 +107,8 @@ func RunSession(parentCtx context.Context, progressOut io.Writer, configPath str
 		return nil, err
 	}
 
-	ctx, cancel := context.WithTimeout(parentContext(parentCtx), req.Timeout)
+	timeout := resolveRunTimeout(roleCfg, req.Timeout)
+	ctx, cancel := context.WithTimeout(parentContext(parentCtx), timeout)
 	defer cancel()
 
 	rt, err := deps.BuildRuntime(ctx, cfg)
@@ -176,8 +179,8 @@ func validateRunRequest(req RunRequest) error {
 	if req.MaxTokens < 0 {
 		return fmt.Errorf("--max-tokens must be > 0 when supplied")
 	}
-	if req.Timeout <= 0 {
-		return fmt.Errorf("--timeout must be > 0")
+	if req.Timeout < 0 {
+		return fmt.Errorf("--timeout must be > 0 when supplied")
 	}
 	return nil
 }
@@ -238,25 +241,8 @@ func executeRunTurn(ctx context.Context, progressOut io.Writer, cfg *appconfig.C
 		PromptBuilder:       agent.NewPromptBuilder(rt.Logger),
 		TitleGenerator:      titleGen,
 		EventSink:           sink,
-		Config: agent.AgentLoopConfig{
-			MaxIterations:              loopMaxTurns,
-			LoopDetectionThreshold:     cfg.Agent.LoopDetectionThreshold,
-			ExtendedThinking:           cfg.Agent.ExtendedThinking,
-			BasePrompt:                 systemPrompt,
-			ProviderName:               cfg.Routing.Default.Provider,
-			ModelName:                  cfg.Routing.Default.Model,
-			EmitContextDebug:           cfg.Context.EmitContextDebug,
-			ContextConfig:              cfg.Context,
-			ToolResultStoreRoot:        cfg.Agent.ToolResultStoreRoot,
-			CacheSystemPrompt:          cfg.Agent.CacheSystemPrompt,
-			CacheAssembledContext:      cfg.Agent.CacheAssembledContext,
-			CacheConversationHistory:   cfg.Agent.CacheConversationHistory,
-			CompressHistoricalResults:  cfg.Agent.CompressHistoricalResults,
-			StripHistoricalLineNumbers: cfg.Agent.StripHistoricalLineNumbers,
-			ElideDuplicateReads:        cfg.Agent.ElideDuplicateReads,
-			HistorySummarizeAfterTurns: cfg.Agent.HistorySummarizeAfterTurns,
-		},
-		Logger: rt.Logger,
+		Config:              rtpkg.BuildAgentLoopConfig(cfg, loopMaxTurns, systemPrompt),
+		Logger:              rt.Logger,
 	})
 	defer agentLoop.Close()
 
@@ -295,17 +281,31 @@ func determineExitStatus(ctx context.Context, turnResult *agent.TurnResult, turn
 
 func resolveRunLimits(cfg *appconfig.Config, roleCfg appconfig.AgentRoleConfig, req RunRequest) (int, int) {
 	loopMaxTurns := roleCfg.MaxTurns
-	if req.MaxTurns > 0 {
-		loopMaxTurns = req.MaxTurns
-	}
-	maxTokens := roleCfg.MaxTokens
-	if req.MaxTokens > 0 {
-		maxTokens = req.MaxTokens
-	}
 	if loopMaxTurns == 0 {
 		loopMaxTurns = cfg.Agent.MaxIterationsPerTurn
 	}
+	if req.MaxTurns > 0 && (loopMaxTurns == 0 || req.MaxTurns < loopMaxTurns) {
+		loopMaxTurns = req.MaxTurns
+	}
+	maxTokens := roleCfg.MaxTokens
+	if req.MaxTokens > 0 && (maxTokens == 0 || req.MaxTokens < maxTokens) {
+		maxTokens = req.MaxTokens
+	}
 	return loopMaxTurns, maxTokens
+}
+
+func resolveRunTimeout(roleCfg appconfig.AgentRoleConfig, requested time.Duration) time.Duration {
+	roleTimeout := roleCfg.Timeout.Duration()
+	if roleTimeout <= 0 {
+		if requested > 0 {
+			return requested
+		}
+		return defaultRunTimeout
+	}
+	if requested > 0 && requested < roleTimeout {
+		return requested
+	}
+	return roleTimeout
 }
 
 func buildConversationOptions(cfg *appconfig.Config) []conversation.CreateOption {

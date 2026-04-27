@@ -2,12 +2,9 @@ package codex
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"strings"
 
 	"github.com/ponchione/sodoryard/internal/provider"
@@ -98,78 +95,22 @@ func (p *CodexProvider) Stream(ctx context.Context, req *provider.Request) (<-ch
 	apiReq := buildResponsesRequest(model, req, true)
 	body, err := json.Marshal(apiReq)
 	if err != nil {
-		return nil, &provider.ProviderError{
-			Provider:   "codex",
-			StatusCode: 0,
-			Message:    fmt.Sprintf("failed to marshal request: %v", err),
-			Retriable:  false,
-		}
+		return nil, codexMarshalError(err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.responsesEndpointURL(), bytes.NewReader(body))
+	httpReq, err := p.newResponsesHTTPRequest(ctx, body, token)
 	if err != nil {
-		return nil, &provider.ProviderError{
-			Provider:   "codex",
-			StatusCode: 0,
-			Message:    fmt.Sprintf("failed to create request: %v", err),
-			Retriable:  false,
-		}
+		return nil, err
 	}
-	httpReq.Header.Set("Authorization", "Bearer "+token)
-	httpReq.Header.Set("Content-Type", "application/json")
 
 	resp, err := p.httpClient.Do(httpReq)
 	if err != nil {
-		if ctx.Err() != nil {
-			return nil, &provider.ProviderError{
-				Provider:   "codex",
-				StatusCode: 0,
-				Message:    "request cancelled",
-				Retriable:  false,
-			}
-		}
-		return nil, &provider.ProviderError{
-			Provider:   "codex",
-			StatusCode: 0,
-			Message:    fmt.Sprintf("request failed: %v", err),
-			Retriable:  true,
-			Err:        err,
-		}
+		return nil, codexRequestFailure(ctx, err)
 	}
 
 	if resp.StatusCode != 200 {
 		defer resp.Body.Close()
-		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		bodyStr := string(errBody)
-
-		switch {
-		case resp.StatusCode == 401 || resp.StatusCode == 403:
-			return nil, provider.NewAuthProviderError("codex", provider.AuthInvalidCredentials, resp.StatusCode, "Codex authentication failed.", codexAuthRemediation(), nil)
-		case resp.StatusCode == 429:
-			return nil, &provider.ProviderError{
-				Provider:   "codex",
-				StatusCode: 429,
-				Message:    "rate limited",
-				Retriable:  true,
-			}
-		case resp.StatusCode == 500 || resp.StatusCode == 502 || resp.StatusCode == 503:
-			if len(bodyStr) > 512 {
-				bodyStr = bodyStr[:512]
-			}
-			return nil, &provider.ProviderError{
-				Provider:   "codex",
-				StatusCode: resp.StatusCode,
-				Message:    "server error: " + bodyStr,
-				Retriable:  true,
-			}
-		default:
-			return nil, &provider.ProviderError{
-				Provider:   "codex",
-				StatusCode: resp.StatusCode,
-				Message:    fmt.Sprintf("unexpected status %d: %s", resp.StatusCode, bodyStr),
-				Retriable:  false,
-			}
-		}
+		return nil, codexStreamStatusFailure(resp.StatusCode, resp.Body)
 	}
 
 	ch := make(chan provider.StreamEvent, 64)

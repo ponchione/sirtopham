@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/ponchione/sodoryard/internal/embeddedprompts"
 	"gopkg.in/yaml.v3"
@@ -76,6 +77,32 @@ type AgentRoleConfig struct {
 	BrainDenyPaths  []string `yaml:"brain_deny_paths"`
 	MaxTurns        int      `yaml:"max_turns"`
 	MaxTokens       int      `yaml:"max_tokens"`
+	Timeout         Duration `yaml:"timeout"`
+}
+
+type Duration time.Duration
+
+func (d *Duration) UnmarshalYAML(value *yaml.Node) error {
+	if value == nil || strings.TrimSpace(value.Value) == "" {
+		*d = 0
+		return nil
+	}
+	if value.Kind == yaml.ScalarNode {
+		if parsed, err := time.ParseDuration(value.Value); err == nil {
+			*d = Duration(parsed)
+			return nil
+		}
+	}
+	var raw int64
+	if err := value.Decode(&raw); err == nil {
+		*d = Duration(time.Duration(raw))
+		return nil
+	}
+	return fmt.Errorf("invalid duration %q", value.Value)
+}
+
+func (d Duration) Duration() time.Duration {
+	return time.Duration(d)
 }
 
 type ServerConfig struct {
@@ -912,6 +939,9 @@ func (c *Config) validateAgentRoles() error {
 		}
 		if role.MaxTokens <= 0 && role.MaxTokens != 0 {
 			return fmt.Errorf("invalid field agent_roles.%s.max_tokens=%d (must be > 0 when specified)", name, role.MaxTokens)
+		}
+		if role.Timeout < 0 {
+			return fmt.Errorf("invalid field agent_roles.%s.timeout=%s (must be > 0 when specified)", name, role.Timeout.Duration())
 		}
 	}
 	return nil

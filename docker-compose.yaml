@@ -10,7 +10,6 @@ services:
       - ${PROJECT_DIR:-./}:/project
     environment:
       - YARD_PROJECT=/project
-      - SODORYARD_AGENTS_DIR=/opt/yard/agents
 
 networks:
   llm-net:

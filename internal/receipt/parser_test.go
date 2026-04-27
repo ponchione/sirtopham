@@ -96,6 +96,39 @@ duration_seconds: 0
 	}
 }
 
+func TestParseAcceptsAllSpecVerdicts(t *testing.T) {
+	for _, verdict := range []Verdict{
+		VerdictCompleted,
+		VerdictCompletedWithConcerns,
+		VerdictCompletedNoReceipt,
+		VerdictFixRequired,
+		VerdictBlocked,
+		VerdictEscalate,
+		VerdictSafetyLimit,
+	} {
+		t.Run(string(verdict), func(t *testing.T) {
+			receipt, err := Parse([]byte(`---
+agent: correctness-auditor
+chain_id: smoke-test-p5a
+step: 1
+verdict: ` + string(verdict) + `
+timestamp: 2026-04-11T00:00:00Z
+turns_used: 2
+tokens_used: 0
+duration_seconds: 0
+---
+body
+`))
+			if err != nil {
+				t.Fatalf("Parse returned error: %v", err)
+			}
+			if receipt.Verdict != verdict {
+				t.Fatalf("Verdict = %q, want %q", receipt.Verdict, verdict)
+			}
+		})
+	}
+}
+
 func TestParseMissingBodyIsAllowed(t *testing.T) {
 	receipt, err := Parse([]byte(`---
 agent: correctness-auditor

@@ -5,11 +5,13 @@ import "time"
 type Verdict string
 
 const (
-	VerdictCompleted          Verdict = "completed"
-	VerdictCompletedNoReceipt Verdict = "completed_no_receipt"
-	VerdictBlocked            Verdict = "blocked"
-	VerdictEscalate           Verdict = "escalate"
-	VerdictSafetyLimit        Verdict = "safety_limit"
+	VerdictCompleted             Verdict = "completed"
+	VerdictCompletedWithConcerns Verdict = "completed_with_concerns"
+	VerdictCompletedNoReceipt    Verdict = "completed_no_receipt"
+	VerdictFixRequired           Verdict = "fix_required"
+	VerdictBlocked               Verdict = "blocked"
+	VerdictEscalate              Verdict = "escalate"
+	VerdictSafetyLimit           Verdict = "safety_limit"
 )
 
 type Receipt struct {

@@ -1,20 +1,19 @@
-import test from 'node:test';
-import assert from 'node:assert/strict';
+import { expect, test } from 'vitest';
 
 import { getDisplayBlocks, isLowValueToolFollowupText, isBrainToolName } from '../src/lib/tool-transcript.ts';
 import type { ContentBlock } from '../src/hooks/use-conversation.ts';
 
 test('isBrainToolName matches brain tools', () => {
-  assert.equal(isBrainToolName('brain_read'), true);
-  assert.equal(isBrainToolName('brain_search'), true);
-  assert.equal(isBrainToolName('shell'), false);
+  expect(isBrainToolName('brain_read')).toBe(true);
+  expect(isBrainToolName('brain_search')).toBe(true);
+  expect(isBrainToolName('shell')).toBe(false);
 });
 
 test('isLowValueToolFollowupText suppresses redundant brain narration', () => {
-  assert.equal(isLowValueToolFollowupText('I already have the content of notes/hello.md.'), true);
-  assert.equal(isLowValueToolFollowupText('I\'ve already searched for that phrase and the results are the same.'), true);
-  assert.equal(isLowValueToolFollowupText('Done.'), true);
-  assert.equal(isLowValueToolFollowupText('The note now contains two appended lines.'), false);
+  expect(isLowValueToolFollowupText('I already have the content of notes/hello.md.')).toBe(true);
+  expect(isLowValueToolFollowupText('I\'ve already searched for that phrase and the results are the same.')).toBe(true);
+  expect(isLowValueToolFollowupText('Done.')).toBe(true);
+  expect(isLowValueToolFollowupText('The note now contains two appended lines.')).toBe(false);
 });
 
 test('getDisplayBlocks prioritizes brain tool cards and removes redundant follow-up text', () => {
@@ -25,7 +24,7 @@ test('getDisplayBlocks prioritizes brain tool cards and removes redundant follow
   ];
 
   const display = getDisplayBlocks(blocks);
-  assert.deepEqual(display, [blocks[1]]);
+  expect(display).toEqual([blocks[1]]);
 });
 
 test('getDisplayBlocks keeps meaningful assistant analysis after a brain tool', () => {
@@ -35,7 +34,7 @@ test('getDisplayBlocks keeps meaningful assistant analysis after a brain tool', 
   ];
 
   const display = getDisplayBlocks(blocks);
-  assert.deepEqual(display, blocks);
+  expect(display).toEqual(blocks);
 });
 
 test('getDisplayBlocks moves brain tool cards ahead of text blocks', () => {
@@ -46,7 +45,7 @@ test('getDisplayBlocks moves brain tool cards ahead of text blocks', () => {
   ];
 
   const display = getDisplayBlocks(blocks);
-  assert.equal(display[0]?.kind, 'tool_call');
-  assert.equal(display[1]?.kind, 'text');
-  assert.equal((display[1] as Extract<ContentBlock, { kind: 'text' }>).text, 'The note exists and is readable.');
+  expect(display[0]?.kind).toBe('tool_call');
+  expect(display[1]?.kind).toBe('text');
+  expect((display[1] as Extract<ContentBlock, { kind: 'text' }>).text).toBe('The note exists and is readable.');
 });

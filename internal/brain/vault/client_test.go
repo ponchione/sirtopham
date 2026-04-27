@@ -56,6 +56,55 @@ func TestClientRejectsPathTraversal(t *testing.T) {
 	}
 }
 
+func TestClientAllowsDotDotPrefixFilename(t *testing.T) {
+	root := t.TempDir()
+	client, err := New(root)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	if err := client.WriteDocument(context.Background(), "..foo.md", "ok"); err != nil {
+		t.Fatalf("WriteDocument: %v", err)
+	}
+	got, err := client.ReadDocument(context.Background(), "..foo.md")
+	if err != nil {
+		t.Fatalf("ReadDocument: %v", err)
+	}
+	if got != "ok" {
+		t.Fatalf("ReadDocument = %q, want ok", got)
+	}
+}
+
+func TestClientRejectsSymlinkEscapes(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	outsideFile := filepath.Join(outside, "secret.md")
+	if err := os.WriteFile(outsideFile, []byte("secret token"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := os.Symlink(outsideFile, filepath.Join(root, "linked.md")); err != nil {
+		t.Fatalf("Symlink file: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "external")); err != nil {
+		t.Fatalf("Symlink dir: %v", err)
+	}
+
+	client, err := New(root)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	if _, err := client.ReadDocument(context.Background(), "linked.md"); !errors.Is(err, ErrPathTraversal) {
+		t.Fatalf("ReadDocument error = %v, want ErrPathTraversal", err)
+	}
+	if err := client.WriteDocument(context.Background(), "external/new.md", "nope"); !errors.Is(err, ErrPathTraversal) {
+		t.Fatalf("WriteDocument error = %v, want ErrPathTraversal", err)
+	}
+	if _, err := client.SearchKeyword(context.Background(), "secret", 10); !errors.Is(err, ErrPathTraversal) {
+		t.Fatalf("SearchKeyword error = %v, want ErrPathTraversal", err)
+	}
+}
+
 func TestClientSearchKeywordFindsContentAndPath(t *testing.T) {
 	root := t.TempDir()
 	mustWriteFile(t, filepath.Join(root, "notes", "auth.md"), "# Auth\nToken refresh workaround")

@@ -99,24 +99,8 @@ func runYardServe(cmd *cobra.Command, configPath string, portOverride int, hostO
 		ToolDefinitions:     registry.ToolDefinitions(),
 		PromptBuilder:       agent.NewPromptBuilder(logger),
 		TitleGenerator:      titleGen,
-		Config: agent.AgentLoopConfig{
-			MaxIterations:              cfg.Agent.MaxIterationsPerTurn,
-			LoopDetectionThreshold:     cfg.Agent.LoopDetectionThreshold,
-			ExtendedThinking:           cfg.Agent.ExtendedThinking,
-			ProviderName:               cfg.Routing.Default.Provider,
-			ModelName:                  cfg.Routing.Default.Model,
-			EmitContextDebug:           cfg.Context.EmitContextDebug,
-			ContextConfig:              cfg.Context,
-			ToolResultStoreRoot:        cfg.Agent.ToolResultStoreRoot,
-			CacheSystemPrompt:          cfg.Agent.CacheSystemPrompt,
-			CacheAssembledContext:      cfg.Agent.CacheAssembledContext,
-			CacheConversationHistory:   cfg.Agent.CacheConversationHistory,
-			CompressHistoricalResults:  cfg.Agent.CompressHistoricalResults,
-			StripHistoricalLineNumbers: cfg.Agent.StripHistoricalLineNumbers,
-			ElideDuplicateReads:        cfg.Agent.ElideDuplicateReads,
-			HistorySummarizeAfterTurns: cfg.Agent.HistorySummarizeAfterTurns,
-		},
-		Logger: logger,
+		Config:              rtpkg.BuildAgentLoopConfig(cfg, cfg.Agent.MaxIterationsPerTurn, ""),
+		Logger:              logger,
 	})
 	defer agentLoop.Close()
 

@@ -12,7 +12,7 @@ import (
 
 const sirtophamAuthStoreVersion = 1
 
-var errCodexStoreStateNotFound = errors.New("codex auth state not found in sirtopham auth store")
+var errCodexStoreStateNotFound = errors.New("codex auth state not found in Yard compatibility auth store")
 
 type sirtophamAuthStore struct {
 	Version        int                      `json:"version"`

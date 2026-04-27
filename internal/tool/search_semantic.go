@@ -87,7 +87,7 @@ func (s *SearchSemantic) Execute(ctx context.Context, projectRoot string, input 
 	if s.searcher == nil {
 		return &ToolResult{
 			Success: false,
-			Content: "Code index is empty or not built. Run 'tidmouth index' to build the code intelligence index.",
+			Content: "Code index is empty or not built. Run 'yard index' to build the code intelligence index.",
 			Error:   "no searcher",
 		}, nil
 	}
@@ -119,7 +119,7 @@ func (s *SearchSemantic) Execute(ctx context.Context, projectRoot string, input 
 			strings.Contains(errMsg, "does not exist") {
 			return &ToolResult{
 				Success: false,
-				Content: "Code index is empty or not built. Run 'tidmouth index' to build the code intelligence index.",
+				Content: "Code index is empty or not built. Run 'yard index' to build the code intelligence index.",
 				Error:   err.Error(),
 			}, nil
 		}

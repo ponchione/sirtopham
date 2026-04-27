@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/ponchione/sodoryard/internal/codeintel/goload"
 	"golang.org/x/tools/go/packages"
 )
 
@@ -18,17 +19,9 @@ import (
 type GoAnalyzer struct {
 	fset       *token.FileSet
 	pkgsByFile map[string]*packages.Package // abs file path → package
-	allIfaces  []ifaceInfo
+	allIfaces  []goload.InterfaceInfo
 	modulePath string
 	rootDir    string
-}
-
-// ifaceInfo holds a named interface for Implements checking.
-type ifaceInfo struct {
-	name    string // "package/path.InterfaceName"
-	pkgPath string // "package/path"
-	ifName  string // "InterfaceName"
-	ifaceT  *goTypes.Interface
 }
 
 // NewGoAnalyzer loads all Go packages under rootDir and builds lookup indexes.
@@ -43,86 +36,21 @@ func NewGoAnalyzer(rootDir string) (*GoAnalyzer, error) {
 		return nil, fmt.Errorf("read module path: %w", err)
 	}
 
-	fset := token.NewFileSet()
-	cfg := &packages.Config{
-		Mode: packages.NeedName |
-			packages.NeedFiles |
-			packages.NeedSyntax |
-			packages.NeedTypes |
-			packages.NeedTypesInfo |
-			packages.NeedDeps |
-			packages.NeedImports,
-		Dir:  absRoot,
-		Fset: fset,
-	}
-
-	pkgs, err := packages.Load(cfg, "./...")
+	loaded, err := goload.Load(absRoot, modulePath)
 	if err != nil {
-		return nil, fmt.Errorf("go/packages load: %w", err)
+		return nil, err
 	}
-
-	for _, pkg := range pkgs {
-		for _, e := range pkg.Errors {
-			slog.Warn("go/packages error", "pkg", pkg.PkgPath, "error", e)
-		}
-	}
-
-	pkgsByFile := make(map[string]*packages.Package)
-	var allIfaces []ifaceInfo
-
-	packages.Visit(pkgs, func(pkg *packages.Package) bool {
-		if pkg.Types == nil {
-			return true
-		}
-
-		inModule := strings.HasPrefix(pkg.PkgPath, modulePath)
-
-		// Only index files within the project module.
-		if inModule {
-			for _, f := range pkg.GoFiles {
-				abs, err := filepath.Abs(f)
-				if err == nil {
-					pkgsByFile[abs] = pkg
-				}
-			}
-		}
-
-		// Only collect interfaces within the project module to avoid
-		// spurious IMPLEMENTS edges to stdlib interfaces like error,
-		// io.Reader, fmt.Stringer, etc.
-		if inModule {
-			scope := pkg.Types.Scope()
-			for _, name := range scope.Names() {
-				obj := scope.Lookup(name)
-				tn, ok := obj.(*goTypes.TypeName)
-				if !ok {
-					continue
-				}
-				iface, ok := tn.Type().Underlying().(*goTypes.Interface)
-				if !ok || iface.NumMethods() == 0 {
-					continue
-				}
-				allIfaces = append(allIfaces, ifaceInfo{
-					name:    pkg.PkgPath + "." + name,
-					pkgPath: pkg.PkgPath,
-					ifName:  name,
-					ifaceT:  iface,
-				})
-			}
-		}
-		return true
-	}, nil)
 
 	slog.Info("GoAnalyzer initialized",
 		"module", modulePath,
-		"files", len(pkgsByFile),
-		"interfaces", len(allIfaces),
+		"files", len(loaded.ByFile),
+		"interfaces", len(loaded.Interfaces),
 	)
 
 	return &GoAnalyzer{
-		fset:       fset,
-		pkgsByFile: pkgsByFile,
-		allIfaces:  allIfaces,
+		fset:       loaded.FileSet,
+		pkgsByFile: loaded.ByFile,
+		allIfaces:  loaded.Interfaces,
 		modulePath: modulePath,
 		rootDir:    absRoot,
 	}, nil
@@ -606,45 +534,33 @@ func (a *GoAnalyzer) extractImplementsEdges(file *ast.File, pkg *packages.Packag
 
 	var edges []Edge
 
-	for _, decl := range file.Decls {
-		gd, ok := decl.(*ast.GenDecl)
-		if !ok || gd.Tok != token.TYPE {
-			continue
+	walkGoTypeSpecs(file, func(ts *ast.TypeSpec) {
+		obj := pkg.Types.Scope().Lookup(ts.Name.Name)
+		if obj == nil {
+			return
 		}
 
-		for _, spec := range gd.Specs {
-			ts, ok := spec.(*ast.TypeSpec)
-			if !ok {
-				continue
-			}
+		if _, ok := obj.Type().Underlying().(*goTypes.Interface); ok {
+			return
+		}
 
-			obj := pkg.Types.Scope().Lookup(ts.Name.Name)
-			if obj == nil {
-				continue
-			}
+		typ := obj.Type()
+		ptrTyp := goTypes.NewPointer(typ)
 
-			if _, ok := obj.Type().Underlying().(*goTypes.Interface); ok {
-				continue
-			}
+		for _, iface := range a.allIfaces {
+			if goTypes.Implements(typ, iface.Type) || goTypes.Implements(ptrTyp, iface.Type) {
+				sourceID := symbolID("go", pkg.PkgPath, "type", ts.Name.Name)
+				targetID := symbolID("go", iface.PkgPath, "interface", iface.Name)
 
-			typ := obj.Type()
-			ptrTyp := goTypes.NewPointer(typ)
-
-			for _, iface := range a.allIfaces {
-				if goTypes.Implements(typ, iface.ifaceT) || goTypes.Implements(ptrTyp, iface.ifaceT) {
-					sourceID := symbolID("go", pkg.PkgPath, "type", ts.Name.Name)
-					targetID := symbolID("go", iface.pkgPath, "interface", iface.ifName)
-
-					edges = append(edges, Edge{
-						SourceID:   sourceID,
-						TargetID:   targetID,
-						EdgeType:   "IMPLEMENTS",
-						Confidence: 1.0,
-					})
-				}
+				edges = append(edges, Edge{
+					SourceID:   sourceID,
+					TargetID:   targetID,
+					EdgeType:   "IMPLEMENTS",
+					Confidence: 1.0,
+				})
 			}
 		}
-	}
+	})
 
 	return edges
 }
@@ -657,6 +573,60 @@ func (a *GoAnalyzer) extractEmbedEdges(file *ast.File, pkg *packages.Package) []
 
 	var edges []Edge
 
+	walkGoTypeSpecs(file, func(ts *ast.TypeSpec) {
+		st, ok := ts.Type.(*ast.StructType)
+		if !ok || st.Fields == nil {
+			return
+		}
+
+		sourceID := symbolID("go", pkg.PkgPath, "type", ts.Name.Name)
+
+		for _, field := range st.Fields.List {
+			if len(field.Names) > 0 {
+				continue // named field, not an embedding
+			}
+
+			// Resolve the embedded type.
+			typ := field.Type
+			if star, ok := typ.(*ast.StarExpr); ok {
+				typ = star.X
+			}
+
+			var embedPkg, embedName string
+			switch t := typ.(type) {
+			case *ast.Ident:
+				embedName = t.Name
+				embedPkg = pkg.PkgPath
+			case *ast.SelectorExpr:
+				if xIdent, ok := t.X.(*ast.Ident); ok {
+					if obj, ok := pkg.TypesInfo.Uses[xIdent]; ok {
+						if pkgName, ok := obj.(*goTypes.PkgName); ok {
+							embedPkg = pkgName.Imported().Path()
+							embedName = t.Sel.Name
+						}
+					}
+				}
+			}
+
+			if embedName == "" {
+				continue
+			}
+
+			targetID := symbolID("go", embedPkg, "type", embedName)
+			edges = append(edges, Edge{
+				SourceID:   sourceID,
+				TargetID:   targetID,
+				EdgeType:   "EMBEDS",
+				Confidence: 1.0,
+				SourceLine: a.fset.Position(field.Pos()).Line,
+			})
+		}
+	})
+
+	return edges
+}
+
+func walkGoTypeSpecs(file *ast.File, visit func(*ast.TypeSpec)) {
 	for _, decl := range file.Decls {
 		gd, ok := decl.(*ast.GenDecl)
 		if !ok || gd.Tok != token.TYPE {
@@ -665,61 +635,11 @@ func (a *GoAnalyzer) extractEmbedEdges(file *ast.File, pkg *packages.Package) []
 
 		for _, spec := range gd.Specs {
 			ts, ok := spec.(*ast.TypeSpec)
-			if !ok {
-				continue
-			}
-
-			st, ok := ts.Type.(*ast.StructType)
-			if !ok || st.Fields == nil {
-				continue
-			}
-
-			sourceID := symbolID("go", pkg.PkgPath, "type", ts.Name.Name)
-
-			for _, field := range st.Fields.List {
-				if len(field.Names) > 0 {
-					continue // named field, not an embedding
-				}
-
-				// Resolve the embedded type.
-				typ := field.Type
-				if star, ok := typ.(*ast.StarExpr); ok {
-					typ = star.X
-				}
-
-				var embedPkg, embedName string
-				switch t := typ.(type) {
-				case *ast.Ident:
-					embedName = t.Name
-					embedPkg = pkg.PkgPath
-				case *ast.SelectorExpr:
-					if xIdent, ok := t.X.(*ast.Ident); ok {
-						if obj, ok := pkg.TypesInfo.Uses[xIdent]; ok {
-							if pkgName, ok := obj.(*goTypes.PkgName); ok {
-								embedPkg = pkgName.Imported().Path()
-								embedName = t.Sel.Name
-							}
-						}
-					}
-				}
-
-				if embedName == "" {
-					continue
-				}
-
-				targetID := symbolID("go", embedPkg, "type", embedName)
-				edges = append(edges, Edge{
-					SourceID:   sourceID,
-					TargetID:   targetID,
-					EdgeType:   "EMBEDS",
-					Confidence: 1.0,
-					SourceLine: a.fset.Position(field.Pos()).Line,
-				})
+			if ok {
+				visit(ts)
 			}
 		}
 	}
-
-	return edges
 }
 
 // extractImportEdges creates IMPORTS edges for each import in the file.

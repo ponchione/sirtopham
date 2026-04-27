@@ -66,7 +66,7 @@ func (r Receipt) validate() error {
 
 func validVerdict(verdict Verdict) bool {
 	switch verdict {
-	case VerdictCompleted, VerdictCompletedNoReceipt, VerdictBlocked, VerdictEscalate, VerdictSafetyLimit:
+	case VerdictCompleted, VerdictCompletedWithConcerns, VerdictCompletedNoReceipt, VerdictFixRequired, VerdictBlocked, VerdictEscalate, VerdictSafetyLimit:
 		return true
 	default:
 		return false

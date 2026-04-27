@@ -68,7 +68,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
       e.preventDefault();
       const conversation = conversations.find((c) => c.id === id);
       const title = conversation?.title?.trim() || "Untitled";
-      if (!window.confirm(`Delete conversation \"${title}\"?`)) {
+      if (!window.confirm(`Delete conversation "${title}"?`)) {
         return;
       }
       try {

@@ -16,7 +16,7 @@ The agent doesn't get a generic project overview dumped into its system prompt. 
 
 ## What sodoryard Is Not
 
-- **Not a pipeline tool.** Its predecessor (topham) was a batch pipeline (scope → build → verify → approve). sodoryard is interactive and conversational.
+- **Not only a rigid pipeline tool.** Its predecessor (topham) was a batch pipeline (scope → build → verify → approve). sodoryard keeps interactive conversation as a primary mode while also exposing agent-judged chain orchestration for non-interactive work.
 - **Not a wrapper around Claude Code or Codex.** It is its own agent with its own tool system. It *borrows credentials* from those tools but runs its own agent loop.
 - **Not a TUI.** The interface is a web application served locally in the browser.
 - **Not a multi-user system.** Single developer, single machine. No auth, no tenancy, no sharing.
@@ -48,7 +48,7 @@ Two papers inform the core architecture:
 
 6. **Tools are first-class.** The tool system is generic and extensible. Adding a new tool is: implement the interface, register it, done.
 
-7. **Web-first interface.** The browser is the primary interface. The CLI exists only for non-interactive operations (init, index, config, serve).
+7. **Web-first interface with a unified operator CLI.** The browser is the primary interactive interface. The `yard` CLI owns non-interactive and operational flows including init, serve, run, index, config, auth, doctor, brain, llm, and chain orchestration.
 
 8. **Conversation as the unit of work.** Everything is organized around conversations — context assembly, metrics, persistence, cost tracking.
 
@@ -72,7 +72,7 @@ Hermes's weaknesses that sodoryard addresses:
 ### topham (predecessor)
 Go-based pipeline orchestrator. Components being carried forward:
 - Tree-sitter parsers (Go, TypeScript/TSX, Python)
-- LanceDB vector store with nomic-embed-code embeddings (pending evaluation)
+- LanceDB vector store with nomic-embed-code embeddings
 - Context assembly concepts
 - Shell git execution (not go-git)
 - SQLite persistence patterns
@@ -89,8 +89,11 @@ Go-based pipeline orchestrator. Components being carried forward:
 ## Open Questions
 
 Tracked in individual architecture documents. High-level items still unresolved:
-- LanceDB vs alternative vector stores (pending evaluation — see [[04-code-intelligence-and-rag]])
-- Frontend stack final selection (see [[07-web-interface-and-streaming]])
-- Context assembly trigger heuristics (see [[06-context-assembly]])
-- Skills/memory system design (future — v0.5+)
-- MCP integration (future — tool interface should be compatible)
+- Context assembly trigger heuristics and quality tuning (see [[06-context-assembly]])
+- Skills/memory system design beyond the project brain (future — v0.5+)
+- Future UI-driven chain execution using the same internal chain start path as `yard chain start`
+
+Resolved since the original draft:
+- LanceDB is the selected vector store for current code and brain semantic indexes.
+- React/Vite/TypeScript is the selected frontend stack.
+- Brain access uses the project brain MCP/vault-backed runtime path.

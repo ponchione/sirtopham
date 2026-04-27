@@ -1,7 +1,6 @@
 package openai
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,7 +8,6 @@ import (
 	"io"
 	"math/rand"
 	"net"
-	"net/http"
 	"time"
 
 	"github.com/ponchione/sodoryard/internal/provider"
@@ -58,44 +56,18 @@ func (p *OpenAIProvider) Complete(ctx context.Context, req *provider.Request) (*
 			}
 		}
 
-		httpReq, err := http.NewRequestWithContext(ctx, "POST", p.baseURL+"/chat/completions", bytes.NewReader(body))
+		httpReq, err := p.newChatCompletionRequest(ctx, body)
 		if err != nil {
-			return nil, fmt.Errorf("OpenAI-compatible provider '%s': failed to create request: %w", p.name, err)
-		}
-		httpReq.Header.Set("Content-Type", "application/json")
-		if p.apiKey != "" {
-			httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
+			return nil, err
 		}
 
 		resp, err := p.client.Do(httpReq)
 		if err != nil {
-			// Check for connection refused / unreachable errors.
-			if isConnectionError(err) {
-				return nil, &provider.ProviderError{
-					Provider:   p.name,
-					StatusCode: 0,
-					Message:    fmt.Sprintf("OpenAI-compatible provider '%s' at %s is not reachable. Is the model server running?", p.name, p.baseURL),
-					Retriable:  false,
-					Err:        err,
-				}
+			reqErr := p.requestFailure(ctx, err)
+			if !reqErr.Retriable {
+				return nil, reqErr
 			}
-			// Context cancellation.
-			if ctx.Err() != nil {
-				return nil, &provider.ProviderError{
-					Provider:   p.name,
-					StatusCode: 0,
-					Message:    ctx.Err().Error(),
-					Retriable:  false,
-					Err:        ctx.Err(),
-				}
-			}
-			lastErr = &provider.ProviderError{
-				Provider:   p.name,
-				StatusCode: 0,
-				Message:    fmt.Sprintf("OpenAI-compatible provider '%s': request failed: %s", p.name, err),
-				Retriable:  true,
-				Err:        err,
-			}
+			lastErr = reqErr
 			continue
 		}
 
@@ -128,40 +100,18 @@ func (p *OpenAIProvider) Complete(ctx context.Context, req *provider.Request) (*
 			return translateResponse(p.name, &chatResp)
 
 		case 401, 403:
-			return nil, &provider.ProviderError{
-				Provider:   p.name,
-				StatusCode: resp.StatusCode,
-				Message:    fmt.Sprintf("OpenAI-compatible provider '%s' authentication failed. Check API key configuration.", p.name),
-				Retriable:  false,
-			}
+			return nil, p.statusFailure(resp.StatusCode, retryAfter, false)
 
 		case 429:
-			lastErr = &provider.ProviderError{
-				Provider:   p.name,
-				StatusCode: resp.StatusCode,
-				Message:    fmt.Sprintf("OpenAI-compatible provider '%s': rate limited after %d attempts", p.name, maxRetryAttempts),
-				Retriable:  true,
-				RetryAfter: retryAfter,
-			}
+			lastErr = p.statusFailure(resp.StatusCode, retryAfter, true)
 			continue
 
 		case 500, 502, 503:
-			lastErr = &provider.ProviderError{
-				Provider:   p.name,
-				StatusCode: resp.StatusCode,
-				Message:    fmt.Sprintf("OpenAI-compatible provider '%s': server error (HTTP %d) after %d attempts", p.name, resp.StatusCode, maxRetryAttempts),
-				Retriable:  true,
-				RetryAfter: retryAfter,
-			}
+			lastErr = p.statusFailure(resp.StatusCode, retryAfter, true)
 			continue
 
 		default:
-			return nil, &provider.ProviderError{
-				Provider:   p.name,
-				StatusCode: resp.StatusCode,
-				Message:    fmt.Sprintf("OpenAI-compatible provider '%s': unexpected HTTP status %d", p.name, resp.StatusCode),
-				Retriable:  false,
-			}
+			return nil, p.statusFailure(resp.StatusCode, retryAfter, false)
 		}
 	}
 
@@ -233,7 +183,7 @@ func mapFinishReason(reason string) provider.StopReason {
 func (p *OpenAIProvider) backoff(ctx context.Context, attempt int) bool {
 	baseDelay := 1 * time.Second
 	delay := baseDelay * time.Duration(1<<uint(attempt-1)) // attempt 1 -> 1s, attempt 2 -> 2s
-	jitter := time.Duration(rand.Int63n(500_000_000))       // 0 to 500ms
+	jitter := time.Duration(rand.Int63n(500_000_000))      // 0 to 500ms
 	totalDelay := delay + jitter
 
 	timer := time.NewTimer(totalDelay)

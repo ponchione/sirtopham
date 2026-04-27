@@ -278,9 +278,12 @@ export function ConversationPage() {
     (selectedProvider !== config.default_provider || selectedModel !== config.default_model)
   );
 
-  const messageOverride = isConversationOverrideActive
-    ? { provider: selectedProvider, model: selectedModel }
-    : undefined;
+  const messageOverride = useMemo(
+    () => isConversationOverrideActive
+      ? { provider: selectedProvider, model: selectedModel }
+      : undefined,
+    [isConversationOverrideActive, selectedModel, selectedProvider],
+  );
 
   const handleModelOverrideChange = (provider: string, model: string) => {
     setSelectedProvider(provider);

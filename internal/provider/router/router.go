@@ -365,48 +365,31 @@ func (r *Router) fallbackTarget(primaryProvider string) (provider.Provider, stri
 }
 
 func (r *Router) completeWithFallback(ctx context.Context, req *provider.Request, primaryProvider string, primaryErr error) (*provider.Response, error) {
-	fallbackProvider, fallbackName, fallbackModel, ok := r.fallbackTarget(primaryProvider)
-	if fallbackName == "" {
-		return nil, primaryErr
-	}
-	if !ok {
-		return nil, fmt.Errorf("primary provider failed and fallback provider not available: %s: %w", fallbackName, primaryErr)
-	}
-
-	r.logger.Warn("primary provider failed, attempting fallback",
-		"primary_provider", primaryProvider,
-		"error", primaryErr,
-		"fallback_provider", fallbackName,
-	)
-
-	callReq := cloneRequestWithModel(req, fallbackModel)
-	resp, err := fallbackProvider.Complete(ctx, callReq)
-	if err == nil {
-		r.markSuccess(fallbackName)
-		return resp, nil
-	}
-
-	r.markFailure(fallbackName, err)
-	if classifyError(err) == errorClassAuth {
-		return nil, wrapAuthError(fallbackName, err)
-	}
-
-	r.logger.Warn("both primary and fallback providers failed",
-		"primary_provider", primaryProvider,
-		"primary_error", primaryErr,
-		"fallback_provider", fallbackName,
-		"fallback_error", err,
-	)
-	return nil, err
+	return runWithFallback(r, req, primaryProvider, primaryErr, func(p provider.Provider, callReq *provider.Request) (*provider.Response, error) {
+		return p.Complete(ctx, callReq)
+	})
 }
 
 func (r *Router) streamWithFallback(ctx context.Context, req *provider.Request, primaryProvider string, primaryErr error) (<-chan provider.StreamEvent, error) {
+	return runWithFallback(r, req, primaryProvider, primaryErr, func(p provider.Provider, callReq *provider.Request) (<-chan provider.StreamEvent, error) {
+		return p.Stream(ctx, callReq)
+	})
+}
+
+func runWithFallback[T any](
+	r *Router,
+	req *provider.Request,
+	primaryProvider string,
+	primaryErr error,
+	call func(provider.Provider, *provider.Request) (T, error),
+) (T, error) {
+	var zero T
 	fallbackProvider, fallbackName, fallbackModel, ok := r.fallbackTarget(primaryProvider)
 	if fallbackName == "" {
-		return nil, primaryErr
+		return zero, primaryErr
 	}
 	if !ok {
-		return nil, fmt.Errorf("primary provider failed and fallback provider not available: %s: %w", fallbackName, primaryErr)
+		return zero, fmt.Errorf("primary provider failed and fallback provider not available: %s: %w", fallbackName, primaryErr)
 	}
 
 	r.logger.Warn("primary provider failed, attempting fallback",
@@ -416,15 +399,15 @@ func (r *Router) streamWithFallback(ctx context.Context, req *provider.Request, 
 	)
 
 	callReq := cloneRequestWithModel(req, fallbackModel)
-	ch, err := fallbackProvider.Stream(ctx, callReq)
+	result, err := call(fallbackProvider, callReq)
 	if err == nil {
 		r.markSuccess(fallbackName)
-		return ch, nil
+		return result, nil
 	}
 
 	r.markFailure(fallbackName, err)
 	if classifyError(err) == errorClassAuth {
-		return nil, wrapAuthError(fallbackName, err)
+		return zero, wrapAuthError(fallbackName, err)
 	}
 
 	r.logger.Warn("both primary and fallback providers failed",
@@ -433,7 +416,7 @@ func (r *Router) streamWithFallback(ctx context.Context, req *provider.Request, 
 		"fallback_provider", fallbackName,
 		"fallback_error", err,
 	)
-	return nil, err
+	return zero, err
 }
 
 // wrapAuthError wraps an error with an actionable authentication failure message.

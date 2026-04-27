@@ -2,12 +2,10 @@ package codex
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
 	"strings"
 	"time"
 
@@ -90,12 +88,7 @@ func (p *CodexProvider) Complete(ctx context.Context, req *provider.Request) (*p
 	apiReq := buildResponsesRequest(model, req, streamResponse)
 	body, err := json.Marshal(apiReq)
 	if err != nil {
-		return nil, &provider.ProviderError{
-			Provider:   "codex",
-			StatusCode: 0,
-			Message:    fmt.Sprintf("failed to marshal request: %v", err),
-			Retriable:  false,
-		}
+		return nil, codexMarshalError(err)
 	}
 
 	var lastStatusCode int
@@ -106,12 +99,7 @@ func (p *CodexProvider) Complete(ctx context.Context, req *provider.Request) (*p
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		if attempt > 0 {
 			if ctx.Err() != nil {
-				return nil, &provider.ProviderError{
-					Provider:   "codex",
-					StatusCode: 0,
-					Message:    "request cancelled",
-					Retriable:  false,
-				}
+				return nil, codexCancelledError()
 			}
 
 			delay := baseDelay * (1 << (attempt - 1))
@@ -119,46 +107,20 @@ func (p *CodexProvider) Complete(ctx context.Context, req *provider.Request) (*p
 			select {
 			case <-ctx.Done():
 				timer.Stop()
-				return nil, &provider.ProviderError{
-					Provider:   "codex",
-					StatusCode: 0,
-					Message:    "request cancelled",
-					Retriable:  false,
-				}
+				return nil, codexCancelledError()
 			case <-timer.C:
 			}
 		}
 
-		httpReq, err := http.NewRequestWithContext(ctx, "POST", p.responsesEndpointURL(), bytes.NewReader(body))
+		httpReq, err := p.newResponsesHTTPRequest(ctx, body, token)
 		if err != nil {
-			return nil, &provider.ProviderError{
-				Provider:   "codex",
-				StatusCode: 0,
-				Message:    fmt.Sprintf("failed to create request: %v", err),
-				Retriable:  false,
-			}
+			return nil, err
 		}
-		httpReq.Header.Set("Authorization", "Bearer "+token)
-		httpReq.Header.Set("Content-Type", "application/json")
 
 		start := time.Now()
 		resp, err := p.httpClient.Do(httpReq)
 		if err != nil {
-			if ctx.Err() != nil {
-				return nil, &provider.ProviderError{
-					Provider:   "codex",
-					StatusCode: 0,
-					Message:    "request cancelled",
-					Retriable:  false,
-				}
-			}
-			return nil, &provider.ProviderError{
-				Provider:   "codex",
-				StatusCode: 0,
-				Message:    fmt.Sprintf("request failed: %v", err),
-				Retriable:  true,
-				Err:        err,
-			}
+			return nil, codexRequestFailure(ctx, err)
 		}
 
 		var respBody []byte
@@ -211,14 +173,10 @@ func (p *CodexProvider) Complete(ctx context.Context, req *provider.Request) (*p
 
 		// Other non-200 errors: no retry
 		if resp.StatusCode != 200 {
-			bodyStr := string(respBody)
-			if len(bodyStr) > 1024 {
-				bodyStr = bodyStr[:1024]
-			}
 			return nil, &provider.ProviderError{
 				Provider:   "codex",
 				StatusCode: resp.StatusCode,
-				Message:    bodyStr,
+				Message:    truncateBody(string(respBody), 1024),
 				Retriable:  false,
 			}
 		}
@@ -253,10 +211,7 @@ func (p *CodexProvider) Complete(ctx context.Context, req *provider.Request) (*p
 	}
 
 	// All retries exhausted
-	bodyStr := string(lastBody)
-	if len(bodyStr) > 512 {
-		bodyStr = bodyStr[:512]
-	}
+	bodyStr := truncateBody(string(lastBody), 512)
 
 	msg := "server error after 3 attempts: " + bodyStr
 	if lastStatusCode == 429 {

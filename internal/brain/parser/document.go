@@ -54,7 +54,7 @@ func ParseDocumentWithFileModTime(docPath, content string, modTime time.Time) (D
 }
 
 func ParseDocumentWithModTime(docPath, content string, modTime time.Time, hasModTime bool) (Document, error) {
-	frontmatter, body := splitFrontmatter(content)
+	frontmatter, body := SplitFrontmatter(content)
 	var fm map[string]any
 	if frontmatter != "" {
 		if err := yaml.Unmarshal([]byte(frontmatter), &fm); err != nil {
@@ -87,7 +87,7 @@ func ParseDocumentWithModTime(docPath, content string, modTime time.Time, hasMod
 	}, nil
 }
 
-func splitFrontmatter(content string) (string, string) {
+func SplitFrontmatter(content string) (string, string) {
 	if !strings.HasPrefix(content, "---") {
 		return "", content
 	}

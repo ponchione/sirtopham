@@ -59,35 +59,19 @@ func (b *BrainWrite) Schema() json.RawMessage {
 
 func (b *BrainWrite) Execute(ctx context.Context, projectRoot string, input json.RawMessage) (*ToolResult, error) {
 	if !b.config.Enabled {
-		return &ToolResult{
-			Success: false,
-			Content: "Project brain is not configured. See the project's YAML config brain section.",
-			Error:   "brain not configured",
-		}, nil
+		return brainDisabledResult(), nil
 	}
 
 	var params brainWriteInput
 	if err := json.Unmarshal(input, &params); err != nil {
-		return &ToolResult{
-			Success: false,
-			Content: fmt.Sprintf("Invalid input: %v", err),
-			Error:   err.Error(),
-		}, nil
+		return invalidInputResult(err), nil
 	}
 
-	if params.Path == "" {
-		return &ToolResult{
-			Success: false,
-			Content: "path is required",
-			Error:   "empty path",
-		}, nil
+	if result := validateBrainPath(params.Path); result != nil {
+		return result, nil
 	}
-	if params.Content == "" {
-		return &ToolResult{
-			Success: false,
-			Content: "content is required",
-			Error:   "empty content",
-		}, nil
+	if result := validateBrainContent(params.Content); result != nil {
+		return result, nil
 	}
 
 	normalizedPath, err := ensureBrainWriteAllowed(b.config, params.Path)

@@ -267,56 +267,11 @@ func describeEmbedStore(
 	describer codeintel.Describer,
 	fileHashes map[string]string,
 ) (int, int) {
-	var filesIndexed, totalChunks int
-
-	for i := range parsed {
-		pf := &parsed[i]
-
-		descContent := string(pf.content)
-		if relCtx := formatRelationshipContext(pf.chunks); relCtx != "" {
-			descContent = descContent + "\n\n" + relCtx
-		}
-
-		descriptions, err := describer.DescribeFile(ctx, descContent, "")
-		if err != nil {
-			slog.Warn("describe failed", "path", pf.relPath, "err", err)
-			descriptions = nil
-		}
-
-		descMap := make(map[string]string, len(descriptions))
-		for _, d := range descriptions {
-			descMap[d.Name] = d.Description
-		}
-
-		embedTexts := make([]string, len(pf.chunks))
-		for j := range pf.chunks {
-			desc := descMap[pf.chunks[j].Name]
-			pf.chunks[j].Description = desc
-			embedTexts[j] = pf.chunks[j].Signature + "\n" + desc
-		}
-
-		embeddings, err := embedder.EmbedTexts(ctx, embedTexts)
-		if err != nil {
-			slog.Warn("embed failed", "path", pf.relPath, "err", err)
-			continue
-		}
-
-		for j := range pf.chunks {
-			if j < len(embeddings) {
-				pf.chunks[j].Embedding = embeddings[j]
-			}
-		}
-
-		if err := store.Upsert(ctx, pf.chunks); err != nil {
-			slog.Warn("upsert failed", "path", pf.relPath, "err", err)
-			continue
-		}
-
-		fileHashes[pf.relPath] = pf.fileHash
-		filesIndexed++
-		totalChunks += len(pf.chunks)
-		slog.Info("indexed file", "path", pf.relPath, "chunks", len(pf.chunks))
-	}
-
-	return filesIndexed, totalChunks
+	result := describeEmbedStoreFiles(ctx, parsed, store, embedder, describer, describeEmbedOptions{
+		LogMessage: "indexed file",
+		OnSuccess: func(pf *parsedFile) {
+			fileHashes[pf.relPath] = pf.fileHash
+		},
+	})
+	return result.filesIndexed, result.totalChunks
 }

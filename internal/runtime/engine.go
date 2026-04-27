@@ -19,7 +19,6 @@ import (
 	contextpkg "github.com/ponchione/sodoryard/internal/context"
 	"github.com/ponchione/sodoryard/internal/conversation"
 	appdb "github.com/ponchione/sodoryard/internal/db"
-	"github.com/ponchione/sodoryard/internal/logging"
 	"github.com/ponchione/sodoryard/internal/provider/router"
 	"github.com/ponchione/sodoryard/internal/provider/tracking"
 )
@@ -45,44 +44,19 @@ type EngineRuntime struct {
 // extracted helpers in this package (ChainCleanup, EnsureProjectRecord,
 // BuildProvider, LogProviderAuthStatus).
 func BuildEngineRuntime(ctx context.Context, cfg *appconfig.Config) (*EngineRuntime, error) {
-	if cfg == nil {
-		return nil, fmt.Errorf("runtime config is required")
-	}
-
-	logger, err := logging.Init(cfg.LogLevel, cfg.LogFormat)
+	base, err := buildRuntimeBase(ctx, cfg)
 	if err != nil {
-		return nil, fmt.Errorf("init logging: %w", err)
+		return nil, err
 	}
-
-	database, err := appdb.OpenDB(ctx, cfg.DatabasePath())
-	if err != nil {
-		return nil, fmt.Errorf("open database: %w", err)
-	}
-	cleanup := func() {
-		_ = database.Close()
-	}
+	logger := base.logger
+	database := base.database
+	queries := base.queries
+	cleanup := base.cleanup
 	closeOnError := func(err error) (*EngineRuntime, error) {
 		cleanup()
 		return nil, err
 	}
 
-	// Bootstrap the base schema if this is a fresh .yard/yard.db. Without
-	// this, engine commands against a project that has never been init-ed
-	// fail inside the Ensure* schema-upgrade helpers because they try to
-	// ALTER tables that do not exist yet.
-	if _, err := appdb.InitIfNeeded(ctx, database); err != nil {
-		return closeOnError(fmt.Errorf("init database schema: %w", err))
-	}
-	if err := appdb.EnsureMessageSearchIndexesIncludeTools(ctx, database); err != nil {
-		return closeOnError(fmt.Errorf("upgrade message search indexes: %w", err))
-	}
-	if err := appdb.EnsureContextReportsIncludeTokenBudget(ctx, database); err != nil {
-		return closeOnError(fmt.Errorf("upgrade context report token budget storage: %w", err))
-	}
-	if err := appdb.EnsureChainSchema(ctx, database); err != nil {
-		return closeOnError(fmt.Errorf("ensure chain schema: %w", err))
-	}
-	queries := appdb.New(database)
 	if err := EnsureProjectRecord(ctx, database, cfg); err != nil {
 		return closeOnError(fmt.Errorf("ensure project record: %w", err))
 	}

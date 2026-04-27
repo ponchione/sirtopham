@@ -41,6 +41,8 @@ export function useWebSocket(): UseWebSocketReturn {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const reconnectDelay = useRef(1000);
+  const shouldReconnect = useRef(true);
+  const connectRef = useRef<() => void>(() => {});
 
   const [status, setStatus] = useState<ConnectionStatus>("disconnected");
   // Ref-backed queue: ref writes are synchronous and never batched, so every
@@ -74,22 +76,29 @@ export function useWebSocket(): UseWebSocketReturn {
     };
 
     ws.onclose = () => {
+      if (wsRef.current === ws) {
+        wsRef.current = null;
+      }
       setStatus("disconnected");
-      wsRef.current = null;
+      if (!shouldReconnect.current) {
+        return;
+      }
       // Reconnect with exponential backoff (max 30s).
       const delay = reconnectDelay.current;
       reconnectDelay.current = Math.min(delay * 2, 30_000);
-      reconnectTimer.current = setTimeout(connect, delay);
+      reconnectTimer.current = setTimeout(() => connectRef.current(), delay);
     };
 
     ws.onerror = () => {
       // onclose will fire after onerror, triggering reconnect.
     };
   }, []);
-
   useEffect(() => {
+    connectRef.current = connect;
+    shouldReconnect.current = true;
     connect();
     return () => {
+      shouldReconnect.current = false;
       clearTimeout(reconnectTimer.current);
       wsRef.current?.close();
       wsRef.current = null;
