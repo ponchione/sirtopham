@@ -11,6 +11,7 @@ import (
 
 	"github.com/ponchione/sodoryard/internal/chain"
 	appconfig "github.com/ponchione/sodoryard/internal/config"
+	"github.com/ponchione/sodoryard/internal/receipt"
 )
 
 func TestSpawnAgentRejectsUnknownRole(t *testing.T) {
@@ -114,6 +115,103 @@ Done.
 	}
 }
 
+func TestSpawnAgentTreatsSpecVerdictsAsCompletedStepExecutions(t *testing.T) {
+	for _, verdict := range []string{
+		"completed",
+		"completed_with_concerns",
+		"completed_no_receipt",
+		"fix_required",
+		"blocked",
+		"escalate",
+		"safety_limit",
+	} {
+		t.Run(verdict, func(t *testing.T) {
+			if got := statusFromVerdict(receipt.Verdict(verdict)); got != "completed" {
+				t.Fatalf("statusFromVerdict(%q) = %q, want completed", verdict, got)
+			}
+		})
+	}
+}
+
+func TestSpawnAgentPassesRoleTimeoutToSubprocess(t *testing.T) {
+	ctx := context.Background()
+	store := chain.NewStore(newSpawnTestDB(t))
+	chainID, _ := store.StartChain(ctx, chain.ChainSpec{MaxSteps: 10, MaxResolverLoops: 1, MaxDuration: time.Hour, TokenBudget: 100})
+	backend := &fakeBrainBackend{docs: map[string]string{}}
+	tool := NewSpawnAgentTool(SpawnAgentDeps{
+		Store:        store,
+		Backend:      backend,
+		Config:       &appconfig.Config{AgentRoles: map[string]appconfig.AgentRoleConfig{"coder": {Timeout: appconfig.Duration(45 * time.Minute)}}},
+		ChainID:      chainID,
+		EngineBinary: "tidmouth",
+		ProjectRoot:  t.TempDir(),
+	})
+	var gotArgs []string
+	var gotTimeout time.Duration
+	tool.runCommand = func(ctx context.Context, in RunCommandInput) RunResult {
+		gotArgs = append([]string(nil), in.Args...)
+		gotTimeout = in.Timeout
+		backend.docs["receipts/coder/"+chainID+"-step-001.md"] = `---
+agent: coder
+chain_id: ` + chainID + `
+step: 1
+verdict: completed
+timestamp: 2026-04-11T00:00:00Z
+turns_used: 1
+tokens_used: 1
+duration_seconds: 1
+---
+
+Done.
+`
+		return RunResult{ExitCode: 0}
+	}
+
+	if _, err := tool.Execute(ctx, ".", []byte(`{"role":"coder","task":"do work"}`)); err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	joinedArgs := strings.Join(gotArgs, " ")
+	if !strings.Contains(joinedArgs, "--timeout 45m0s") {
+		t.Fatalf("subprocess args = %v, want role timeout flag", gotArgs)
+	}
+	if gotTimeout <= 45*time.Minute {
+		t.Fatalf("subprocess timeout = %s, want parent guard above role timeout", gotTimeout)
+	}
+}
+
+func TestSpawnAgentReturnsErrorForInfrastructureExitWithReceipt(t *testing.T) {
+	ctx := context.Background()
+	store := chain.NewStore(newSpawnTestDB(t))
+	chainID, _ := store.StartChain(ctx, chain.ChainSpec{MaxSteps: 10, MaxResolverLoops: 1, MaxDuration: time.Hour, TokenBudget: 100})
+	backend := &fakeBrainBackend{docs: map[string]string{}}
+	tool := NewSpawnAgentTool(SpawnAgentDeps{Store: store, Backend: backend, Config: &appconfig.Config{AgentRoles: map[string]appconfig.AgentRoleConfig{"coder": {}}}, ChainID: chainID, EngineBinary: "tidmouth", ProjectRoot: t.TempDir()})
+	tool.runCommand = func(ctx context.Context, in RunCommandInput) RunResult {
+		backend.docs["receipts/coder/"+chainID+"-step-001.md"] = `---
+agent: coder
+chain_id: ` + chainID + `
+step: 1
+verdict: completed
+timestamp: 2026-04-11T00:00:00Z
+turns_used: 1
+tokens_used: 1
+duration_seconds: 1
+---
+
+Done.
+`
+		return RunResult{ExitCode: 1}
+	}
+
+	_, err := tool.Execute(ctx, ".", []byte(`{"role":"coder","task":"do work"}`))
+	if err == nil || !strings.Contains(err.Error(), "engine exited 1") {
+		t.Fatalf("error = %v, want infrastructure exit error", err)
+	}
+	steps, _ := store.ListSteps(ctx, chainID)
+	if len(steps) != 1 || steps[0].Status != "failed" || steps[0].ExitCode == nil || *steps[0].ExitCode != 1 {
+		t.Fatalf("unexpected failed step: %+v", steps)
+	}
+}
+
 func TestSpawnAgentRunsReindexBeforeWhenRequested(t *testing.T) {
 	ctx := context.Background()
 	store := chain.NewStore(newSpawnTestDB(t))
@@ -146,6 +244,9 @@ Done.
 	}
 	if len(calls) != 2 || calls[0][0] != "index" || calls[1][0] != "run" {
 		t.Fatalf("unexpected calls: %+v", calls)
+	}
+	if !strings.Contains(strings.Join(calls[0], " "), "--quiet") {
+		t.Fatalf("reindex args = %v, want --quiet", calls[0])
 	}
 }
 

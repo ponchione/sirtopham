@@ -1,7 +1,6 @@
 package goparser
 
 import (
-	"fmt"
 	"go/ast"
 	"go/token"
 	goTypes "go/types"
@@ -10,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/ponchione/sodoryard/internal/codeintel"
+	"github.com/ponchione/sodoryard/internal/codeintel/goload"
 	"golang.org/x/tools/go/packages"
 )
 
@@ -19,7 +19,7 @@ import (
 type Parser struct {
 	fset       *token.FileSet
 	pkgsByFile map[string]*packages.Package // abs file path → package
-	allIfaces  []ifaceInfo
+	allIfaces  []goload.InterfaceInfo
 	treeSitter codeintel.Parser // optional fallback for non-Go or unloaded files
 }
 
@@ -31,85 +31,22 @@ func (p *Parser) WithFallback(fallback codeintel.Parser) *Parser {
 	return p
 }
 
-// ifaceInfo holds a named interface type for Implements checking.
-type ifaceInfo struct {
-	name   string // "package.InterfaceName"
-	ifaceT *goTypes.Interface
-}
-
 // New loads all Go packages under rootDir and builds lookup indexes.
 func New(rootDir string) (*Parser, error) {
-	fset := token.NewFileSet()
-	cfg := &packages.Config{
-		Mode: packages.NeedName |
-			packages.NeedFiles |
-			packages.NeedSyntax |
-			packages.NeedTypes |
-			packages.NeedTypesInfo |
-			packages.NeedDeps |
-			packages.NeedImports,
-		Dir:  rootDir,
-		Fset: fset,
-	}
-
-	pkgs, err := packages.Load(cfg, "./...")
+	loaded, err := goload.Load(rootDir, "")
 	if err != nil {
-		return nil, fmt.Errorf("go/packages load: %w", err)
+		return nil, err
 	}
-
-	for _, pkg := range pkgs {
-		for _, e := range pkg.Errors {
-			slog.Warn("go/packages error", "pkg", pkg.PkgPath, "error", e)
-		}
-	}
-
-	pkgsByFile := make(map[string]*packages.Package)
-	var allIfaces []ifaceInfo
-
-	packages.Visit(pkgs, func(pkg *packages.Package) bool {
-		if pkg.Types == nil {
-			return true
-		}
-
-		for _, f := range pkg.GoFiles {
-			abs, err := filepath.Abs(f)
-			if err == nil {
-				pkgsByFile[abs] = pkg
-			}
-		}
-
-		scope := pkg.Types.Scope()
-		for _, name := range scope.Names() {
-			obj := scope.Lookup(name)
-			tn, ok := obj.(*goTypes.TypeName)
-			if !ok {
-				continue
-			}
-			iface, ok := tn.Type().Underlying().(*goTypes.Interface)
-			if !ok {
-				continue
-			}
-			if iface.NumMethods() == 0 {
-				continue
-			}
-			allIfaces = append(allIfaces, ifaceInfo{
-				name:   pkg.PkgPath + "." + name,
-				ifaceT: iface,
-			})
-		}
-
-		return true
-	}, nil)
 
 	slog.Info("GoASTParser initialized",
-		"packages", len(pkgsByFile),
-		"interfaces", len(allIfaces),
+		"packages", len(loaded.ByFile),
+		"interfaces", len(loaded.Interfaces),
 	)
 
 	return &Parser{
-		fset:       fset,
-		pkgsByFile: pkgsByFile,
-		allIfaces:  allIfaces,
+		fset:       loaded.FileSet,
+		pkgsByFile: loaded.ByFile,
+		allIfaces:  loaded.Interfaces,
 	}, nil
 }
 
@@ -448,8 +385,8 @@ func (p *Parser) checkImplements(typeName string, pkg *packages.Package) []strin
 
 	var implements []string
 	for _, iface := range p.allIfaces {
-		if goTypes.Implements(typ, iface.ifaceT) || goTypes.Implements(ptrTyp, iface.ifaceT) {
-			implements = append(implements, iface.name)
+		if goTypes.Implements(typ, iface.Type) || goTypes.Implements(ptrTyp, iface.Type) {
+			implements = append(implements, iface.FullName)
 		}
 	}
 

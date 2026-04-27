@@ -206,9 +206,11 @@ This is explicitly out of scope for v0.1. Start manual, automate later.
 **Principle:** sodoryard reuses CLI-managed credentials where practical, but may keep a provider-owned local auth store when that produces a safer runtime contract.
 
 - Anthropic credentials: read from `~/.claude/.credentials.json` (managed by Claude Code)
-- Codex credentials: imported from `~/.codex/auth.json` only when needed, then stored/refreshed in `~/.sirtopham/auth.json`
+- Codex credentials: imported from `~/.codex/auth.json` only when needed, then stored/refreshed in the compatibility private store at `~/.sirtopham/auth.json`
 - API keys (OpenRouter, etc.): read from environment variables or `yard.yaml`
 - No credentials are stored in sodoryard's SQLite database. API keys may still come from environment variables or `yard.yaml`, and Codex keeps provider auth state in `~/.sirtopham/auth.json` rather than mutating the shared CLI store.
+
+The `~/.sirtopham/auth.json` path is intentionally retained as a compatibility auth-store location even though the operator-facing CLI is now `yard`. It is not an operator-facing command surface and does not reintroduce the retired `sirtopham` binary.
 
 **File locking:** When reading/writing credential files (especially for Anthropic token refresh), use advisory file locking to avoid races with Claude Code itself accessing the same file.
 

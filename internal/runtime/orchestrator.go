@@ -14,7 +14,6 @@ import (
 	contextpkg "github.com/ponchione/sodoryard/internal/context"
 	"github.com/ponchione/sodoryard/internal/conversation"
 	appdb "github.com/ponchione/sodoryard/internal/db"
-	"github.com/ponchione/sodoryard/internal/logging"
 	"github.com/ponchione/sodoryard/internal/provider"
 	"github.com/ponchione/sodoryard/internal/provider/router"
 	"github.com/ponchione/sodoryard/internal/provider/tracking"
@@ -76,33 +75,14 @@ func (e *RegistryToolExecutor) Execute(ctx context.Context, call provider.ToolCa
 // BuildOrchestratorRuntime constructs and returns a fully initialised
 // OrchestratorRuntime. The caller must invoke rt.Cleanup() when done.
 func BuildOrchestratorRuntime(ctx context.Context, cfg *appconfig.Config) (*OrchestratorRuntime, error) {
-	logger, err := logging.Init(cfg.LogLevel, cfg.LogFormat)
+	base, err := buildRuntimeBase(ctx, cfg)
 	if err != nil {
-		return nil, fmt.Errorf("init logging: %w", err)
+		return nil, err
 	}
-
-	database, err := appdb.OpenDB(ctx, cfg.DatabasePath())
-	if err != nil {
-		return nil, fmt.Errorf("open database: %w", err)
-	}
-	cleanup := func() { _ = database.Close() }
-
-	if _, err := appdb.InitIfNeeded(ctx, database); err != nil {
-		cleanup()
-		return nil, fmt.Errorf("init schema: %w", err)
-	}
-	for _, fn := range []func(context.Context, *sql.DB) error{
-		appdb.EnsureMessageSearchIndexesIncludeTools,
-		appdb.EnsureContextReportsIncludeTokenBudget,
-		appdb.EnsureChainSchema,
-	} {
-		if err := fn(ctx, database); err != nil {
-			cleanup()
-			return nil, err
-		}
-	}
-
-	queries := appdb.New(database)
+	logger := base.logger
+	database := base.database
+	queries := base.queries
+	cleanup := base.cleanup
 
 	if err := EnsureProjectRecord(ctx, database, cfg); err != nil {
 		cleanup()

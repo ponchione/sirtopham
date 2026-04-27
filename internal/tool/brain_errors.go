@@ -24,3 +24,24 @@ func brainDocumentNotFoundResult(ctx context.Context, client brain.Backend, path
 		Error:   errMsg,
 	}
 }
+
+func brainDisabledResult() *ToolResult {
+	return failureResult(
+		"Project brain is not configured. See the project's YAML config brain section.",
+		"brain not configured",
+	)
+}
+
+func validateBrainPath(path string) *ToolResult {
+	if path == "" {
+		return requiredFieldResult("path")
+	}
+	return nil
+}
+
+func validateBrainContent(content string) *ToolResult {
+	if content == "" {
+		return requiredFieldResult("content")
+	}
+	return nil
+}

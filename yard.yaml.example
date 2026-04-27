@@ -1,5 +1,5 @@
-# sirtopham configuration
-# Copy this file to sirtopham.yaml and uncomment/edit values as needed.
+# yard configuration
+# Copy this file to yard.yaml and uncomment/edit values as needed.
 
 # --- Top-level ---
 # project_root: /path/to/your/project
@@ -54,7 +54,7 @@ index:
   #   - "**/node_modules/**"
   # max_rag_results: 30                  # Maximum RAG search results
   # max_tree_lines: 200                  # Maximum file tree lines in context
-  # auto_reindex: false                  # Reserved for future runtime indexing; current indexing runs only via `sirtopham index`
+  # auto_reindex: false                  # Reserved for future runtime indexing; current indexing runs only via `yard index`
   # max_file_size_bytes: 51200           # 50KB per file limit
   # max_total_file_size_bytes: 524288    # 512KB total context limit
 

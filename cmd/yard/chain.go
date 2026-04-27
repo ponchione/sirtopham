@@ -14,9 +14,8 @@ import (
 
 	"github.com/ponchione/sodoryard/internal/agent"
 	"github.com/ponchione/sodoryard/internal/chain"
+	"github.com/ponchione/sodoryard/internal/chainrun"
 	appconfig "github.com/ponchione/sodoryard/internal/config"
-	"github.com/ponchione/sodoryard/internal/conversation"
-	"github.com/ponchione/sodoryard/internal/id"
 	rtpkg "github.com/ponchione/sodoryard/internal/runtime"
 )
 
@@ -61,10 +60,7 @@ type chainRenderOptions struct {
 	Verbosity string
 }
 
-type chainTurnRunner interface {
-	RunTurn(ctx context.Context, req agent.RunTurnRequest) (*agent.TurnResult, error)
-	Close()
-}
+type chainTurnRunner = chainrun.TurnRunner
 
 var buildYardChainRuntime = rtpkg.BuildOrchestratorRuntime
 var buildYardChainRegistry = rtpkg.BuildOrchestratorRegistry
@@ -125,109 +121,33 @@ func yardRunChain(ctx context.Context, configPath string, flags yardChainFlags, 
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
-	roleCfg, ok := cfg.AgentRoles["orchestrator"]
-	if !ok {
-		return fmt.Errorf("agent role %q not found in config", "orchestrator")
-	}
-	systemPrompt, _, err := rtpkg.LoadRoleSystemPrompt("orchestrator", cfg.ProjectRoot, roleCfg.SystemPrompt)
-	if err != nil {
-		return err
-	}
-	rt, err := buildYardChainRuntime(ctx, cfg)
-	if err != nil {
-		return err
-	}
-	defer rt.Cleanup()
 
-	chainID := strings.TrimSpace(flags.ChainID)
-	if chainID == "" {
-		chainID = id.New()
-	}
-
-	existing, err := resolveYardExistingChain(ctx, rt.ChainStore, chainID)
-	if err != nil {
-		return err
-	}
-	isNew := existing == nil
-	resumed := false
-	if existing != nil {
-		flags, err = populateYardChainFlagsFromExisting(flags, existing)
-		if err != nil {
-			return err
-		}
-		resumed = existing.Status == "paused"
-		if err := prepareYardExistingChainForExecution(ctx, rt.ChainStore, existing, cmd); err != nil {
-			return err
-		}
-	} else {
-		if _, err := rt.ChainStore.StartChain(ctx, yardChainSpecFromFlags(chainID, flags)); err != nil {
-			return err
-		}
-		_ = rt.ChainStore.LogEvent(ctx, chainID, "", chain.EventChainStarted, map[string]any{"specs": yardParseSpecs(flags.Specs), "task": flags.Task})
-	}
-
-	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s\n", chainID)
-	if flags.DryRun {
-		return nil
-	}
-
-	executionRegistered := false
-	defer func() {
-		if err == nil || !executionRegistered {
-			return
-		}
-		if closeErr := closeErroredYardChainExecution(context.WithoutCancel(ctx), rt.ChainStore, chainID, err.Error()); closeErr != nil {
-			err = fmt.Errorf("%w (while closing active execution: %v)", err, closeErr)
-		}
-	}()
-	if err := registerYardActiveChainExecution(ctx, rt.ChainStore, chainID, isNew, resumed); err != nil {
-		return err
-	}
-	executionRegistered = true
-
-	registry, err := buildYardChainRegistry(rt, roleCfg, chainID)
-	if err != nil {
-		return err
-	}
-	conv, err := rt.ConversationManager.Create(ctx, cfg.ProjectRoot, conversation.WithProvider(cfg.Routing.Default.Provider), conversation.WithModel(cfg.Routing.Default.Model))
-	if err != nil {
-		return fmt.Errorf("create conversation: %w", err)
-	}
-	limit, err := rtpkg.ResolveModelContextLimit(cfg, cfg.Routing.Default.Provider)
-	if err != nil {
-		return err
-	}
-	loop := newYardChainTurnRunner(agent.AgentLoopDeps{ContextAssembler: rt.ContextAssembler, ConversationManager: rt.ConversationManager, ProviderRouter: rt.ProviderRouter, ToolExecutor: &rtpkg.RegistryToolExecutor{Registry: registry, ProjectRoot: cfg.ProjectRoot}, ToolDefinitions: registry.ToolDefinitions(), PromptBuilder: agent.NewPromptBuilder(rt.Logger), TitleGenerator: conversation.NewTitleGen(rt.ConversationManager, rt.ProviderRouter, cfg.Routing.Default.Model, rt.Logger), Config: agent.AgentLoopConfig{MaxIterations: roleCfg.MaxTurns, BasePrompt: systemPrompt, ProviderName: cfg.Routing.Default.Provider, ModelName: cfg.Routing.Default.Model, ContextConfig: cfg.Context}, Logger: rt.Logger})
-	defer loop.Close()
-	watch := startYardChainWatch(ctx, cmd.ErrOrStderr(), rt.ChainStore, chainID, flags.Watch, chainRenderOptions{Verbosity: normalizeChainVerbosity(flags.Verbosity)})
-	steps, err := rt.ChainStore.ListSteps(ctx, chainID)
-	if err != nil {
-		return err
-	}
-	turnTask := yardBuildChainTask(flags, chainID, existingReceiptPaths(steps))
-	if _, err := loop.RunTurn(ctx, agent.RunTurnRequest{ConversationID: conv.ID, TurnNumber: 1, Message: turnTask, ModelContextLimit: limit}); err != nil {
-		if handled, handleErr := handleYardChainRunInterruption(ctx, rt.ChainStore, chainID, err, cmd); handled || handleErr != nil {
-			if handleErr != nil {
-				return handleErr
-			}
-			return watch.wait(yardChainWatchFlushTimeout)
-		}
-		return err
-	}
-	if err := finalizeYardRequestedChainStatus(ctx, rt.ChainStore, chainID); err != nil {
-		return err
-	}
-	stored, err := rt.ChainStore.GetChain(ctx, chainID)
-	if err != nil {
-		return err
-	}
-	if stored.Status == "failed" {
-		return fmt.Errorf("chain %s failed", chainID)
-	}
-	if err := watch.wait(yardChainWatchFlushTimeout); err != nil {
-		return err
-	}
-	return nil
+	_, err = chainrun.Start(ctx, cfg, chainrun.Options{
+		ChainID:          flags.ChainID,
+		SourceSpecs:      yardParseSpecs(flags.Specs),
+		SourceTask:       strings.TrimSpace(flags.Task),
+		MaxSteps:         flags.MaxSteps,
+		MaxResolverLoops: flags.MaxResolverLoops,
+		MaxDuration:      flags.MaxDuration,
+		TokenBudget:      flags.TokenBudget,
+		DryRun:           flags.DryRun,
+		OnChainID: func(chainID string) {
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s\n", chainID)
+		},
+		OnMessage: func(message string) {
+			_, _ = fmt.Fprint(cmd.OutOrStdout(), message)
+		},
+		StartWatch: func(ctx context.Context, store *chain.Store, chainID string) chainrun.WatchHandle {
+			return yardChainWatchAdapter{handle: startYardChainWatch(ctx, cmd.ErrOrStderr(), store, chainID, flags.Watch, chainRenderOptions{Verbosity: normalizeChainVerbosity(flags.Verbosity)})}
+		},
+		WatchFlushTimeout: yardChainWatchFlushTimeout,
+	}, chainrun.Deps{
+		BuildRuntime:  buildYardChainRuntime,
+		BuildRegistry: buildYardChainRegistry,
+		NewTurnRunner: newYardChainTurnRunner,
+		ProcessID:     os.Getpid,
+	})
+	return err
 }
 
 func yardBuildChainTask(flags yardChainFlags, chainID string, receiptPaths []string) string {

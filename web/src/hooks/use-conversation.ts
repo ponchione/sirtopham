@@ -139,6 +139,43 @@ function updateAssistant(
   return copy;
 }
 
+function updateLastMatchingBlock(
+  blocks: ContentBlock[],
+  predicate: (block: ContentBlock) => boolean,
+  updater: (block: ContentBlock) => ContentBlock,
+): ContentBlock[] {
+  const copy = [...blocks];
+  for (let i = copy.length - 1; i >= 0; i--) {
+    const block = copy[i];
+    if (predicate(block)) {
+      copy[i] = updater(block);
+      break;
+    }
+  }
+  return copy;
+}
+
+function updateToolCallBlock(
+  blocks: ContentBlock[],
+  toolCallId: string,
+  updater: (block: ToolCallBlock) => ToolCallBlock,
+): ContentBlock[] {
+  return updateLastMatchingBlock(
+    blocks,
+    (block) => block.kind === "tool_call" && block.toolCallId === toolCallId,
+    (block) => block.kind === "tool_call" ? updater(block) : block,
+  );
+}
+
+function finalizeAssistantMessages(messages: ChatMessage[]): ChatMessage[] {
+  const copy = [...messages];
+  const last = copy[copy.length - 1];
+  if (last && last.role === "assistant") {
+    copy[copy.length - 1] = { ...last, content: flattenText(last.blocks) };
+  }
+  return copy;
+}
+
 function reducer(state: ConversationState, action: Action): ConversationState {
   switch (action.type) {
     case "user_message":
@@ -184,15 +221,11 @@ function reducer(state: ConversationState, action: Action): ConversationState {
     case "thinking_delta": {
       const [msgs, idx] = ensureAssistantMessage(state.messages);
       const updated = updateAssistant(msgs, idx, (msg) => {
-        const blocks = [...msg.blocks];
-        // Find the last thinking block that isn't done.
-        for (let i = blocks.length - 1; i >= 0; i--) {
-          const b = blocks[i];
-          if (b.kind === "thinking" && !b.done) {
-            blocks[i] = { ...b, text: b.text + action.delta };
-            break;
-          }
-        }
+        const blocks = updateLastMatchingBlock(
+          msg.blocks,
+          (block) => block.kind === "thinking" && !block.done,
+          (block) => block.kind === "thinking" ? { ...block, text: block.text + action.delta } : block,
+        );
         return { ...msg, blocks };
       });
       return { ...state, messages: updated };
@@ -201,14 +234,11 @@ function reducer(state: ConversationState, action: Action): ConversationState {
     case "thinking_end": {
       const [msgs, idx] = ensureAssistantMessage(state.messages);
       const updated = updateAssistant(msgs, idx, (msg) => {
-        const blocks = [...msg.blocks];
-        for (let i = blocks.length - 1; i >= 0; i--) {
-          const b = blocks[i];
-          if (b.kind === "thinking" && !b.done) {
-            blocks[i] = { ...b, done: true };
-            break;
-          }
-        }
+        const blocks = updateLastMatchingBlock(
+          msg.blocks,
+          (block) => block.kind === "thinking" && !block.done,
+          (block) => block.kind === "thinking" ? { ...block, done: true } : block,
+        );
         return { ...msg, blocks };
       });
       return { ...state, messages: updated };
@@ -236,14 +266,11 @@ function reducer(state: ConversationState, action: Action): ConversationState {
     case "tool_call_output": {
       const [msgs, idx] = ensureAssistantMessage(state.messages);
       const updated = updateAssistant(msgs, idx, (msg) => {
-        const blocks = [...msg.blocks];
-        for (let i = blocks.length - 1; i >= 0; i--) {
-          const b = blocks[i];
-          if (b.kind === "tool_call" && b.toolCallId === action.toolCallId) {
-            blocks[i] = { ...b, output: b.output + (action.output ?? "") };
-            break;
-          }
-        }
+        const blocks = updateToolCallBlock(
+          msg.blocks,
+          action.toolCallId,
+          (block) => ({ ...block, output: block.output + (action.output ?? "") }),
+        );
         return { ...msg, blocks };
       });
       return { ...state, messages: updated };
@@ -252,20 +279,17 @@ function reducer(state: ConversationState, action: Action): ConversationState {
     case "tool_call_end": {
       const [msgs, idx] = ensureAssistantMessage(state.messages);
       const updated = updateAssistant(msgs, idx, (msg) => {
-        const blocks = [...msg.blocks];
-        for (let i = blocks.length - 1; i >= 0; i--) {
-          const b = blocks[i];
-          if (b.kind === "tool_call" && b.toolCallId === action.toolCallId) {
-            blocks[i] = {
-              ...b,
-              result: action.result,
-              duration: action.duration,
-              success: action.success,
-              done: true,
-            };
-            break;
-          }
-        }
+        const blocks = updateToolCallBlock(
+          msg.blocks,
+          action.toolCallId,
+          (block) => ({
+            ...block,
+            result: action.result,
+            duration: action.duration,
+            success: action.success,
+            done: true,
+          }),
+        );
         return { ...msg, blocks };
       });
       return { ...state, messages: updated };
@@ -278,15 +302,9 @@ function reducer(state: ConversationState, action: Action): ConversationState {
       };
 
     case "turn_complete": {
-      // Finalize: make sure the last assistant message has its content populated.
-      const msgs = [...state.messages];
-      const last = msgs[msgs.length - 1];
-      if (last && last.role === "assistant") {
-        msgs[msgs.length - 1] = { ...last, content: flattenText(last.blocks) };
-      }
       return {
         ...state,
-        messages: msgs,
+        messages: finalizeAssistantMessages(state.messages),
         streamingText: "",
         isStreaming: false,
         agentState: "idle",
@@ -295,14 +313,9 @@ function reducer(state: ConversationState, action: Action): ConversationState {
     }
 
     case "turn_cancelled": {
-      const msgs = [...state.messages];
-      const last = msgs[msgs.length - 1];
-      if (last && last.role === "assistant") {
-        msgs[msgs.length - 1] = { ...last, content: flattenText(last.blocks) };
-      }
       return {
         ...state,
-        messages: msgs,
+        messages: finalizeAssistantMessages(state.messages),
         streamingText: "",
         isStreaming: false,
         agentState: "idle",

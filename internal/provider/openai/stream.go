@@ -2,7 +2,6 @@ package openai
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -68,80 +67,21 @@ func (p *OpenAIProvider) Stream(ctx context.Context, req *provider.Request) (<-c
 		return nil, fmt.Errorf("OpenAI-compatible provider '%s': failed to marshal request: %w", p.name, err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.baseURL+"/chat/completions", bytes.NewReader(body))
+	httpReq, err := p.newChatCompletionRequest(ctx, body)
 	if err != nil {
-		return nil, fmt.Errorf("OpenAI-compatible provider '%s': failed to create request: %w", p.name, err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	if p.apiKey != "" {
-		httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
+		return nil, err
 	}
 
 	resp, err := p.client.Do(httpReq)
 	if err != nil {
-		if isConnectionError(err) {
-			return nil, &provider.ProviderError{
-				Provider:   p.name,
-				StatusCode: 0,
-				Message:    fmt.Sprintf("OpenAI-compatible provider '%s' at %s is not reachable. Is the model server running?", p.name, p.baseURL),
-				Retriable:  false,
-				Err:        err,
-			}
-		}
-		if ctx.Err() != nil {
-			return nil, &provider.ProviderError{
-				Provider:   p.name,
-				StatusCode: 0,
-				Message:    ctx.Err().Error(),
-				Retriable:  false,
-				Err:        ctx.Err(),
-			}
-		}
-		return nil, &provider.ProviderError{
-			Provider:   p.name,
-			StatusCode: 0,
-			Message:    fmt.Sprintf("OpenAI-compatible provider '%s': request failed: %s", p.name, err),
-			Retriable:  true,
-			Err:        err,
-		}
+		return nil, p.requestFailure(ctx, err)
 	}
 
 	// Handle non-200 responses before streaming.
 	if resp.StatusCode != 200 {
 		retryAfter := provider.ParseRetryAfter(resp.Header.Get("Retry-After"), time.Now())
 		resp.Body.Close()
-		switch resp.StatusCode {
-		case 401, 403:
-			return nil, &provider.ProviderError{
-				Provider:   p.name,
-				StatusCode: resp.StatusCode,
-				Message:    fmt.Sprintf("OpenAI-compatible provider '%s' authentication failed. Check API key configuration.", p.name),
-				Retriable:  false,
-			}
-		case 429:
-			return nil, &provider.ProviderError{
-				Provider:   p.name,
-				StatusCode: resp.StatusCode,
-				Message:    fmt.Sprintf("OpenAI-compatible provider '%s': rate limited", p.name),
-				Retriable:  true,
-				RetryAfter: retryAfter,
-			}
-		case 500, 502, 503:
-			return nil, &provider.ProviderError{
-				Provider:   p.name,
-				StatusCode: resp.StatusCode,
-				Message:    fmt.Sprintf("OpenAI-compatible provider '%s': server error (HTTP %d)", p.name, resp.StatusCode),
-				Retriable:  true,
-				RetryAfter: retryAfter,
-			}
-		default:
-			return nil, &provider.ProviderError{
-				Provider:   p.name,
-				StatusCode: resp.StatusCode,
-				Message:    fmt.Sprintf("OpenAI-compatible provider '%s': unexpected HTTP status %d", p.name, resp.StatusCode),
-				Retriable:  false,
-			}
-		}
+		return nil, p.statusFailure(resp.StatusCode, retryAfter, false)
 	}
 
 	ch := make(chan provider.StreamEvent, 32)

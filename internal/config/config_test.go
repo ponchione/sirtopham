@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func withWorkingDir(t *testing.T, dir string) {
@@ -685,6 +686,13 @@ func TestLoadRejectsInvalidAgentRoles(t *testing.T) {
 				"agent_roles:\n  reviewer:\n    system_prompt: prompts/reviewer.md\n    max_tokens: -1\n",
 			wantSubstr: "agent_roles.reviewer.max_tokens=-1",
 		},
+		{
+			name: "negative timeout",
+			yaml: "project_root: \"" + projectRoot + "\"\n" +
+				"brain:\n  vault_path: \"" + filepath.Join(projectRoot, ".brain") + "\"\n" +
+				"agent_roles:\n  reviewer:\n    system_prompt: prompts/reviewer.md\n    timeout: -1s\n",
+			wantSubstr: "agent_roles.reviewer.timeout=-1s",
+		},
 	}
 
 	for _, tt := range tests {
@@ -702,6 +710,30 @@ func TestLoadRejectsInvalidAgentRoles(t *testing.T) {
 				t.Fatalf("error %q does not contain %q", err.Error(), tt.wantSubstr)
 			}
 		})
+	}
+}
+
+func TestLoadParsesAgentRoleTimeout(t *testing.T) {
+	projectRoot := t.TempDir()
+	ensureDir(t, filepath.Join(projectRoot, ".brain"))
+	configPath := filepath.Join(t.TempDir(), "yard.yaml")
+	content := "project_root: \"" + projectRoot + "\"\n" +
+		"brain:\n  vault_path: \"" + filepath.Join(projectRoot, ".brain") + "\"\n" +
+		"agent_roles:\n" +
+		"  coder:\n" +
+		"    system_prompt: builtin:coder\n" +
+		"    timeout: 45m\n"
+
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if got := cfg.AgentRoles["coder"].Timeout.Duration(); got != 45*time.Minute {
+		t.Fatalf("AgentRoles[coder].Timeout = %s, want 45m", got)
 	}
 }
 

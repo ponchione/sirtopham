@@ -252,16 +252,7 @@ func contradictionConfidenceRank(confidence string) int {
 }
 
 func extractProviderText(response *provider.Response) string {
-	if response == nil {
-		return ""
-	}
-	parts := make([]string, 0, len(response.Content))
-	for _, block := range response.Content {
-		if block.Type == "text" && strings.TrimSpace(block.Text) != "" {
-			parts = append(parts, strings.TrimSpace(block.Text))
-		}
-	}
-	return strings.TrimSpace(strings.Join(parts, "\n"))
+	return provider.TextContent(response)
 }
 
 func buildContradictionPrompt(candidates []analysis.ContradictionCandidate) string {

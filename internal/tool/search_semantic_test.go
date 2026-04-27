@@ -12,9 +12,9 @@ import (
 
 // mockSearcher is a configurable test double for SemanticSearcher.
 type mockSearcher struct {
-	results    []codeintel.SearchResult
-	err        error
-	lastOpts   codeintel.SearchOptions
+	results     []codeintel.SearchResult
+	err         error
+	lastOpts    codeintel.SearchOptions
 	lastQueries []string
 }
 
@@ -108,7 +108,7 @@ func TestSearchSemanticIndexNotInitialized(t *testing.T) {
 	if result.Success {
 		t.Fatal("expected failure for not-initialized index")
 	}
-	if !strings.Contains(result.Content, "tidmouth index") {
+	if !strings.Contains(result.Content, "yard index") {
 		t.Fatalf("expected guidance to run index, got: %s", result.Content)
 	}
 }

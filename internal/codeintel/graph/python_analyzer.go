@@ -161,7 +161,11 @@ func (a *PythonAnalyzer) extractPySymbols(relPath string, content []byte) (*pars
 
 // extractFunction extracts a top-level function symbol.
 func (a *PythonAnalyzer) extractFunction(node *sitter.Node, content []byte, modPath, relPath string, pf *parsedPyFile) {
-	name := pyNodeFieldText(node, "name", content)
+	a.extractFunctionSymbol(node, node, content, modPath, relPath, pf)
+}
+
+func (a *PythonAnalyzer) extractFunctionSymbol(spanNode, defNode *sitter.Node, content []byte, modPath, relPath string, pf *parsedPyFile) {
+	name := pyNodeFieldText(defNode, "name", content)
 	if name == "" {
 		return
 	}
@@ -172,9 +176,9 @@ func (a *PythonAnalyzer) extractFunction(node *sitter.Node, content []byte, modP
 		Language:  "python",
 		Package:   modPath,
 		FilePath:  relPath,
-		LineStart: int(node.StartPosition().Row) + 1,
-		LineEnd:   int(node.EndPosition().Row) + 1,
-		Signature: extractPySignature(node, content),
+		LineStart: int(spanNode.StartPosition().Row) + 1,
+		LineEnd:   int(spanNode.EndPosition().Row) + 1,
+		Signature: extractPySignature(defNode, content),
 		Exported:  !strings.HasPrefix(name, "_"),
 	})
 }
@@ -260,22 +264,7 @@ func (a *PythonAnalyzer) extractDecorated(node *sitter.Node, content []byte, mod
 		}
 		switch child.Kind() {
 		case "function_definition":
-			name := pyNodeFieldText(child, "name", content)
-			if name == "" {
-				return
-			}
-			pf.symbols = append(pf.symbols, Symbol{
-				ID:        pythonSymbolID(modPath, "function", name),
-				Name:      name,
-				Kind:      "function",
-				Language:  "python",
-				Package:   modPath,
-				FilePath:  relPath,
-				LineStart: int(node.StartPosition().Row) + 1,
-				LineEnd:   int(node.EndPosition().Row) + 1,
-				Signature: extractPySignature(child, content),
-				Exported:  !strings.HasPrefix(name, "_"),
-			})
+			a.extractFunctionSymbol(node, child, content, modPath, relPath, pf)
 			return
 		case "class_definition":
 			a.extractClass(child, content, modPath, relPath, pf)

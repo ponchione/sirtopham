@@ -51,19 +51,11 @@ func (FindFiles) Schema() json.RawMessage {
 func (FindFiles) Execute(ctx context.Context, projectRoot string, input json.RawMessage) (*ToolResult, error) {
 	var params findFilesInput
 	if err := json.Unmarshal(input, &params); err != nil {
-		return &ToolResult{
-			Success: false,
-			Content: fmt.Sprintf("Invalid input: %v", err),
-			Error:   err.Error(),
-		}, nil
+		return invalidInputResult(err), nil
 	}
 
 	if params.Pattern == "" {
-		return &ToolResult{
-			Success: false,
-			Content: "pattern is required",
-			Error:   "empty pattern",
-		}, nil
+		return requiredFieldResult("pattern"), nil
 	}
 
 	maxResults := 100
@@ -75,13 +67,9 @@ func (FindFiles) Execute(ctx context.Context, projectRoot string, input json.Raw
 	searchRoot := projectRoot
 	pathPrefix := ""
 	if params.Path != "" {
-		resolved, err := resolvePath(projectRoot, params.Path)
-		if err != nil {
-			return &ToolResult{
-				Success: false,
-				Content: err.Error(),
-				Error:   err.Error(),
-			}, nil
+		resolved, result := resolvePathResult(projectRoot, params.Path)
+		if result != nil {
+			return result, nil
 		}
 		searchRoot = resolved
 		pathPrefix = filepath.Clean(params.Path)

@@ -12,6 +12,7 @@ import (
 	"unicode"
 
 	"github.com/ponchione/sodoryard/internal/brain"
+	"github.com/ponchione/sodoryard/internal/pathguard"
 )
 
 var ErrPathTraversal = errors.New("path escapes vault root")
@@ -129,7 +130,11 @@ func (c *Client) SearchKeyword(ctx context.Context, query string, maxResults int
 		if err != nil {
 			return err
 		}
-		data, err := os.ReadFile(path)
+		resolved, err := c.resolve(rel)
+		if err != nil {
+			return err
+		}
+		data, err := os.ReadFile(resolved)
 		if err != nil {
 			return err
 		}
@@ -199,6 +204,9 @@ func (c *Client) ListDocuments(ctx context.Context, directory string) ([]string,
 		if err != nil {
 			return err
 		}
+		if _, err := c.resolve(rel); err != nil {
+			return err
+		}
 		files = append(files, filepath.ToSlash(rel))
 		return nil
 	})
@@ -210,23 +218,18 @@ func (c *Client) ListDocuments(ctx context.Context, directory string) ([]string,
 }
 
 func (c *Client) resolve(rel string) (string, error) {
-	if strings.TrimSpace(rel) == "" {
-		return "", ErrPathTraversal
-	}
-	if filepath.IsAbs(rel) {
-		return "", ErrPathTraversal
-	}
 	clean := filepath.Clean(rel)
-	if clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+	if strings.TrimSpace(rel) == "" || clean == "." {
 		return "", ErrPathTraversal
 	}
-	resolved := filepath.Join(c.root, clean)
-	relToRoot, err := filepath.Rel(c.root, resolved)
+	resolved, err := pathguard.Resolve(c.root, clean)
+	if errors.Is(err, pathguard.ErrEmptyPath) ||
+		errors.Is(err, pathguard.ErrAbsolutePath) ||
+		errors.Is(err, pathguard.ErrEscapesRoot) {
+		return "", ErrPathTraversal
+	}
 	if err != nil {
 		return "", err
-	}
-	if relToRoot == ".." || strings.HasPrefix(relToRoot, ".."+string(filepath.Separator)) {
-		return "", ErrPathTraversal
 	}
 	return resolved, nil
 }

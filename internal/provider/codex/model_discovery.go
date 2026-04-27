@@ -13,14 +13,12 @@ import (
 
 func visibleModels() []provider.Model {
 	return []provider.Model{
+		{ID: "gpt-5.5", Name: "GPT-5.5", ContextWindow: 400000, SupportsTools: true, SupportsThinking: false},
 		{ID: "gpt-5.4", Name: "gpt-5.4", ContextWindow: 400000, SupportsTools: true, SupportsThinking: false},
-		{ID: "gpt-5.2-codex", Name: "gpt-5.2-codex", ContextWindow: 400000, SupportsTools: true, SupportsThinking: false},
-		{ID: "gpt-5.1-codex-max", Name: "gpt-5.1-codex-max", ContextWindow: 400000, SupportsTools: true, SupportsThinking: false},
-		{ID: "gpt-5.4-mini", Name: "gpt-5.4-mini", ContextWindow: 400000, SupportsTools: true, SupportsThinking: false},
+		{ID: "gpt-5.4-mini", Name: "GPT-5.4-Mini", ContextWindow: 400000, SupportsTools: true, SupportsThinking: false},
 		{ID: "gpt-5.3-codex", Name: "gpt-5.3-codex", ContextWindow: 400000, SupportsTools: true, SupportsThinking: false},
 		{ID: "gpt-5.3-codex-spark", Name: "gpt-5.3-codex-spark", ContextWindow: 400000, SupportsTools: true, SupportsThinking: false},
 		{ID: "gpt-5.2", Name: "gpt-5.2", ContextWindow: 400000, SupportsTools: true, SupportsThinking: false},
-		{ID: "gpt-5.1-codex-mini", Name: "gpt-5.1-codex-mini", ContextWindow: 400000, SupportsTools: true, SupportsThinking: false},
 	}
 }
 

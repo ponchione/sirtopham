@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/ponchione/sodoryard/internal/brain"
+	brainparser "github.com/ponchione/sodoryard/internal/brain/parser"
 	"github.com/ponchione/sodoryard/internal/config"
 	appdb "github.com/ponchione/sodoryard/internal/db"
 )
@@ -69,28 +70,16 @@ func (b *BrainRead) Schema() json.RawMessage {
 
 func (b *BrainRead) Execute(ctx context.Context, projectRoot string, input json.RawMessage) (*ToolResult, error) {
 	if !b.config.Enabled {
-		return &ToolResult{
-			Success: false,
-			Content: "Project brain is not configured. See the project's YAML config brain section.",
-			Error:   "brain not configured",
-		}, nil
+		return brainDisabledResult(), nil
 	}
 
 	var params brainReadInput
 	if err := json.Unmarshal(input, &params); err != nil {
-		return &ToolResult{
-			Success: false,
-			Content: fmt.Sprintf("Invalid input: %v", err),
-			Error:   err.Error(),
-		}, nil
+		return invalidInputResult(err), nil
 	}
 
-	if params.Path == "" {
-		return &ToolResult{
-			Success: false,
-			Content: "path is required",
-			Error:   "empty path",
-		}, nil
+	if result := validateBrainPath(params.Path); result != nil {
+		return result, nil
 	}
 
 	content, err := b.client.ReadDocument(ctx, params.Path)
@@ -129,17 +118,7 @@ func (b *BrainRead) Execute(ctx context.Context, projectRoot string, input json.
 // extractFrontmatter splits YAML frontmatter from the body.
 // Returns ("", fullContent) if no frontmatter is present.
 func extractFrontmatter(content string) (string, string) {
-	if !strings.HasPrefix(content, "---") {
-		return "", content
-	}
-	rest := content[3:]
-	idx := strings.Index(rest, "\n---")
-	if idx < 0 {
-		return "", content
-	}
-	fm := strings.TrimSpace(rest[:idx])
-	body := strings.TrimLeft(rest[idx+4:], "\n")
-	return fm, body
+	return brainparser.SplitFrontmatter(content)
 }
 
 // extractWikilinks finds all [[wikilink]] references in the content.

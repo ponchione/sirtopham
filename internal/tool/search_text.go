@@ -67,19 +67,11 @@ func (SearchText) Schema() json.RawMessage {
 func (SearchText) Execute(ctx context.Context, projectRoot string, input json.RawMessage) (*ToolResult, error) {
 	var params searchTextInput
 	if err := json.Unmarshal(input, &params); err != nil {
-		return &ToolResult{
-			Success: false,
-			Content: fmt.Sprintf("Invalid input: %v", err),
-			Error:   err.Error(),
-		}, nil
+		return invalidInputResult(err), nil
 	}
 
 	if params.Pattern == "" {
-		return &ToolResult{
-			Success: false,
-			Content: "pattern is required",
-			Error:   "empty pattern",
-		}, nil
+		return requiredFieldResult("pattern"), nil
 	}
 
 	rgPath, err := lookupCommandPath("rg")

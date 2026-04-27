@@ -1,11 +1,14 @@
 package tool
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/ponchione/sodoryard/internal/pathguard"
 )
 
 // resolvePath resolves a relative path against projectRoot and validates it.
@@ -18,23 +21,38 @@ func resolvePath(projectRoot, path string) (string, error) {
 	if path == "" {
 		return "", fmt.Errorf("path is required")
 	}
-	if filepath.IsAbs(path) {
+	resolved, err := pathguard.Resolve(projectRoot, path)
+	if errors.Is(err, pathguard.ErrAbsolutePath) {
 		return "", fmt.Errorf("absolute paths are not allowed; use a path relative to the project root")
 	}
-
-	resolved := filepath.Join(projectRoot, filepath.Clean(path))
-
-	// Ensure the resolved path is within the project root.
-	// filepath.Rel will return a path starting with ".." if it escapes.
-	rel, err := filepath.Rel(projectRoot, resolved)
-	if err != nil {
-		return "", fmt.Errorf("path escapes project root: %w", err)
-	}
-	if strings.HasPrefix(rel, "..") {
+	if errors.Is(err, pathguard.ErrEscapesRoot) {
 		return "", fmt.Errorf("path escapes project root. All file operations are restricted to the project directory")
+	}
+	if err != nil {
+		return "", fmt.Errorf("resolve path: %w", err)
 	}
 
 	return resolved, nil
+}
+
+func failureResult(content, err string) *ToolResult {
+	return &ToolResult{Success: false, Content: content, Error: err}
+}
+
+func invalidInputResult(err error) *ToolResult {
+	return failureResult(fmt.Sprintf("Invalid input: %v", err), err.Error())
+}
+
+func requiredFieldResult(field string) *ToolResult {
+	return failureResult(fmt.Sprintf("%s is required", field), "empty "+field)
+}
+
+func resolvePathResult(projectRoot, relPath string) (string, *ToolResult) {
+	absPath, err := resolvePath(projectRoot, relPath)
+	if err != nil {
+		return "", failureResult(err.Error(), err.Error())
+	}
+	return absPath, nil
 }
 
 // listDirFiles returns a sorted list of file names in the given directory.

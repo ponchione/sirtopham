@@ -26,6 +26,16 @@ func TestEmbeddedTemplatesContainsYardYaml(t *testing.T) {
 	if strings.Contains(text, "{{SODORYARD_AGENTS_DIR}}") {
 		t.Fatalf("expected embedded yard.yaml.example to avoid {{SODORYARD_AGENTS_DIR}} placeholder")
 	}
+	for _, want := range []string{"yard index --config yard.yaml", "yard chain start --config yard.yaml"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected embedded yard.yaml.example to contain %q", want)
+		}
+	}
+	for _, stale := range []string{"tidmouth index", "sirtopham chain"} {
+		if strings.Contains(text, stale) {
+			t.Fatalf("expected embedded yard.yaml.example to avoid stale command %q", stale)
+		}
+	}
 }
 
 func TestEmbeddedTemplatesContainsBrainGitkeeps(t *testing.T) {

@@ -1,5 +1,7 @@
 package provider
 
+import "strings"
+
 // StopReason indicates why an LLM response terminated.
 type StopReason string
 
@@ -41,4 +43,17 @@ type Response struct {
 	Model      string         `json:"model"`
 	StopReason StopReason     `json:"stop_reason"`
 	LatencyMs  int64          `json:"-"`
+}
+
+func TextContent(response *Response) string {
+	if response == nil {
+		return ""
+	}
+	parts := make([]string, 0, len(response.Content))
+	for _, block := range response.Content {
+		if block.Type == "text" && strings.TrimSpace(block.Text) != "" {
+			parts = append(parts, strings.TrimSpace(block.Text))
+		}
+	}
+	return strings.TrimSpace(strings.Join(parts, "\n"))
 }

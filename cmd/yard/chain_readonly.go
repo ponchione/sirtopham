@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/spf13/cobra"
@@ -10,13 +11,17 @@ import (
 	rtpkg "github.com/ponchione/sodoryard/internal/runtime"
 )
 
+func openYardChainRuntime(ctx context.Context, configPath string) (*rtpkg.OrchestratorRuntime, error) {
+	cfg, err := appconfig.Load(configPath)
+	if err != nil {
+		return nil, err
+	}
+	return buildYardChainRuntime(ctx, cfg)
+}
+
 func newYardChainStatusCmd(configPath *string) *cobra.Command {
 	return &cobra.Command{Use: "status [chain-id]", Short: "Show chain status", Args: cobra.MaximumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
-		cfg, err := appconfig.Load(*configPath)
-		if err != nil {
-			return err
-		}
-		rt, err := rtpkg.BuildOrchestratorRuntime(cmd.Context(), cfg)
+		rt, err := openYardChainRuntime(cmd.Context(), *configPath)
 		if err != nil {
 			return err
 		}
@@ -51,11 +56,7 @@ func newYardChainLogsCmd(configPath *string) *cobra.Command {
 	var follow bool
 	var verbosity string
 	cmd := &cobra.Command{Use: "logs <chain-id>", Short: "Show chain event log", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
-		cfg, err := appconfig.Load(*configPath)
-		if err != nil {
-			return err
-		}
-		rt, err := rtpkg.BuildOrchestratorRuntime(cmd.Context(), cfg)
+		rt, err := openYardChainRuntime(cmd.Context(), *configPath)
 		if err != nil {
 			return err
 		}

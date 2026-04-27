@@ -87,7 +87,7 @@ Validation already completed on the current tree
   - `make test` ✅
   - `make build` ✅
 - Non-blocking note:
-  - frontend install/build still reports the pre-existing npm audit warning about `2 moderate severity vulnerabilities`; this slice did not touch frontend dependencies.
+  - `npm audit --json` currently reports zero vulnerabilities after the frontend dependency cleanup.
 
 What a fresh agent should do next
 1. Treat the `brain_search` helper extraction as landed.

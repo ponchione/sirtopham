@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/ponchione/sodoryard/internal/agent"
 	"github.com/ponchione/sodoryard/internal/chain"
+	"github.com/ponchione/sodoryard/internal/chainrun"
 	appconfig "github.com/ponchione/sodoryard/internal/config"
 	"github.com/ponchione/sodoryard/internal/conversation"
 	rtpkg "github.com/ponchione/sodoryard/internal/runtime"
@@ -504,8 +506,13 @@ func TestYardRunChainWatchInterruptCancelsForegroundExecution(t *testing.T) {
 	}
 
 	cancel()
-	if err := <-errCh; err != nil {
-		t.Fatalf("yardRunChain returned error: %v", err)
+	err := <-errCh
+	var exitErr chainrun.ExitError
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("yardRunChain error = %T %[1]v, want chainrun.ExitError", err)
+	}
+	if exitErr.ExitCode() != 4 {
+		t.Fatalf("exit code = %d, want 4", exitErr.ExitCode())
 	}
 	if strings.Contains(stderr.String(), "detached from live output") {
 		t.Fatalf("stderr = %q, did not want detach message", stderr.String())

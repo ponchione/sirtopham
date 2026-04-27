@@ -75,14 +75,6 @@ RUN ldconfig
 COPY --from=go-builder /out/tidmouth /usr/local/bin/tidmouth
 COPY --from=go-builder /out/yard /usr/local/bin/yard
 
-# Install the 13 agent prompts at the canonical container location for
-# the retained container runtime.
-COPY --from=go-builder /workspace/agents /opt/yard/agents
-
-# Expose the canonical container agent-prompts path for runtime code that
-# needs it.
-ENV SODORYARD_AGENTS_DIR=/opt/yard/agents
-
 # Bind-mounted project lives at /project; make it the working
 # directory so a bare 'yard init' operates on the mounted project.
 WORKDIR /project

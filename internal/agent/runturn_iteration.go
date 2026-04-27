@@ -45,18 +45,22 @@ func (l *AgentLoop) prepareIteration(ctx stdctx.Context, turnExec *turnExecution
 }
 
 func (l *AgentLoop) buildIterationRequest(ctx stdctx.Context, turnExec *turnExecution, iterExec *iterationExecution) (*provider.Request, error) {
-	promptReq, err := l.promptBuilder.BuildPrompt(l.buildPromptConfig(
-		turnExec.turnCtx.ContextPackage,
-		iterExec.history,
-		turnExec.currentTurnMessages,
-		turnExec.effectiveProvider,
-		turnExec.effectiveModel,
-		turnExec.req.ModelContextLimit,
-		iterExec.disableTools,
-		turnExec.req.ConversationID,
-		turnExec.req.TurnNumber,
-		iterExec.number,
-	))
+	buildPrompt := func() (*provider.Request, error) {
+		return l.promptBuilder.BuildPrompt(l.buildPromptConfig(
+			turnExec.turnCtx.ContextPackage,
+			iterExec.history,
+			turnExec.currentTurnMessages,
+			turnExec.effectiveProvider,
+			turnExec.effectiveModel,
+			turnExec.req.ModelContextLimit,
+			iterExec.disableTools,
+			turnExec.req.ConversationID,
+			turnExec.req.TurnNumber,
+			iterExec.number,
+		))
+	}
+
+	promptReq, err := buildPrompt()
 	if err != nil {
 		return nil, fmt.Errorf("agent loop: build prompt for iteration %d: %w", iterExec.number, err)
 	}
@@ -71,18 +75,7 @@ func (l *AgentLoop) buildIterationRequest(ctx stdctx.Context, turnExec *turnExec
 	}
 	iterExec.history = history
 
-	promptReq, err = l.promptBuilder.BuildPrompt(l.buildPromptConfig(
-		turnExec.turnCtx.ContextPackage,
-		iterExec.history,
-		turnExec.currentTurnMessages,
-		turnExec.effectiveProvider,
-		turnExec.effectiveModel,
-		turnExec.req.ModelContextLimit,
-		iterExec.disableTools,
-		turnExec.req.ConversationID,
-		turnExec.req.TurnNumber,
-		iterExec.number,
-	))
+	promptReq, err = buildPrompt()
 	if err != nil {
 		return nil, fmt.Errorf("agent loop: rebuild prompt after compression in iteration %d: %w", iterExec.number, err)
 	}

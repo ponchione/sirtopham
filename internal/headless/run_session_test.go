@@ -326,6 +326,40 @@ func TestProgressSinkFactoryAcceptsWriter(t *testing.T) {
 	}
 }
 
+func TestResolveRunLimitsNeverLoosensRoleLimits(t *testing.T) {
+	cfg := &appconfig.Config{Agent: appconfig.AgentConfig{MaxIterationsPerTurn: 50}}
+	roleCfg := appconfig.AgentRoleConfig{MaxTurns: 20, MaxTokens: 200}
+
+	gotTurns, gotTokens := resolveRunLimits(cfg, roleCfg, RunRequest{MaxTurns: 100, MaxTokens: 1000})
+	if gotTurns != 20 || gotTokens != 200 {
+		t.Fatalf("resolveRunLimits() = (%d, %d), want role caps (20, 200)", gotTurns, gotTokens)
+	}
+
+	gotTurns, gotTokens = resolveRunLimits(cfg, roleCfg, RunRequest{MaxTurns: 10, MaxTokens: 100})
+	if gotTurns != 10 || gotTokens != 100 {
+		t.Fatalf("resolveRunLimits() = (%d, %d), want tightened CLI caps (10, 100)", gotTurns, gotTokens)
+	}
+
+	gotTurns, gotTokens = resolveRunLimits(cfg, appconfig.AgentRoleConfig{}, RunRequest{MaxTurns: 75, MaxTokens: 300})
+	if gotTurns != 50 || gotTokens != 300 {
+		t.Fatalf("resolveRunLimits() = (%d, %d), want global turn cap and CLI token cap (50, 300)", gotTurns, gotTokens)
+	}
+}
+
+func TestResolveRunTimeoutUsesRoleCapAndAllowsTightening(t *testing.T) {
+	roleCfg := appconfig.AgentRoleConfig{Timeout: appconfig.Duration(20 * time.Minute)}
+
+	if got := resolveRunTimeout(roleCfg, 45*time.Minute); got != 20*time.Minute {
+		t.Fatalf("resolveRunTimeout() = %s, want role cap 20m", got)
+	}
+	if got := resolveRunTimeout(roleCfg, 5*time.Minute); got != 5*time.Minute {
+		t.Fatalf("resolveRunTimeout() = %s, want tightened CLI cap 5m", got)
+	}
+	if got := resolveRunTimeout(appconfig.AgentRoleConfig{}, 0); got != defaultRunTimeout {
+		t.Fatalf("resolveRunTimeout() = %s, want default %s", got, defaultRunTimeout)
+	}
+}
+
 func TestRunSessionWrapsConversationCreationFailure(t *testing.T) {
 	projectRoot := t.TempDir()
 	configPath := writeRunSessionConfig(t, projectRoot, strings.Join([]string{

@@ -121,13 +121,13 @@ The no-legacy contract keeps this as an internal implementation detail only. The
 
 ### 4.4 Future: UI-driven chains
 
-The chain start logic must remain in `internal/` packages (not in cobra wiring) so that a future HTTP handler at `/api/chain/start` can invoke the same code path. The Phase 8 implementation should verify that `yard chain start` delegates to a function signature like:
+The chain start logic must remain in `internal/` packages (not in cobra wiring) so that a future HTTP handler at `/api/chain/start` can invoke the same code path. The live implementation delegates `yard chain start` to `internal/chainrun.Start`, whose shape is:
 
 ```go
-func StartChain(ctx context.Context, cfg *config.Config, opts ChainStartOpts) error
+func Start(ctx context.Context, cfg *config.Config, opts chainrun.Options, deps chainrun.Deps) (*chainrun.Result, error)
 ```
 
-The actual extraction of `buildOrchestratorRuntime` into a shared package (§4.2) naturally enables this. No additional work needed in Phase 8 beyond the extraction itself.
+The Cobra command owns CLI-only work: loading flags, printing the chain ID, and streaming watch output. Chain creation, resume handling, active-execution registration, orchestrator loop setup, control-state finalization, and chain exit-code mapping live in the internal chain runner.
 
 ## 5. What changes
 

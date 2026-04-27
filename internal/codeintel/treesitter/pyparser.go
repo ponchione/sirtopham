@@ -73,13 +73,21 @@ func extractPyDecorated(outer *sitter.Node, content []byte) []codeintel.RawChunk
 }
 
 func extractPyFunc(spanNode, defNode *sitter.Node, content []byte, chunkType codeintel.ChunkType) []codeintel.RawChunk {
+	chunk, _, ok := extractPyDefChunk(spanNode, defNode, content, chunkType)
+	if !ok {
+		return nil
+	}
+	return []codeintel.RawChunk{chunk}
+}
+
+func extractPyDefChunk(spanNode, defNode *sitter.Node, content []byte, chunkType codeintel.ChunkType) (codeintel.RawChunk, *sitter.Node, bool) {
 	nameNode := defNode.ChildByFieldName("name")
 	if nameNode == nil {
-		return nil
+		return codeintel.RawChunk{}, nil, false
 	}
 	name := nameNode.Utf8Text(content)
 	if name == "" {
-		return nil
+		return codeintel.RawChunk{}, nil, false
 	}
 
 	bodyField := defNode.ChildByFieldName("body")
@@ -92,44 +100,22 @@ func extractPyFunc(spanNode, defNode *sitter.Node, content []byte, chunkType cod
 
 	body := codeintel.TruncateUTF8(string(content[spanNode.StartByte():spanNode.EndByte()]), codeintel.MaxBodyLength)
 
-	return []codeintel.RawChunk{{
+	return codeintel.RawChunk{
 		Name:      name,
 		Signature: sig,
 		Body:      body,
 		ChunkType: chunkType,
 		LineStart: int(spanNode.StartPosition().Row) + 1,
 		LineEnd:   int(spanNode.EndPosition().Row) + 1,
-	}}
+	}, bodyField, true
 }
 
 func extractPyClass(spanNode, defNode *sitter.Node, content []byte) []codeintel.RawChunk {
-	nameNode := defNode.ChildByFieldName("name")
-	if nameNode == nil {
+	chunk, bodyField, ok := extractPyDefChunk(spanNode, defNode, content, codeintel.ChunkTypeClass)
+	if !ok {
 		return nil
 	}
-	name := nameNode.Utf8Text(content)
-	if name == "" {
-		return nil
-	}
-
-	bodyField := defNode.ChildByFieldName("body")
-	var sig string
-	if bodyField != nil {
-		sig = strings.TrimRight(string(content[spanNode.StartByte():bodyField.StartByte()]), " \t\n\r")
-	} else {
-		sig = strings.TrimRight(string(content[spanNode.StartByte():spanNode.EndByte()]), " \t\n\r")
-	}
-
-	classBody := codeintel.TruncateUTF8(string(content[spanNode.StartByte():spanNode.EndByte()]), codeintel.MaxBodyLength)
-
-	chunks := []codeintel.RawChunk{{
-		Name:      name,
-		Signature: sig,
-		Body:      classBody,
-		ChunkType: codeintel.ChunkTypeClass,
-		LineStart: int(spanNode.StartPosition().Row) + 1,
-		LineEnd:   int(spanNode.EndPosition().Row) + 1,
-	}}
+	chunks := []codeintel.RawChunk{chunk}
 
 	if bodyField != nil {
 		for i := uint(0); i < bodyField.ChildCount(); i++ {

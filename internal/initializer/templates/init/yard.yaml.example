@@ -10,8 +10,8 @@
 #
 # After confirming provider/auth settings, run:
 #
-#   tidmouth index --config yard.yaml
-#   sirtopham chain --config yard.yaml --task "..."
+#   yard index --config yard.yaml
+#   yard chain start --config yard.yaml --task "..."
 #
 # See docs/specs/13_Headless_Run_Command.md and
 # docs/specs/14_Agent_Roles_and_Brain_Conventions.md for the full
@@ -30,12 +30,12 @@ server:
 routing:
   default:
     provider: codex
-    model: gpt-5.4-mini
+    model: gpt-5.4
 
 providers:
   codex:
     type: codex
-    model: gpt-5.4-mini
+    model: gpt-5.4
 
 index:
   include:
@@ -110,6 +110,7 @@ agent_roles:
       - "plans/**"
     max_turns: 50
     max_tokens: 500000
+    timeout: 60m
 
   coder:
     system_prompt: "builtin:coder"
@@ -131,6 +132,7 @@ agent_roles:
       - "plans/**"
     max_turns: 100
     max_tokens: 1000000
+    timeout: 45m
 
   planner:
     system_prompt: "builtin:planner"
@@ -150,6 +152,7 @@ agent_roles:
       - "tasks/**"
     max_turns: 30
     max_tokens: 300000
+    timeout: 20m
 
   test-writer:
     system_prompt: "builtin:test-writer"
@@ -171,6 +174,7 @@ agent_roles:
       - "plans/**"
     max_turns: 50
     max_tokens: 500000
+    timeout: 30m
 
   resolver:
     system_prompt: "builtin:resolver"
@@ -192,6 +196,7 @@ agent_roles:
       - "plans/**"
     max_turns: 80
     max_tokens: 800000
+    timeout: 30m
 
   correctness-auditor:
     system_prompt: "builtin:correctness-auditor"
@@ -212,6 +217,7 @@ agent_roles:
       - "plans/**"
     max_turns: 30
     max_tokens: 300000
+    timeout: 20m
 
   integration-auditor:
     system_prompt: "builtin:integration-auditor"
@@ -233,6 +239,7 @@ agent_roles:
       - "plans/**"
     max_turns: 30
     max_tokens: 300000
+    timeout: 15m
 
   performance-auditor:
     system_prompt: "builtin:performance-auditor"
@@ -254,6 +261,7 @@ agent_roles:
       - "plans/**"
     max_turns: 30
     max_tokens: 300000
+    timeout: 15m
 
   security-auditor:
     system_prompt: "builtin:security-auditor"
@@ -274,6 +282,7 @@ agent_roles:
       - "plans/**"
     max_turns: 30
     max_tokens: 300000
+    timeout: 15m
 
   quality-auditor:
     system_prompt: "builtin:quality-auditor"
@@ -294,6 +303,7 @@ agent_roles:
       - "plans/**"
     max_turns: 30
     max_tokens: 300000
+    timeout: 20m
 
   docs-arbiter:
     system_prompt: "builtin:docs-arbiter"
@@ -313,6 +323,7 @@ agent_roles:
       - "plans/**"
     max_turns: 30
     max_tokens: 300000
+    timeout: 15m
 
   epic-decomposer:
     system_prompt: "builtin:epic-decomposer"
@@ -332,6 +343,7 @@ agent_roles:
       - "plans/**"
     max_turns: 30
     max_tokens: 300000
+    timeout: 15m
 
   task-decomposer:
     system_prompt: "builtin:task-decomposer"
@@ -351,6 +363,7 @@ agent_roles:
       - "plans/**"
     max_turns: 30
     max_tokens: 300000
+    timeout: 15m
 
 local_services:
   enabled: true

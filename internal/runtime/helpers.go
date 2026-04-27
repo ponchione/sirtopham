@@ -7,13 +7,17 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/ponchione/sodoryard/internal/agent"
 	appconfig "github.com/ponchione/sodoryard/internal/config"
+	appdb "github.com/ponchione/sodoryard/internal/db"
 	"github.com/ponchione/sodoryard/internal/embeddedprompts"
+	"github.com/ponchione/sodoryard/internal/logging"
 )
 
 // ChainCleanup extends a teardown chain without falling into the closure
@@ -26,6 +30,78 @@ func ChainCleanup(prev func(), next func()) func() {
 		if prev != nil {
 			prev()
 		}
+	}
+}
+
+type runtimeBase struct {
+	logger   *slog.Logger
+	database *sql.DB
+	queries  *appdb.Queries
+	cleanup  func()
+}
+
+func buildRuntimeBase(ctx context.Context, cfg *appconfig.Config) (*runtimeBase, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("runtime config is required")
+	}
+
+	logger, err := logging.Init(cfg.LogLevel, cfg.LogFormat)
+	if err != nil {
+		return nil, fmt.Errorf("init logging: %w", err)
+	}
+
+	database, err := appdb.OpenDB(ctx, cfg.DatabasePath())
+	if err != nil {
+		return nil, fmt.Errorf("open database: %w", err)
+	}
+	cleanup := func() {
+		_ = database.Close()
+	}
+
+	if _, err := appdb.InitIfNeeded(ctx, database); err != nil {
+		cleanup()
+		return nil, fmt.Errorf("init database schema: %w", err)
+	}
+	for _, upgrade := range []struct {
+		label string
+		fn    func(context.Context, *sql.DB) error
+	}{
+		{"upgrade message search indexes", appdb.EnsureMessageSearchIndexesIncludeTools},
+		{"upgrade context report token budget storage", appdb.EnsureContextReportsIncludeTokenBudget},
+		{"ensure chain schema", appdb.EnsureChainSchema},
+	} {
+		if err := upgrade.fn(ctx, database); err != nil {
+			cleanup()
+			return nil, fmt.Errorf("%s: %w", upgrade.label, err)
+		}
+	}
+
+	return &runtimeBase{
+		logger:   logger,
+		database: database,
+		queries:  appdb.New(database),
+		cleanup:  cleanup,
+	}, nil
+}
+
+func BuildAgentLoopConfig(cfg *appconfig.Config, maxIterations int, basePrompt string) agent.AgentLoopConfig {
+	return agent.AgentLoopConfig{
+		MaxIterations:              maxIterations,
+		LoopDetectionThreshold:     cfg.Agent.LoopDetectionThreshold,
+		ExtendedThinking:           cfg.Agent.ExtendedThinking,
+		BasePrompt:                 basePrompt,
+		ProviderName:               cfg.Routing.Default.Provider,
+		ModelName:                  cfg.Routing.Default.Model,
+		EmitContextDebug:           cfg.Context.EmitContextDebug,
+		ContextConfig:              cfg.Context,
+		ToolResultStoreRoot:        cfg.Agent.ToolResultStoreRoot,
+		CacheSystemPrompt:          cfg.Agent.CacheSystemPrompt,
+		CacheAssembledContext:      cfg.Agent.CacheAssembledContext,
+		CacheConversationHistory:   cfg.Agent.CacheConversationHistory,
+		CompressHistoricalResults:  cfg.Agent.CompressHistoricalResults,
+		StripHistoricalLineNumbers: cfg.Agent.StripHistoricalLineNumbers,
+		ElideDuplicateReads:        cfg.Agent.ElideDuplicateReads,
+		HistorySummarizeAfterTurns: cfg.Agent.HistorySummarizeAfterTurns,
 	}
 }
 

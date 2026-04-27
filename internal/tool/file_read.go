@@ -60,20 +60,12 @@ func (FileRead) Schema() json.RawMessage {
 func (f FileRead) Execute(ctx context.Context, projectRoot string, input json.RawMessage) (*ToolResult, error) {
 	var params fileReadInput
 	if err := json.Unmarshal(input, &params); err != nil {
-		return &ToolResult{
-			Success: false,
-			Content: fmt.Sprintf("Invalid input: %v", err),
-			Error:   err.Error(),
-		}, nil
+		return invalidInputResult(err), nil
 	}
 
-	absPath, err := resolvePath(projectRoot, params.Path)
-	if err != nil {
-		return &ToolResult{
-			Success: false,
-			Content: err.Error(),
-			Error:   err.Error(),
-		}, nil
+	absPath, result := resolvePathResult(projectRoot, params.Path)
+	if result != nil {
+		return result, nil
 	}
 
 	file, err := os.Open(absPath)

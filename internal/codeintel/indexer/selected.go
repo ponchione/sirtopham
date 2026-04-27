@@ -136,62 +136,12 @@ func describeEmbedStoreDetailed(
 	embedder codeintel.Embedder,
 	describer codeintel.Describer,
 ) (map[string]int, []string, int) {
-	chunkCounts := make(map[string]int, len(parsed))
-	failed := make([]string, 0)
-	var totalChunks int
-
-	for i := range parsed {
-		pf := &parsed[i]
-
-		descContent := string(pf.content)
-		if relCtx := formatRelationshipContext(pf.chunks); relCtx != "" {
-			descContent = descContent + "\n\n" + relCtx
-		}
-
-		descriptions, err := describer.DescribeFile(ctx, descContent, "")
-		if err != nil {
-			slog.Warn("describe failed", "path", pf.relPath, "err", err)
-			failed = append(failed, pf.relPath)
-			continue
-		}
-
-		descMap := make(map[string]string, len(descriptions))
-		for _, d := range descriptions {
-			descMap[d.Name] = d.Description
-		}
-
-		embedTexts := make([]string, len(pf.chunks))
-		for j := range pf.chunks {
-			desc := descMap[pf.chunks[j].Name]
-			pf.chunks[j].Description = desc
-			embedTexts[j] = pf.chunks[j].Signature + "\n" + desc
-		}
-
-		embeddings, err := embedder.EmbedTexts(ctx, embedTexts)
-		if err != nil {
-			slog.Warn("embed failed", "path", pf.relPath, "err", err)
-			failed = append(failed, pf.relPath)
-			continue
-		}
-
-		for j := range pf.chunks {
-			if j < len(embeddings) {
-				pf.chunks[j].Embedding = embeddings[j]
-			}
-		}
-
-		if err := store.Upsert(ctx, pf.chunks); err != nil {
-			slog.Warn("upsert failed", "path", pf.relPath, "err", err)
-			failed = append(failed, pf.relPath)
-			continue
-		}
-
-		chunkCounts[pf.relPath] = len(pf.chunks)
-		totalChunks += len(pf.chunks)
-		slog.Info("indexed selected file", "path", pf.relPath, "chunks", len(pf.chunks))
-	}
-
-	return chunkCounts, failed, totalChunks
+	result := describeEmbedStoreFiles(ctx, parsed, store, embedder, describer, describeEmbedOptions{
+		FailOnDescribe: true,
+		RecordFailures: true,
+		LogMessage:     "indexed selected file",
+	})
+	return result.chunkCounts, result.failed, result.totalChunks
 }
 
 func uniqueStrings(values []string) []string {
