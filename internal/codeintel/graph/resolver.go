@@ -110,10 +110,7 @@ func (r *Resolver) Analyze() (*AnalysisResult, error) {
 
 	if dl.hasPython && r.cfg.Python.Enabled {
 		slog.Info("running Python analyzer")
-		analyzer := NewPythonAnalyzer(r.projectRoot,
-			r.cfg.Python.Include,
-			r.cfg.Python.Exclude,
-		)
+		analyzer := NewPythonAnalyzer(r.projectRoot)
 		pyResult, err := analyzer.Analyze()
 		if err != nil {
 			slog.Warn("Python analysis failed", "error", err)

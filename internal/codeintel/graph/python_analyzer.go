@@ -14,17 +14,13 @@ import (
 
 // PythonAnalyzer extracts symbols and edges from Python files using tree-sitter.
 type PythonAnalyzer struct {
-	projectRoot  string
-	includeGlobs []string
-	excludeGlobs []string
+	projectRoot string
 }
 
 // NewPythonAnalyzer creates a new Python analyzer.
-func NewPythonAnalyzer(projectRoot string, include, exclude []string) *PythonAnalyzer {
+func NewPythonAnalyzer(projectRoot string) *PythonAnalyzer {
 	return &PythonAnalyzer{
-		projectRoot:  projectRoot,
-		includeGlobs: include,
-		excludeGlobs: exclude,
+		projectRoot: projectRoot,
 	}
 }
 

@@ -14,14 +14,12 @@ import (
 
 // TSAnalyzer wraps the TypeScript analyzer subprocess.
 type TSAnalyzer struct {
-	nodePath   string
 	scriptPath string // path to analyze.ts
 }
 
 // NewTSAnalyzer verifies node/npx are on PATH and locates the analysis script.
 func NewTSAnalyzer() (*TSAnalyzer, error) {
-	nodePath, err := exec.LookPath("node")
-	if err != nil {
+	if _, err := exec.LookPath("node"); err != nil {
 		return nil, fmt.Errorf("TypeScript analyzer requires node on PATH: %w", err)
 	}
 
@@ -30,7 +28,6 @@ func NewTSAnalyzer() (*TSAnalyzer, error) {
 	scriptPath := filepath.Join(filepath.Dir(thisFile), "ts-analyzer", "analyze.ts")
 
 	return &TSAnalyzer{
-		nodePath:   nodePath,
 		scriptPath: scriptPath,
 	}, nil
 }

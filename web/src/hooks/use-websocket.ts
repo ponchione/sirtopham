@@ -25,8 +25,6 @@ export interface UseWebSocketReturn {
   eventTick: number;
   /** Send a user message. Creates a new conversation if conversationId is omitted. */
   sendMessage: (content: string, conversationId?: string) => void;
-  /** Set the provider/model override for the next turn. */
-  sendModelOverride: (provider: string, model: string) => void;
   /** Cancel the in-progress turn. */
   cancel: () => void;
 }
@@ -123,17 +121,9 @@ export function useWebSocket(): UseWebSocketReturn {
     [send],
   );
 
-  const sendModelOverride = useCallback((provider: string, model: string) => {
-    send({
-      type: "model_override",
-      provider,
-      model,
-    });
-  }, [send]);
-
   const cancel = useCallback(() => {
     send({ type: "cancel" });
   }, [send]);
 
-  return { status, eventQueue, eventTick, sendMessage, sendModelOverride, cancel };
+  return { status, eventQueue, eventTick, sendMessage, cancel };
 }

@@ -16,9 +16,6 @@ func TestTSAnalyzer_NewRequiresNode(t *testing.T) {
 		t.Fatalf("NewTSAnalyzer: %v", err)
 	}
 
-	if analyzer.nodePath == "" {
-		t.Error("nodePath should not be empty")
-	}
 	if analyzer.scriptPath == "" {
 		t.Error("scriptPath should not be empty")
 	}

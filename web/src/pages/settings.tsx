@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useProviders } from "@/hooks/use-providers";
 import { useProjectInfo } from "@/hooks/use-project-info";
 import { api } from "@/lib/api";
@@ -24,18 +24,11 @@ function formatBrainIndexStatus(status?: string): string {
   }
 }
 
-function modelOptionValue(provider: string, model: string): string {
-  return `${provider}::${model}`;
-}
-
 export function SettingsPage() {
   const { providers, loading: provLoading } = useProviders();
   const { project, loading: projLoading } = useProjectInfo();
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [configLoading, setConfigLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [saveMsg, setSaveMsg] = useState<string | null>(null);
-  const [selectedDefaultModel, setSelectedDefaultModel] = useState("");
 
   // Load config on mount.
   useEffect(() => {
@@ -47,72 +40,6 @@ export function SettingsPage() {
       })
       .catch(() => setConfigLoading(false));
   }, []);
-
-  const groupedProviders = useMemo(
-    () => providers.map((provider) => ({
-      ...provider,
-      models: provider.models.filter(
-        (model, index, all) => all.findIndex((candidate) => candidate.id === model.id) === index,
-      ),
-    })),
-    [providers],
-  );
-
-  const selectableProviders = useMemo(
-    () => {
-      if (!config?.default_provider || !config.default_model) {
-        return [];
-      }
-      const provider = groupedProviders.find((item) => item.name === config.default_provider);
-      if (!provider) {
-        return [];
-      }
-      const model = provider.models.find((item) => item.id === config.default_model) ?? {
-        id: config.default_model,
-        name: config.default_model,
-        context_window: 0,
-        supports_tools: false,
-        supports_thinking: false,
-      };
-      return [{ ...provider, models: [model] }];
-    },
-    [config, groupedProviders],
-  );
-
-  useEffect(() => {
-    if (!config) {
-      return;
-    }
-    setSelectedDefaultModel(modelOptionValue(config.default_provider, config.default_model));
-  }, [config]);
-
-  const handleModelChange = async (nextValue: string) => {
-    const [provider, model] = nextValue.split("::", 2);
-    if (!provider || !model) {
-      return;
-    }
-
-    const previousValue = selectedDefaultModel;
-    setSelectedDefaultModel(nextValue);
-
-    try {
-      setSaving(true);
-      setSaveMsg(null);
-      const updated = await api.put<AppConfig>("/api/config", {
-        default_provider: provider,
-        default_model: model,
-      });
-      setConfig(updated);
-      setSelectedDefaultModel(modelOptionValue(updated.default_provider, updated.default_model));
-      setSaveMsg("Default model updated");
-      setTimeout(() => setSaveMsg(null), 2000);
-    } catch (err) {
-      setSelectedDefaultModel(previousValue);
-      setSaveMsg(err instanceof Error ? err.message : "Failed to save");
-    } finally {
-      setSaving(false);
-    }
-  };
 
   return (
     <div className="flex-1 overflow-y-auto px-4 py-6">
@@ -217,38 +144,6 @@ export function SettingsPage() {
                   {config.default_model} <span className="text-muted-foreground">({config.default_provider})</span>
                 </div>
               </div>
-
-              {selectableProviders.length > 0 && (
-                <label className="block space-y-1.5 text-xs">
-                  <span className="text-muted-foreground uppercase tracking-widest">Default provider/model</span>
-                  <select
-                    value={selectedDefaultModel}
-                    onChange={(e) => handleModelChange(e.target.value)}
-                    disabled={saving || selectableProviders.length <= 1}
-                    className="w-full rounded border border-border bg-input px-3 py-2 text-sm text-foreground"
-                    aria-label="Default provider and model"
-                  >
-                    {selectableProviders.map((provider) => (
-                      <optgroup key={provider.name} label={provider.name}>
-                        {provider.models.map((model) => (
-                          <option
-                            key={`${provider.name}:${model.id}`}
-                            value={modelOptionValue(provider.name, model.id)}
-                          >
-                            {model.id}
-                          </option>
-                        ))}
-                      </optgroup>
-                    ))}
-                  </select>
-                </label>
-              )}
-
-              {saveMsg && (
-                <p className={`text-xs ${saveMsg === "Default model updated" ? "text-accent" : "text-destructive"}`}>
-                  {saveMsg}
-                </p>
-              )}
 
               <div className="space-y-1 text-[10px] text-muted-foreground/60">
                 <div>

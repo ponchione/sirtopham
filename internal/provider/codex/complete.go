@@ -218,12 +218,7 @@ func (p *CodexProvider) Complete(ctx context.Context, req *provider.Request) (*p
 // values and determines the stop reason.
 func readStreamedResponse(body io.Reader) ([]provider.ContentBlock, provider.Usage, provider.StopReason, error) {
 	reader := providersse.NewReader(body, maxSSEScannerTokenSize)
-	var text strings.Builder
-	var usage provider.Usage
-	stopReason := provider.StopReasonEndTurn
-	toolState := &streamState{}
-	var reasoningBlocks []provider.ContentBlock
-	var toolBlocks []provider.ContentBlock
+	accumulator := newResponsesSSEAccumulator()
 
 	for {
 		event, ok, err := reader.Next(context.Background())
@@ -233,82 +228,11 @@ func readStreamedResponse(body io.Reader) ([]provider.ContentBlock, provider.Usa
 		if !ok {
 			break
 		}
-		data := []byte(event.Data)
-		switch event.Type {
-		case "response.output_text.delta":
-			var delta sseTextDelta
-			if err := json.Unmarshal(data, &delta); err != nil {
-				return nil, provider.Usage{}, "", err
-			}
-			text.WriteString(delta.Delta)
-		case "response.output_item.added":
-			var added sseOutputItemAdded
-			if err := json.Unmarshal(data, &added); err != nil {
-				return nil, provider.Usage{}, "", err
-			}
-			if added.Item.Type == "function_call" {
-				itemID := sseToolCallItemID(added.Item)
-				call := toolState.getToolCall(itemID)
-				call.callID = added.Item.CallID
-				if call.callID == "" {
-					call.callID = itemID
-				}
-				call.name = added.Item.Name
-				call.args.Reset()
-				stopReason = provider.StopReasonToolUse
-			}
-		case "response.function_call_arguments.delta":
-			var delta sseFuncArgDelta
-			if err := json.Unmarshal(data, &delta); err != nil {
-				return nil, provider.Usage{}, "", err
-			}
-			toolState.getToolCall(delta.ItemID).args.WriteString(delta.Delta)
-		case "response.output_item.done":
-			var done sseOutputItemDone
-			if err := json.Unmarshal(data, &done); err != nil {
-				return nil, provider.Usage{}, "", err
-			}
-			if done.Item.Type == "function_call" {
-				itemID := sseToolCallItemID(done.Item)
-				call := toolState.lookupToolCall(itemID)
-				callID := done.Item.CallID
-				if callID == "" && call != nil {
-					callID = call.callID
-				}
-				if callID == "" {
-					callID = itemID
-				}
-				name := done.Item.Name
-				if name == "" && call != nil {
-					name = call.name
-				}
-				toolBlocks = append(toolBlocks, provider.ContentBlock{
-					Type:  "tool_use",
-					ID:    callID,
-					Name:  name,
-					Input: json.RawMessage(sseToolCallArguments(done.Item.Arguments, call)),
-				})
-				toolState.deleteToolCall(itemID)
-			}
-		case "response.completed":
-			var completed sseCompleted
-			if err := json.Unmarshal(data, &completed); err != nil {
-				return nil, provider.Usage{}, "", err
-			}
-			usage = usageFromResponsesUsage(completed.Response.Usage)
-			for _, item := range completed.Response.Output {
-				if block, ok := codexReasoningBlockFromSSEItem(item); ok {
-					reasoningBlocks = append(reasoningBlocks, block)
-				}
-			}
+		if _, err := accumulator.apply(event.Type, []byte(event.Data)); err != nil {
+			return nil, provider.Usage{}, "", err
 		}
 	}
-	blocks := make([]provider.ContentBlock, 0, len(reasoningBlocks)+1+len(toolBlocks))
-	blocks = append(blocks, reasoningBlocks...)
-	if text.Len() > 0 {
-		blocks = append(blocks, provider.ContentBlock{Type: "text", Text: text.String()})
-	}
-	blocks = append(blocks, toolBlocks...)
+	blocks, usage, stopReason := accumulator.contentBlocks()
 	return blocks, usage, stopReason, nil
 }
 

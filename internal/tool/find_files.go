@@ -7,6 +7,8 @@ import (
 	"io/fs"
 	"path/filepath"
 	"strings"
+
+	"github.com/ponchione/sodoryard/internal/pathglob"
 )
 
 // FindFiles implements the find_files tool — glob-based file discovery with
@@ -75,9 +77,6 @@ func (FindFiles) Execute(ctx context.Context, projectRoot string, input json.Raw
 		pathPrefix = filepath.Clean(params.Path)
 	}
 
-	// Decide which matching strategy to use based on the pattern.
-	useSegmentMatch := strings.Contains(params.Pattern, "/") || strings.Contains(params.Pattern, "**")
-
 	var results []string
 
 	err := filepath.WalkDir(searchRoot, func(path string, d fs.DirEntry, err error) error {
@@ -109,17 +108,7 @@ func (FindFiles) Execute(ctx context.Context, projectRoot string, input json.Raw
 		// Use forward slashes for consistent glob matching.
 		relSlash := filepath.ToSlash(rel)
 
-		var matched bool
-		if useSegmentMatch {
-			patternParts := strings.Split(params.Pattern, "/")
-			pathParts := strings.Split(relSlash, "/")
-			matched = globMatchParts(patternParts, pathParts)
-		} else {
-			// Simple basename match.
-			matched, _ = filepath.Match(params.Pattern, d.Name())
-		}
-
-		if matched {
+		if matchesFindPattern(params.Pattern, relSlash, d.Name()) {
 			if pathPrefix != "" {
 				results = append(results, filepath.ToSlash(filepath.Join(pathPrefix, rel)))
 			} else {
@@ -153,37 +142,10 @@ func (FindFiles) Execute(ctx context.Context, projectRoot string, input json.Raw
 	return &ToolResult{Success: true, Content: sb.String()}, nil
 }
 
-// globMatchParts recursively matches pattern segments against path segments.
-// A "**" segment matches zero or more path segments.
-func globMatchParts(patternParts, pathParts []string) bool {
-	// Both exhausted — match.
-	if len(patternParts) == 0 && len(pathParts) == 0 {
-		return true
+func matchesFindPattern(pattern, relPath, name string) bool {
+	if strings.Contains(pattern, "/") || strings.Contains(pattern, "**") {
+		return pathglob.Match(pattern, relPath)
 	}
-	// Pattern exhausted but path remains — no match.
-	if len(patternParts) == 0 {
-		return false
-	}
-
-	if patternParts[0] == "**" {
-		// ** matches zero or more path segments. Try consuming 0..n path segments.
-		for i := 0; i <= len(pathParts); i++ {
-			if globMatchParts(patternParts[1:], pathParts[i:]) {
-				return true
-			}
-		}
-		return false
-	}
-
-	// Path exhausted but pattern not — no match (unless only ** remain, handled above).
-	if len(pathParts) == 0 {
-		return false
-	}
-
-	// Match this segment.
-	ok, _ := filepath.Match(patternParts[0], pathParts[0])
-	if !ok {
-		return false
-	}
-	return globMatchParts(patternParts[1:], pathParts[1:])
+	matched, _ := filepath.Match(pattern, name)
+	return matched
 }

@@ -387,8 +387,6 @@ func rebuildGraphIndex(ctx context.Context, cfg *config.Config) error {
 		return err
 	}
 	analyzerCfg := codegraph.DefaultAnalyzerConfig()
-	analyzerCfg.Python.Include = append([]string(nil), cfg.Index.Include...)
-	analyzerCfg.Python.Exclude = append([]string(nil), cfg.Index.Exclude...)
 	resolver := codegraph.NewResolver(cfg.ProjectRoot, &analyzerCfg)
 	result, err := resolver.Analyze()
 	if err != nil {

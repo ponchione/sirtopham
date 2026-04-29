@@ -26,15 +26,6 @@ type AgentService interface {
 	Cancel()
 }
 
-// connOverride holds per-connection model/provider overrides set by the
-// "model_override" client event. Guarded by mu for goroutine safety between
-// the readLoop and handleMessage goroutines.
-type connOverride struct {
-	mu       sync.Mutex
-	model    string
-	provider string
-}
-
 // WebSocketHandler handles WebSocket connections for streaming agent events.
 type WebSocketHandler struct {
 	agent     AgentService
@@ -80,23 +71,6 @@ type ServerMessage struct {
 	Data      any       `json:"data"`
 }
 
-func (h *WebSocketHandler) defaultProviderName() string {
-	if h.defaults != nil {
-		if provider, _ := h.defaults.Get(); provider != "" {
-			return provider
-		}
-	}
-	for name := range h.providers {
-		if name == "codex" {
-			return name
-		}
-	}
-	for name := range h.providers {
-		return name
-	}
-	return ""
-}
-
 func (h *WebSocketHandler) handleWS(w http.ResponseWriter, r *http.Request) {
 	acceptOptions := &websocket.AcceptOptions{}
 	if h.devMode {
@@ -121,14 +95,11 @@ func (h *WebSocketHandler) handleWS(w http.ResponseWriter, r *http.Request) {
 	// Track whether a turn is in progress.
 	var turnActive atomic.Bool
 
-	// Per-connection model/provider override.
-	override := &connOverride{}
-
 	// Read loop goroutine (client → server).
 	readDone := make(chan struct{})
 	go func() {
 		defer close(readDone)
-		h.readLoop(ctx, cancel, conn, sink, &turnActive, override)
+		h.readLoop(ctx, cancel, conn, sink, &turnActive)
 	}()
 
 	// Write loop (server → client) — blocks until ctx done or sink closed.
@@ -188,7 +159,7 @@ func (h *WebSocketHandler) writeLoop(ctx context.Context, conn *websocket.Conn, 
 }
 
 // readLoop reads client messages and dispatches them.
-func (h *WebSocketHandler) readLoop(ctx context.Context, cancel context.CancelFunc, conn *websocket.Conn, sink *agent.ChannelSink, turnActive *atomic.Bool, override *connOverride) {
+func (h *WebSocketHandler) readLoop(ctx context.Context, cancel context.CancelFunc, conn *websocket.Conn, sink *agent.ChannelSink, turnActive *atomic.Bool) {
 	defer cancel()
 
 	var turnWg sync.WaitGroup
@@ -219,7 +190,7 @@ func (h *WebSocketHandler) readLoop(ctx context.Context, cancel context.CancelFu
 			go func() {
 				defer turnWg.Done()
 				defer turnActive.Store(false)
-				h.handleMessage(ctx, conn, sink, msg, override)
+				h.handleMessage(ctx, conn, sink, msg)
 			}()
 
 		case "model_override":
@@ -282,29 +253,12 @@ func (h *WebSocketHandler) resolveModelContextLimit(providerName string) (int, e
 	}
 }
 
-func (h *WebSocketHandler) handleMessage(ctx context.Context, conn *websocket.Conn, sink *agent.ChannelSink, msg ClientMessage, override *connOverride) {
+func (h *WebSocketHandler) handleMessage(ctx context.Context, conn *websocket.Conn, sink *agent.ChannelSink, msg ClientMessage) {
 	// Subscribe sink to receive events for this turn.
 	h.agent.Subscribe(sink)
 	defer h.agent.Unsubscribe(sink)
 
 	convID := msg.ConversationID
-
-	// Resolve model/provider: prefer inline fields on the message, then the
-	// stored override from a preceding "model_override" event, then persisted
-	// conversation defaults, and finally runtime defaults.
-	model := msg.Model
-	prov := msg.Provider
-	override.mu.Lock()
-	if model == "" {
-		model = override.model
-	}
-	if prov == "" {
-		prov = override.provider
-	}
-	// Clear the stored override so it only applies to one turn.
-	override.model = ""
-	override.provider = ""
-	override.mu.Unlock()
 
 	var conversationDefaults *conversation.Conversation
 	if convID != "" {
@@ -315,25 +269,14 @@ func (h *WebSocketHandler) handleMessage(ctx context.Context, conn *websocket.Co
 			return
 		}
 		conversationDefaults = stored
-		if prov == "" && stored.Provider != nil {
-			prov = *stored.Provider
-		}
-		if model == "" && stored.Model != nil {
-			model = *stored.Model
-		}
 	}
 
-	defaultProvider, defaultModel := h.defaults.Get()
-	if defaultProvider == "" {
-		defaultProvider = h.defaultProviderName()
+	prov, model := lockedRuntimeDefault()
+	if h.defaults != nil {
+		if defaultProvider, defaultModel := h.defaults.Get(); defaultProvider != "" && defaultModel != "" {
+			prov, model = defaultProvider, defaultModel
+		}
 	}
-	if prov == "" {
-		prov = defaultProvider
-	}
-	if model == "" && prov == defaultProvider {
-		model = defaultModel
-	}
-	prov, model = normalizeRuntimeDefaultOverride(prov, model)
 
 	if convID == "" {
 		var opts []conversation.CreateOption

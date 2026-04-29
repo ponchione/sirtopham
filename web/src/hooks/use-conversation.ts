@@ -366,7 +366,7 @@ function flattenText(blocks: ContentBlock[]): string {
 
 export function useConversation(conversationId?: string) {
   const [state, dispatch] = useReducer(reducer, initialState);
-  const { status, eventQueue, eventTick, sendMessage: wsSend, sendModelOverride, cancel: wsCancel } = useWebSocket();
+  const { status, eventQueue, eventTick, sendMessage: wsSend, cancel: wsCancel } = useWebSocket();
 
   // Cursor into the append-only WebSocket event queue. Lets us drain every
   // frame even when React 18 batching coalesces multiple arrivals into a
@@ -483,19 +483,12 @@ export function useConversation(conversationId?: string) {
   }, [eventTick, eventQueue]);
 
   const sendMessage = useCallback(
-    (content: string, override?: { provider: string; model: string }) => {
+    (content: string) => {
       dispatch({ type: "user_message", content });
-      if (override) {
-        sendModelOverride(override.provider, override.model);
-      }
       wsSend(content, state.conversationId ?? undefined);
     },
-    [sendModelOverride, wsSend, state.conversationId],
+    [wsSend, state.conversationId],
   );
-
-  const setModelOverride = useCallback((provider: string, model: string) => {
-    sendModelOverride(provider, model);
-  }, [sendModelOverride]);
 
   const cancel = useCallback(() => {
     wsCancel();
@@ -509,7 +502,6 @@ export function useConversation(conversationId?: string) {
     ...state,
     connectionStatus: status,
     sendMessage,
-    setModelOverride,
     cancel,
     loadHistory,
   };

@@ -52,7 +52,7 @@ func TestHandleSSEEventCompletedEmitsCodexReasoningBeforeDone(t *testing.T) {
 		}
 	}`)
 
-	if ok := (&CodexProvider{}).handleSSEEvent(context.Background(), "response.completed", data, &streamState{}, ch); !ok {
+	if ok := (&CodexProvider{}).handleSSEEvent(context.Background(), "response.completed", data, newResponsesSSEAccumulator(), ch); !ok {
 		t.Fatal("handleSSEEvent returned false")
 	}
 
@@ -79,13 +79,13 @@ func TestHandleSSEEventCompletedEmitsCodexReasoningBeforeDone(t *testing.T) {
 
 func TestHandleSSEEventToolDoneUsesCompletedArguments(t *testing.T) {
 	ch := make(chan provider.StreamEvent, 2)
-	state := &streamState{}
+	accumulator := newResponsesSSEAccumulator()
 	p := &CodexProvider{}
 
-	if ok := p.handleSSEEvent(context.Background(), "response.output_item.added", []byte(`{"output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"read_file"}}`), state, ch); !ok {
+	if ok := p.handleSSEEvent(context.Background(), "response.output_item.added", []byte(`{"output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"read_file"}}`), accumulator, ch); !ok {
 		t.Fatal("handleSSEEvent added returned false")
 	}
-	if ok := p.handleSSEEvent(context.Background(), "response.output_item.done", []byte(`{"output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"read_file","arguments":"{\"path\":\"README.md\"}"}}`), state, ch); !ok {
+	if ok := p.handleSSEEvent(context.Background(), "response.output_item.done", []byte(`{"output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"read_file","arguments":"{\"path\":\"README.md\"}"}}`), accumulator, ch); !ok {
 		t.Fatal("handleSSEEvent done returned false")
 	}
 
@@ -107,7 +107,7 @@ func TestHandleSSEEventToolDoneUsesCompletedArguments(t *testing.T) {
 
 func TestHandleSSEEventKeepsInterleavedToolArgumentsByItemID(t *testing.T) {
 	ch := make(chan provider.StreamEvent, 8)
-	state := &streamState{}
+	accumulator := newResponsesSSEAccumulator()
 	p := &CodexProvider{}
 	events := []struct {
 		eventType string
@@ -124,7 +124,7 @@ func TestHandleSSEEventKeepsInterleavedToolArgumentsByItemID(t *testing.T) {
 	}
 
 	for _, event := range events {
-		if ok := p.handleSSEEvent(context.Background(), event.eventType, []byte(event.data), state, ch); !ok {
+		if ok := p.handleSSEEvent(context.Background(), event.eventType, []byte(event.data), accumulator, ch); !ok {
 			t.Fatalf("handleSSEEvent(%s) returned false", event.eventType)
 		}
 	}

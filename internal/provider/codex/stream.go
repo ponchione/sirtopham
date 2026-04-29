@@ -49,6 +49,148 @@ func (s *streamState) deleteToolCall(itemID string) {
 	delete(s.toolCalls, itemID)
 }
 
+type responsesSSEAccumulator struct {
+	state           streamState
+	text            strings.Builder
+	usage           provider.Usage
+	stopReason      provider.StopReason
+	reasoningBlocks []provider.ContentBlock
+	toolBlocks      []provider.ContentBlock
+}
+
+func newResponsesSSEAccumulator() *responsesSSEAccumulator {
+	return &responsesSSEAccumulator{stopReason: provider.StopReasonEndTurn}
+}
+
+func (a *responsesSSEAccumulator) apply(eventType string, data []byte) ([]provider.StreamEvent, error) {
+	if a.stopReason == "" {
+		a.stopReason = provider.StopReasonEndTurn
+	}
+	switch eventType {
+	case "response.output_text.delta":
+		var delta sseTextDelta
+		if err := json.Unmarshal(data, &delta); err != nil {
+			return nil, err
+		}
+		a.text.WriteString(delta.Delta)
+		return []provider.StreamEvent{provider.TokenDelta{Text: delta.Delta}}, nil
+
+	case "response.reasoning.delta":
+		var delta sseReasoningDelta
+		if err := json.Unmarshal(data, &delta); err != nil {
+			return nil, err
+		}
+		return []provider.StreamEvent{provider.ThinkingDelta{Thinking: delta.Delta}}, nil
+
+	case "response.output_item.added":
+		var added sseOutputItemAdded
+		if err := json.Unmarshal(data, &added); err != nil {
+			return nil, err
+		}
+		if added.Item.Type != "function_call" {
+			return nil, nil
+		}
+		itemID := sseToolCallItemID(added.Item)
+		call := a.state.getToolCall(itemID)
+		call.callID = added.Item.CallID
+		if call.callID == "" {
+			call.callID = itemID
+		}
+		call.name = added.Item.Name
+		call.args.Reset()
+		a.stopReason = provider.StopReasonToolUse
+		return []provider.StreamEvent{provider.ToolCallStart{ID: call.callID, Name: call.name}}, nil
+
+	case "response.function_call_arguments.delta":
+		var delta sseFuncArgDelta
+		if err := json.Unmarshal(data, &delta); err != nil {
+			return nil, err
+		}
+		call := a.state.getToolCall(delta.ItemID)
+		eventID := call.callID
+		if eventID == "" {
+			eventID = delta.ItemID
+		}
+		call.args.WriteString(delta.Delta)
+		return []provider.StreamEvent{provider.ToolCallDelta{ID: eventID, Delta: delta.Delta}}, nil
+
+	case "response.output_item.done":
+		var done sseOutputItemDone
+		if err := json.Unmarshal(data, &done); err != nil {
+			return nil, err
+		}
+		if done.Item.Type != "function_call" {
+			return nil, nil
+		}
+		itemID := sseToolCallItemID(done.Item)
+		call := a.state.lookupToolCall(itemID)
+		callID := done.Item.CallID
+		if callID == "" && call != nil {
+			callID = call.callID
+		}
+		if callID == "" {
+			callID = itemID
+		}
+		name := done.Item.Name
+		if name == "" && call != nil {
+			name = call.name
+		}
+		input := json.RawMessage(sseToolCallArguments(done.Item.Arguments, call))
+		a.toolBlocks = append(a.toolBlocks, provider.ContentBlock{
+			Type:  "tool_use",
+			ID:    callID,
+			Name:  name,
+			Input: input,
+		})
+		a.state.deleteToolCall(itemID)
+		return []provider.StreamEvent{provider.ToolCallEnd{ID: callID, Input: input}}, nil
+
+	case "response.completed":
+		var completed sseCompleted
+		if err := json.Unmarshal(data, &completed); err != nil {
+			return nil, err
+		}
+		a.usage = usageFromResponsesUsage(completed.Response.Usage)
+		if sseOutputStopReason(completed.Response.Output) == provider.StopReasonToolUse {
+			a.stopReason = provider.StopReasonToolUse
+		}
+
+		events := make([]provider.StreamEvent, 0, len(completed.Response.Output)+1)
+		for _, item := range completed.Response.Output {
+			if block, ok := codexReasoningBlockFromSSEItem(item); ok {
+				a.reasoningBlocks = append(a.reasoningBlocks, block)
+				events = append(events, provider.CodexReasoning{Block: block})
+			}
+		}
+		events = append(events, provider.StreamDone{
+			StopReason: a.stopReason,
+			Usage:      a.usage,
+		})
+		return events, nil
+
+	case "response.content_part.added",
+		"response.content_part.done",
+		"response.created":
+		return nil, nil
+
+	default:
+		return nil, nil
+	}
+}
+
+func (a *responsesSSEAccumulator) contentBlocks() ([]provider.ContentBlock, provider.Usage, provider.StopReason) {
+	if a.stopReason == "" {
+		a.stopReason = provider.StopReasonEndTurn
+	}
+	blocks := make([]provider.ContentBlock, 0, len(a.reasoningBlocks)+1+len(a.toolBlocks))
+	blocks = append(blocks, a.reasoningBlocks...)
+	if a.text.Len() > 0 {
+		blocks = append(blocks, provider.ContentBlock{Type: "text", Text: a.text.String()})
+	}
+	blocks = append(blocks, a.toolBlocks...)
+	return blocks, a.usage, a.stopReason
+}
+
 // SSE event data payload types.
 
 type sseTextDelta struct {
@@ -135,7 +277,7 @@ func (p *CodexProvider) Stream(ctx context.Context, req *provider.Request) (<-ch
 		defer resp.Body.Close()
 		defer close(ch)
 
-		state := &streamState{}
+		accumulator := newResponsesSSEAccumulator()
 		reader := providersse.NewReader(resp.Body, maxSSEScannerTokenSize)
 
 		for {
@@ -151,7 +293,7 @@ func (p *CodexProvider) Stream(ctx context.Context, req *provider.Request) (<-ch
 			if !ok {
 				return
 			}
-			if !p.handleSSEEvent(ctx, event.Type, []byte(event.Data), state, ch) {
+			if !p.handleSSEEvent(ctx, event.Type, []byte(event.Data), accumulator, ch) {
 				return
 			}
 		}
@@ -162,141 +304,21 @@ func (p *CodexProvider) Stream(ctx context.Context, req *provider.Request) (<-ch
 
 // handleSSEEvent processes a single SSE event and emits unified StreamEvent
 // values on the channel.
-func (p *CodexProvider) handleSSEEvent(ctx context.Context, eventType string, data []byte, state *streamState, ch chan<- provider.StreamEvent) bool {
-	switch eventType {
-	case "response.output_text.delta":
-		var delta sseTextDelta
-		if err := json.Unmarshal(data, &delta); err != nil {
-			return provider.SendStreamEvent(ctx, ch, provider.StreamError{
-				Err:     err,
-				Fatal:   false,
-				Message: fmt.Sprintf("failed to parse stream event: %v", err),
-			})
-		}
-		return provider.SendStreamEvent(ctx, ch, provider.TokenDelta{Text: delta.Delta})
-
-	case "response.reasoning.delta":
-		var delta sseReasoningDelta
-		if err := json.Unmarshal(data, &delta); err != nil {
-			return provider.SendStreamEvent(ctx, ch, provider.StreamError{
-				Err:     err,
-				Fatal:   false,
-				Message: fmt.Sprintf("failed to parse stream event: %v", err),
-			})
-		}
-		return provider.SendStreamEvent(ctx, ch, provider.ThinkingDelta{Thinking: delta.Delta})
-
-	case "response.output_item.added":
-		var added sseOutputItemAdded
-		if err := json.Unmarshal(data, &added); err != nil {
-			return provider.SendStreamEvent(ctx, ch, provider.StreamError{
-				Err:     err,
-				Fatal:   false,
-				Message: fmt.Sprintf("failed to parse stream event: %v", err),
-			})
-		}
-		if added.Item.Type == "function_call" {
-			itemID := sseToolCallItemID(added.Item)
-			call := state.getToolCall(itemID)
-			call.callID = added.Item.CallID
-			if call.callID == "" {
-				call.callID = itemID
-			}
-			call.name = added.Item.Name
-			call.args.Reset()
-			return provider.SendStreamEvent(ctx, ch, provider.ToolCallStart{
-				ID:   call.callID,
-				Name: call.name,
-			})
-		}
-		return true
-
-	case "response.function_call_arguments.delta":
-		var delta sseFuncArgDelta
-		if err := json.Unmarshal(data, &delta); err != nil {
-			return provider.SendStreamEvent(ctx, ch, provider.StreamError{
-				Err:     err,
-				Fatal:   false,
-				Message: fmt.Sprintf("failed to parse stream event: %v", err),
-			})
-		}
-		call := state.getToolCall(delta.ItemID)
-		eventID := call.callID
-		if eventID == "" {
-			eventID = delta.ItemID
-		}
-		if !provider.SendStreamEvent(ctx, ch, provider.ToolCallDelta{
-			ID:    eventID,
-			Delta: delta.Delta,
-		}) {
+func (p *CodexProvider) handleSSEEvent(ctx context.Context, eventType string, data []byte, accumulator *responsesSSEAccumulator, ch chan<- provider.StreamEvent) bool {
+	events, err := accumulator.apply(eventType, data)
+	if err != nil {
+		return provider.SendStreamEvent(ctx, ch, provider.StreamError{
+			Err:     err,
+			Fatal:   false,
+			Message: fmt.Sprintf("failed to parse stream event: %v", err),
+		})
+	}
+	for _, event := range events {
+		if !provider.SendStreamEvent(ctx, ch, event) {
 			return false
 		}
-		call.args.WriteString(delta.Delta)
-		return true
-
-	case "response.output_item.done":
-		var done sseOutputItemDone
-		if err := json.Unmarshal(data, &done); err != nil {
-			return provider.SendStreamEvent(ctx, ch, provider.StreamError{
-				Err:     err,
-				Fatal:   false,
-				Message: fmt.Sprintf("failed to parse stream event: %v", err),
-			})
-		}
-		if done.Item.Type == "function_call" {
-			itemID := sseToolCallItemID(done.Item)
-			call := state.lookupToolCall(itemID)
-			callID := done.Item.CallID
-			if callID == "" && call != nil {
-				callID = call.callID
-			}
-			if callID == "" {
-				callID = itemID
-			}
-			if !provider.SendStreamEvent(ctx, ch, provider.ToolCallEnd{
-				ID:    callID,
-				Input: json.RawMessage(sseToolCallArguments(done.Item.Arguments, call)),
-			}) {
-				return false
-			}
-			state.deleteToolCall(itemID)
-		}
-		return true
-
-	case "response.completed":
-		var completed sseCompleted
-		if err := json.Unmarshal(data, &completed); err != nil {
-			return provider.SendStreamEvent(ctx, ch, provider.StreamError{
-				Err:     err,
-				Fatal:   false,
-				Message: fmt.Sprintf("failed to parse stream event: %v", err),
-			})
-		}
-
-		stopReason := sseOutputStopReason(completed.Response.Output)
-		usage := usageFromResponsesUsage(completed.Response.Usage)
-
-		for _, item := range completed.Response.Output {
-			if block, ok := codexReasoningBlockFromSSEItem(item); ok {
-				if !provider.SendStreamEvent(ctx, ch, provider.CodexReasoning{Block: block}) {
-					return false
-				}
-			}
-		}
-
-		return provider.SendStreamEvent(ctx, ch, provider.StreamDone{
-			StopReason: stopReason,
-			Usage:      usage,
-		})
-
-	case "response.content_part.added",
-		"response.content_part.done",
-		"response.created":
-		return true
-
-	default:
-		return true
 	}
+	return true
 }
 
 func sseToolCallItemID(item sseOutputItemData) string {

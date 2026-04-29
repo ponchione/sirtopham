@@ -21,8 +21,6 @@ type TSAnalyzerConfig struct {
 // PythonAnalyzerConfig controls the Python analyzer.
 type PythonAnalyzerConfig struct {
 	Enabled bool
-	Include []string // glob patterns for files to include
-	Exclude []string // glob patterns for files to exclude
 }
 
 // DefaultAnalyzerConfig returns a config with all analyzers enabled.

@@ -15,6 +15,7 @@ import (
 	"github.com/ponchione/sodoryard/internal/brain"
 	"github.com/ponchione/sodoryard/internal/codeintel"
 	"github.com/ponchione/sodoryard/internal/config"
+	"github.com/ponchione/sodoryard/internal/pathguard"
 )
 
 const (
@@ -675,27 +676,29 @@ func resolveProjectPath(projectRoot string, requested string) (string, string, b
 	if requested == "" {
 		return "", "", false
 	}
-	cleanRequested := filepath.Clean(filepath.FromSlash(requested))
-	resolved := cleanRequested
-	if !filepath.IsAbs(resolved) {
-		resolved = filepath.Join(projectRoot, cleanRequested)
-	}
 	absRoot, err := filepath.Abs(projectRoot)
 	if err != nil {
 		return "", "", false
 	}
-	absResolved, err := filepath.Abs(resolved)
+	cleanRequested := filepath.Clean(filepath.FromSlash(requested))
+	if filepath.IsAbs(cleanRequested) {
+		if !pathguard.WithinRoot(absRoot, cleanRequested) {
+			return "", "", false
+		}
+		cleanRequested, err = filepath.Rel(absRoot, cleanRequested)
+		if err != nil {
+			return "", "", false
+		}
+	}
+	resolved, err := pathguard.Resolve(projectRoot, cleanRequested)
 	if err != nil {
 		return "", "", false
 	}
-	rel, err := filepath.Rel(absRoot, absResolved)
+	rel, err := filepath.Rel(absRoot, resolved)
 	if err != nil {
 		return "", "", false
 	}
-	if rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
-		return "", "", false
-	}
-	return absResolved, filepath.ToSlash(rel), true
+	return resolved, filepath.ToSlash(rel), true
 }
 
 func defaultGitRunner(ctx stdctx.Context, workdir string, depth int) (string, error) {

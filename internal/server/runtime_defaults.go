@@ -20,23 +20,20 @@ const (
 	forcedRuntimeDefaultModel    = "gpt-5.5"
 )
 
-func normalizeRuntimeDefaultOverride(_ string, _ string) (provider string, model string) {
+func lockedRuntimeDefault() (provider string, model string) {
 	return forcedRuntimeDefaultProvider, forcedRuntimeDefaultModel
 }
 
 func runtimeDefaultOverrideAllowed(provider string, model string) bool {
-	normalizedProvider, normalizedModel := normalizeRuntimeDefaultOverride(provider, model)
-	return provider == normalizedProvider && model == normalizedModel
+	lockedProvider, lockedModel := lockedRuntimeDefault()
+	return provider == lockedProvider && model == lockedModel
 }
 
-func NewRuntimeDefaults(cfg *config.Config) *RuntimeDefaults {
+func NewRuntimeDefaults(_ *config.Config) *RuntimeDefaults {
 	rd := &RuntimeDefaults{}
-	provider, model := normalizeRuntimeDefaultOverride("", "")
+	provider, model := lockedRuntimeDefault()
 	rd.provider = provider
 	rd.model = model
-	if cfg != nil {
-		rd.provider, rd.model = normalizeRuntimeDefaultOverride(cfg.Routing.Default.Provider, cfg.Routing.Default.Model)
-	}
 	return rd
 }
 
@@ -53,7 +50,7 @@ func (r *RuntimeDefaults) Set(provider string, model string) {
 	if r == nil {
 		return
 	}
-	provider, model = normalizeRuntimeDefaultOverride(provider, model)
+	provider, model = lockedRuntimeDefault()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if provider != "" {

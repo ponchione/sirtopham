@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"log/slog"
 	"net/http"
 	"os"
@@ -16,6 +17,7 @@ import (
 	appdb "github.com/ponchione/sodoryard/internal/db"
 	"github.com/ponchione/sodoryard/internal/langutil"
 	"github.com/ponchione/sodoryard/internal/pathglob"
+	"github.com/ponchione/sodoryard/internal/pathguard"
 )
 
 // ProjectHandler serves project info, file tree, and file content endpoints.
@@ -61,7 +63,7 @@ func (h *ProjectHandler) handleProject(w http.ResponseWriter, _ *http.Request) {
 	name := filepath.Base(h.cfg.ProjectRoot)
 
 	h.langOnce.Do(func() {
-		h.langVal = detectPrimaryLanguage(h.cfg.ProjectRoot, h.cfg.Index.Include)
+		h.langVal = detectPrimaryLanguage(h.cfg.ProjectRoot)
 		h.logger.Info("cached primary language", "language", h.langVal)
 	})
 
@@ -118,23 +120,13 @@ func (h *ProjectHandler) handleFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Path traversal protection.
-	if strings.Contains(relPath, "..") || filepath.IsAbs(relPath) {
+	absPath, err := pathguard.Resolve(h.cfg.ProjectRoot, relPath)
+	if errors.Is(err, pathguard.ErrAbsolutePath) || errors.Is(err, pathguard.ErrEscapesRoot) {
 		writeError(w, http.StatusBadRequest, "invalid path")
 		return
 	}
-
-	absPath := filepath.Join(h.cfg.ProjectRoot, relPath)
-
-	// Ensure the resolved path is within project root.
-	resolved, err := filepath.EvalSymlinks(absPath)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "file not found")
-		return
-	}
-	rootResolved, _ := filepath.EvalSymlinks(h.cfg.ProjectRoot)
-	if !strings.HasPrefix(resolved, rootResolved+string(filepath.Separator)) && resolved != rootResolved {
-		writeError(w, http.StatusBadRequest, "path outside project root")
 		return
 	}
 
@@ -275,7 +267,7 @@ func shouldExclude(relPath, name string, excludes []string) bool {
 	return false
 }
 
-func detectPrimaryLanguage(root string, includes []string) string {
+func detectPrimaryLanguage(root string) string {
 	// Count extensions from the include patterns.
 	counts := map[string]int{}
 	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {

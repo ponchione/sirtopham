@@ -40,7 +40,7 @@ def create_user(name, email):
 
 	writeFile(t, filepath.Join(dir, "app", "__init__.py"), "")
 
-	analyzer := NewPythonAnalyzer(dir, nil, nil)
+	analyzer := NewPythonAnalyzer(dir)
 	result, err := analyzer.Analyze()
 	if err != nil {
 		t.Fatalf("Analyze: %v", err)
@@ -99,7 +99,7 @@ def create_user(name, email):
 
 func TestPythonAnalyzer_EmptyProject(t *testing.T) {
 	dir := t.TempDir()
-	analyzer := NewPythonAnalyzer(dir, nil, nil)
+	analyzer := NewPythonAnalyzer(dir)
 	result, err := analyzer.Analyze()
 	if err != nil {
 		t.Fatalf("Analyze: %v", err)
@@ -144,7 +144,7 @@ def exported():
     pass
 `)
 
-	analyzer := NewPythonAnalyzer(dir, nil, nil)
+	analyzer := NewPythonAnalyzer(dir)
 	result, err := analyzer.Analyze()
 	if err != nil {
 		t.Fatalf("Analyze: %v", err)

@@ -1,31 +1,19 @@
-import type { AppConfig, ProviderModel, ProviderStatus } from "@/types/metrics";
+import type { AppConfig } from "@/types/metrics";
 
 export function ConversationTopBar({
   connectionStatus,
   conversationId,
   config,
-  selectedProvider,
-  selectedModel,
-  selectableProviders,
-  selectedProviderModels,
-  overrideActive,
   metricsOpen,
   inspectorOpen,
-  onModelOverrideChange,
   onToggleMetrics,
   onToggleInspector,
 }: {
   connectionStatus: string;
   conversationId: string | null;
   config: AppConfig | null;
-  selectedProvider: string;
-  selectedModel: string;
-  selectableProviders: ProviderStatus[];
-  selectedProviderModels: ProviderModel[];
-  overrideActive: boolean;
   metricsOpen: boolean;
   inspectorOpen: boolean;
-  onModelOverrideChange: (provider: string, model: string) => void;
   onToggleMetrics: () => void;
   onToggleInspector: () => void;
 }) {
@@ -37,44 +25,11 @@ export function ConversationTopBar({
             ? connectionStatus === "connecting" ? "Connecting…" : "Disconnected — reconnecting…"
             : conversationId ? `${conversationId.slice(0, 8)}…` : "New conversation"}
         </div>
-        {config && selectedProvider && (
+        {config && (
           <div className="flex items-center gap-2 min-w-0">
-            <select
-              value={selectedProvider}
-              onChange={(e) => {
-                const provider = e.target.value;
-                const providerModels = selectableProviders.find((item) => item.name === provider)?.models ?? [];
-                const nextModel = providerModels[0]?.id ?? selectedModel;
-                onModelOverrideChange(provider, nextModel);
-              }}
-              className="h-7 rounded border border-border bg-input px-2 text-xs text-foreground"
-              aria-label="Conversation provider"
-              disabled={selectableProviders.length <= 1}
-            >
-              {selectableProviders.map((provider) => (
-                <option key={provider.name} value={provider.name}>
-                  {provider.name}
-                </option>
-              ))}
-            </select>
-            <select
-              value={selectedModel}
-              onChange={(e) => onModelOverrideChange(selectedProvider, e.target.value)}
-              className="h-7 max-w-56 rounded border border-border bg-input px-2 text-xs text-foreground"
-              aria-label="Conversation model"
-              disabled={selectedProviderModels.length <= 1}
-            >
-              {selectedProviderModels.map((model) => (
-                <option key={model.id} value={model.id}>
-                  {model.id}
-                </option>
-              ))}
-            </select>
-            {overrideActive && (
-              <span className="shrink-0 bg-primary/15 px-2 py-1 text-[10px] font-medium uppercase tracking-widest text-primary">
-                override
-              </span>
-            )}
+            <span className="max-w-72 truncate text-xs text-muted-foreground">
+              {config.default_provider}/{config.default_model}
+            </span>
           </div>
         )}
       </div>
