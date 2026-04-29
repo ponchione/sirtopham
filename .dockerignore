@@ -1,10 +1,15 @@
 .git/
 bin/
+**/node_modules/
 web/node_modules/
 webfs/dist/
 .brain/
+.claude/
+.hermes/
 .yard/
 .sirtopham/
+.sodoryard/
+yard.yaml
 *.log
 *.tmp
 docs/

@@ -17,6 +17,7 @@ webfs/dist/
 
 # Environment
 .env
+yard.yaml
 
 # Python cache
 __pycache__/
