@@ -2,7 +2,7 @@
 
 **Status:** Design (ready for implementation plan)
 **Owner:** Mitchell Ponchione
-**Last Updated:** 2026-04-11
+**Last Updated:** 2026-04-29
 **Roadmap phase:** 5b
 **Depends on:** Phase 1 (monorepo restructure), Phase 5a (yard paths rename)
 
@@ -281,7 +281,7 @@ Next steps:
 - `index.include` / `index.exclude` blocks with a generic-but-reasonable file pattern set
 - `brain.enabled: true`, `vault_path: .brain`, `log_brain_queries: true`
 - `agent_roles:` with all 13 entries (see 3.2)
-- `local_services:` block with `enabled: false` (operator opts in if they want llama.cpp)
+- `local_services:` block with the repo-owned llama.cpp Docker Compose stack enabled in `manual` mode
 - `embedding:` block with the nomic-embed-code defaults
 
 Each agent role entry has the shape:
@@ -307,6 +307,35 @@ Each agent role entry has the shape:
     max_turns: <role-appropriate value>
     max_tokens: <role-appropriate value>
 ```
+
+The seeded local-service block is:
+
+```yaml
+local_services:
+  enabled: true
+  mode: manual
+  provider: docker-compose
+  compose_file: ./ops/llm/docker-compose.yml
+  project_dir: ./ops/llm
+  required_networks:
+    - llm-net
+  auto_create_networks: true
+  startup_timeout_seconds: 180
+  healthcheck_interval_seconds: 2
+  services:
+    qwen-coder:
+      base_url: http://localhost:12434
+      health_path: /health
+      models_path: /v1/models
+      required: true
+    nomic-embed:
+      base_url: http://localhost:12435
+      health_path: /health
+      models_path: /v1/models
+      required: true
+```
+
+`manual` means `yard index` and `yard llm up` report exact remediation when services are unhealthy but do not auto-start containers. Operators can switch to `auto` to let the CLI create missing networks, run `docker compose up -d`, and wait for required service health.
 
 Per-role tool/path/limit defaults are based on the role boundaries each prompt stub already implies (e.g., `correctness-auditor` gets `file:read` not `file`; `coder` gets `file`, `git`, `shell`, `search`; the auditors all get `brain_deny_paths` for `specs/`, `architecture/`, `conventions/`, `epics/`, `tasks/`, `plans/`). The implementation plan will enumerate the full per-role default block.
 

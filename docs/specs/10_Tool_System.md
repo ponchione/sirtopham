@@ -1,4 +1,4 @@
-**Status:** Draft v0.1 **Last Updated:** 2026-03-28 **Author:** Mitchell
+**Status:** Draft v0.1 **Last Updated:** 2026-04-29 **Author:** Mitchell
 
 ---
 
@@ -27,36 +27,46 @@ type Tool interface {
     // This is what the LLM reads to decide whether to use this tool.
     Description() string
 
-    // ParameterSchema returns the JSON Schema object describing the tool's
-    // input parameters. Serialized directly into the LLM request's tools array.
-    ParameterSchema() json.RawMessage
-
-    // Purity declares whether the tool has side effects.
+    // ToolPurity declares whether the tool has side effects.
     // Pure tools run concurrently; mutating tools run sequentially.
-    Purity() ToolPurity
+    ToolPurity() Purity
 
-    // Execute runs the tool with the given arguments.
-    // args is the raw JSON object from the LLM's tool_use block.
-    // Returns the tool result as a string (the content of the role=tool message).
-    // Errors are returned as tool results, not Go errors — the LLM sees them.
-    Execute(ctx context.Context, args json.RawMessage) (string, error)
+    // Schema returns the tool definition serialized into provider requests:
+    // {"name":"...","description":"...","input_schema":{...}}
+    Schema() json.RawMessage
+
+    // Execute runs the tool with the given arguments. projectRoot is supplied
+    // by the executor so path-aware tools can enforce project-root bounds.
+    // Tool-level failures are returned as ToolResult values with Success=false.
+    Execute(ctx context.Context, projectRoot string, input json.RawMessage) (*ToolResult, error)
 }
 
-type ToolPurity int
+type Purity int
 
 const (
-    Pure     ToolPurity = iota // Read-only. No side effects. Safe for concurrent execution.
-    Mutating                   // Writes to filesystem, executes commands. Sequential only.
+    Pure     Purity = iota // Read-only. No side effects. Safe for concurrent execution.
+    Mutating               // Writes to filesystem, executes commands. Sequential only.
 )
+
+type ToolResult struct {
+    CallID         string          `json:"call_id"`
+    Content        string          `json:"content"`
+    Success        bool            `json:"success"`
+    Error          string          `json:"error,omitempty"`
+    DurationMs     int64           `json:"duration_ms"`
+    OutputSize     int             `json:"output_size,omitempty"`
+    NormalizedSize int             `json:"normalized_size,omitempty"`
+    Details        json.RawMessage `json:"details,omitempty"`
+}
 ```
 
 ### Design Decisions
 
-**`Execute` returns `(string, error)`.** The `string` is the tool result content that gets appended to conversation history as a `role=tool` message. The `error` return is reserved for catastrophic failures (tool binary not found, internal panic) — not for tool-level errors like "file not found." Tool-level errors are returned as the string result so the LLM can see them and self-correct. This is Layer 1 of the agent loop's three-tier error recovery ([[05-agent-loop]]).
+**`Execute` returns `(*ToolResult, error)`.** `ToolResult.Content` is appended to conversation history as the tool result content, while `Success`, `Error`, `DurationMs`, sizing fields, and optional `Details` give the UI and analytics structured facts without parsing prose. The Go `error` return is reserved for infrastructure failures or panics recovered by the executor — not for tool-level failures like "file not found." Tool-level failures are returned as `ToolResult{Success:false}` so the LLM can see them and self-correct. This is Layer 1 of the agent loop's three-tier error recovery ([[05-agent-loop]]).
 
-**`ParameterSchema` returns `json.RawMessage`.** Each tool defines its own JSON Schema as a static JSON blob. No reflection, no struct tag magic. The schema is the tool's contract with the LLM — it must be hand-authored and precise. The registry collects these schemas and serializes them into the provider request.
+**`Schema` returns `json.RawMessage`.** Each tool defines its own provider-facing tool definition as a static JSON blob. No reflection, no struct tag magic. The schema is the tool's contract with the LLM — it must be hand-authored and precise. The registry collects these schemas and serializes them into the provider request.
 
-**`Purity` is declarative, not inferred.** Each tool states whether it's pure or mutating at registration time. The agent loop trusts this declaration for dispatch scheduling. There is no runtime analysis of side effects.
+**`ToolPurity` is declarative, not inferred.** Each tool states whether it's pure or mutating at registration time. The agent loop trusts this declaration for dispatch scheduling. There is no runtime analysis of side effects.
 
 ---
 
@@ -78,9 +88,11 @@ func (r *Registry) Register(t Tool) { ... }
 // Get returns a tool by name, or nil if not found.
 func (r *Registry) Get(name string) Tool { ... }
 
-// ToolDefinitions returns the JSON array of tool definitions for the LLM request.
-// Format matches the Anthropic/OpenAI tool definition schema.
-func (r *Registry) ToolDefinitions() json.RawMessage { ... }
+// Schemas returns raw provider-facing tool schema envelopes.
+func (r *Registry) Schemas() []json.RawMessage { ... }
+
+// ToolDefinitions returns normalized provider.ToolDefinition values for the LLM request.
+func (r *Registry) ToolDefinitions() []provider.ToolDefinition { ... }
 ```
 
 ### Registration at Startup
@@ -90,31 +102,37 @@ Tools are registered in the server's initialization code. The order is determini
 ```go
 registry := tools.NewRegistry()
 
-// Core tools
-registry.Register(tools.NewFileRead(projectRoot))
-registry.Register(tools.NewFileWrite(projectRoot))
-registry.Register(tools.NewFileEdit(projectRoot))
-registry.Register(tools.NewSearchText(projectRoot))
-registry.Register(tools.NewSearchSemantic(ragSearcher))
-registry.Register(tools.NewGitStatus(projectRoot))
-registry.Register(tools.NewGitDiff(projectRoot))
-registry.Register(tools.NewShell(projectRoot, shellConfig))
-
-// Brain tools (conditional on brain being enabled)
-if brainConfig.Enabled {
-    obsidianClient := brain.NewObsidianClient(brainConfig)
-    registry.Register(brain.NewBrainRead(obsidianClient))
-    registry.Register(brain.NewBrainWrite(obsidianClient, brainIndexer))
-    registry.Register(brain.NewBrainSearch(obsidianClient, brainSearcher))
-    registry.Register(brain.NewBrainUpdate(obsidianClient, brainIndexer))
-}
+tool.RegisterFileTools(registry)                  // file_read, file_write, file_edit
+tool.RegisterGitTools(registry)                   // git_status, git_diff
+tool.RegisterShellTool(registry, shellConfig)     // shell
+tool.RegisterSearchTools(registry, searcher)      // search_text, search_semantic when available
+tool.RegisterDirectoryTools(registry)             // list_directory, find_files
+tool.RegisterTestTool(registry)                   // test_run
+tool.RegisterSqlcTool(registry)                   // db_sqlc
+tool.RegisterBrainToolsWithProviderRuntimeAndIndex(
+    registry, brainBackend, brainSearcher, brainConfig, providerRuntime, queries, projectID,
+) // brain_search, brain_read, brain_write, brain_update, brain_lint
 ```
 
-Brain tools are conditionally registered. If the brain is disabled in config (`brain.enabled: false`) or Obsidian isn't running, the LLM never sees these tools in its definitions and cannot call them.
+Brain tools are conditionally registered. If the brain is disabled in config (`brain.enabled: false`), the LLM never sees these tools in its definitions and cannot call them. Runtime failures in the configured MCP/vault backend are surfaced as tool results.
+
+Role configuration selects tools by group. The role registry builder currently recognizes:
+
+| Group | Registers | Purity |
+|---|---|---|
+| `brain` | `brain_search`, `brain_read`, `brain_write`, `brain_update`, `brain_lint` | mixed |
+| `file` | `file_read`, `file_write`, `file_edit` | mixed |
+| `file:read` | `file_read` | pure |
+| `git` | `git_status`, `git_diff` | pure |
+| `shell` | `shell` | mutating |
+| `search` | `search_text`, `search_semantic` when a semantic searcher is available | pure |
+| `directory` | `list_directory`, `find_files` | pure |
+| `test` | `test_run` | mutating |
+| `sqlc` | `db_sqlc` | mutating |
 
 ### Tool Definition Serialization
 
-`ToolDefinitions()` produces the JSON array that gets embedded in every LLM request. The format is Anthropic-native (the hardest provider to satisfy — see [[03-provider-architecture]]):
+`ToolDefinitions()` produces the normalized provider tool definitions that get embedded in every LLM request. Tool implementations still author schemas in an Anthropic-style envelope with `input_schema`; provider adapters translate as needed (see [[03-provider-architecture]]):
 
 ```json
 [
@@ -139,7 +157,7 @@ The provider layer translates this format if needed. Anthropic uses `input_schem
 
 ### Input Validation
 
-Before `Execute` is called, the agent loop validates the LLM's arguments against the tool's `ParameterSchema()`:
+Before `Execute` is called, the agent loop validates the LLM's arguments against the tool's `Schema()` input schema:
 
 1. Parse the LLM's tool_use `input` field as JSON.
 2. Validate against the tool's JSON Schema (required fields present, types correct).
@@ -158,7 +176,7 @@ The agent loop owns tool dispatch. The tool system provides the interface and im
 
 When the LLM returns a batch of tool calls:
 
-1. **Partition** into pure and mutating calls based on each tool's `Purity()`.
+1. **Partition** into pure and mutating calls based on each tool's `ToolPurity()`.
 2. **Execute all pure calls concurrently** — one goroutine per call. Collect results via a `sync.WaitGroup` or `errgroup.Group`.
 3. **Execute mutating calls sequentially** in the order the LLM specified them. The LLM's order is intentional — a `file_write` followed by a `shell` (run tests) must execute in that sequence.
 4. **Assemble results** in the original batch order (matching tool call IDs). The LLM expects results in the same order it issued the calls.
@@ -200,8 +218,6 @@ Tool errors are tool results, not exceptions. When a tool encounters an error, i
 
 Errors are enriched with context that helps the LLM recover on its next attempt:
 
-Note: the brain-tool rows below were originally written for the pre-MCP Obsidian Local REST path. The current runtime brain backend is MCP-backed; remaining REST-specific wording is historical spec debt.
-
 |Error|Enrichment|
 |---|---|
 |File not found|List available files in the parent directory|
@@ -213,7 +229,7 @@ Note: the brain-tool rows below were originally written for the pre-MCP Obsidian
 |Edit search string not unique|Show all match locations so the LLM can refine|
 |Ripgrep no matches|Suggest alternative patterns or broader search|
 |Brain document not found|List available documents in the vault|
-|Brain Obsidian API unreachable|Explain that Obsidian must be running with the REST API plugin|
+|Brain backend unavailable|Explain that the configured MCP/vault backend is unavailable and identify the configured vault path when possible|
 
 This enrichment is the single highest-leverage improvement for agent self-correction rates. A bare "file not found" forces the LLM to guess; "file not found, available files: middleware.go, service.go, types.go" lets it fix the path immediately.
 
@@ -445,6 +461,117 @@ The following are the complete JSON Schema definitions for every tool. These sch
 }
 ```
 
+### list_directory
+
+```json
+{
+  "name": "list_directory",
+  "description": "List directory contents in a tree-style format with configurable depth. Skips build artifacts and hidden state directories (node_modules, .git, .venv, etc.).",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string",
+        "description": "Directory to list, relative to project root (default: \".\")"
+      },
+      "depth": {
+        "type": "integer",
+        "description": "Maximum recursion depth, 1-10 (default: 3)"
+      },
+      "include_hidden": {
+        "type": "boolean",
+        "description": "Show hidden files/directories (names starting with '.'); default false. Always skips default directory excludes regardless."
+      }
+    }
+  }
+}
+```
+
+### find_files
+
+```json
+{
+  "name": "find_files",
+  "description": "Find files by glob pattern, respecting project-root bounds and default generated/state directory excludes.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "pattern": {
+        "type": "string",
+        "description": "Glob pattern to match, including ** for recursive matches"
+      },
+      "path": {
+        "type": "string",
+        "description": "Directory to search within, relative to project root (default: \".\")"
+      },
+      "max_results": {
+        "type": "integer",
+        "description": "Maximum number of matching paths to return (default: 100)"
+      }
+    },
+    "required": ["pattern"]
+  }
+}
+```
+
+### test_run
+
+```json
+{
+  "name": "test_run",
+  "description": "Run project tests with ecosystem-aware defaults. Auto-detects Go, Python, or TypeScript when ecosystem is omitted.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "ecosystem": {
+        "type": "string",
+        "enum": ["go", "python", "typescript"],
+        "description": "Override ecosystem detection"
+      },
+      "path": {
+        "type": "string",
+        "description": "Subdirectory or package path to test, relative to project root"
+      },
+      "filter": {
+        "type": "string",
+        "description": "Test name filter; maps to -run for Go"
+      },
+      "verbose": {
+        "type": "boolean",
+        "description": "Enable verbose output (default: false)"
+      },
+      "timeout_seconds": {
+        "type": "integer",
+        "description": "Test timeout in seconds (default: 300)"
+      }
+    }
+  }
+}
+```
+
+### db_sqlc
+
+```json
+{
+  "name": "db_sqlc",
+  "description": "Run sqlc actions for database query code generation and verification.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "action": {
+        "type": "string",
+        "enum": ["generate", "vet", "diff"],
+        "description": "sqlc action to run (default: generate)"
+      },
+      "path": {
+        "type": "string",
+        "description": "Subdirectory within the project root containing sqlc.yaml"
+      }
+    }
+  }
+}
+```
+
 ### brain_read
 
 ```json
@@ -528,18 +655,18 @@ The following are the complete JSON Schema definitions for every tool. These sch
 ```json
 {
   "name": "brain_search",
-  "description": "Search the project brain (Obsidian vault) for relevant documents. Supports keyword search (exact matches via Obsidian), semantic search (meaning-based via embeddings), or both. Returns document titles, paths, relevant snippets, and similarity scores.",
+  "description": "Search the project brain (Obsidian vault) for documents and derived knowledge matches. Keyword mode is lexical-only. Semantic and auto modes use the landed runtime search path when available and may include derived graph/backlink expansion.",
   "input_schema": {
     "type": "object",
     "properties": {
       "query": {
         "type": "string",
-        "description": "Search query — natural language for semantic search, keywords/tags for keyword search"
+        "description": "Search query — keywords, tag names, or concepts to find"
       },
       "mode": {
         "type": "string",
         "enum": ["keyword", "semantic", "auto"],
-        "description": "Search mode: 'keyword' for exact matches via Obsidian search, 'semantic' for meaning-based via embeddings, 'auto' runs both and merges results (default: auto)"
+        "description": "Search mode: 'keyword' for deterministic lexical search, 'semantic' for runtime semantic search when available, or 'auto' for hybrid runtime search that can combine keyword, semantic, and derived graph/backlink signals (default: keyword)"
       },
       "tags": {
         "type": "array",
@@ -552,6 +679,33 @@ The following are the complete JSON Schema definitions for every tool. These sch
       }
     },
     "required": ["query"]
+  }
+}
+```
+
+### brain_lint
+
+```json
+{
+  "name": "brain_lint",
+  "description": "Lint the project brain for structural hygiene issues such as orphan notes, dead links, stale references, missing pages, tag hygiene, and optionally model-assisted contradictions.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "scope": {
+        "type": "string",
+        "description": "Scope to inspect: full, a note path, a tag scope, or a supported combined scope (default: full)"
+      },
+      "checks": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Subset of checks to run: orphans, dead_links, stale_references, missing_pages, contradictions, tag_hygiene"
+      },
+      "allow_model_calls": {
+        "type": "boolean",
+        "description": "Required when using the contradictions check. Set true to explicitly allow model-assisted contradiction analysis."
+      }
+    }
   }
 }
 ```
@@ -906,6 +1060,38 @@ The output includes the command as invoked, the exit code, and clearly labeled s
 - Working directory: project root.
 - Environment: inherit the parent process's environment. No sandboxing beyond the denylist.
 
+### list_directory
+
+**Purpose:** Show a bounded tree of a project directory without requiring the agent to synthesize `find` or `ls` command flags.
+
+**Purity:** Pure
+
+**Behavior:** Resolves `path` under the project root, defaults to `.`, clamps `depth` to the supported range, and skips generated or state directories such as `.git`, `.yard`, `.brain`, `node_modules`, `vendor`, `.venv`, and cache/editor directories. Hidden names are omitted unless `include_hidden` is true, but the default deny/exclude directories remain skipped.
+
+### find_files
+
+**Purpose:** Locate files by glob pattern while preserving project-root enforcement and generated/state directory excludes.
+
+**Purity:** Pure
+
+**Behavior:** Supports recursive `**` patterns, optional search root, and a bounded result count. Results are project-relative paths. The default max result count is 100.
+
+### test_run
+
+**Purpose:** Run tests through a structured tool that can choose the right test runner and return a normalized summary.
+
+**Purity:** Mutating
+
+**Behavior:** Auto-detects Go, Python, or TypeScript test ecosystems unless `ecosystem` is supplied. Go uses `go test -json`, Python uses `pytest`, and TypeScript uses the available Jest/Vitest path. `path`, `filter`, `verbose`, and `timeout_seconds` narrow the run. The default timeout is 300 seconds.
+
+### db_sqlc
+
+**Purpose:** Run `sqlc generate`, `sqlc vet`, or `sqlc diff` from the project root or a subdirectory containing `sqlc.yaml`.
+
+**Purity:** Mutating
+
+**Behavior:** Validates the requested action, verifies `sqlc` is on `PATH`, resolves `path` under the project root, and returns either success output or actionable failure text.
+
 ### brain_read
 
 **Purpose:** Read a document from the project brain (Obsidian vault). Returns full markdown content including frontmatter. Optionally includes backlinks — documents that reference the target.
@@ -939,11 +1125,11 @@ When `include_backlinks` is false, the "Backlinks" line is omitted.
 **Error cases:**
 
 - Document not found → "Error: brain document not found: {path}\nAvailable documents in {parent_dir}/: {listing}"
-- Historical REST-path error case → "Error: Obsidian REST API not reachable at {api_url}...". Current runtime brain tooling uses the MCP/vault backend instead.
+- Backend unavailable → "Error: brain backend unavailable for configured vault {vault_path}..."
 
 **Implementation notes:**
 
-- Historical note: the original plan delegated to `ObsidianClient` over the Local REST API. Current runtime brain reads use the MCP/vault backend.
+- Resolve the path through the MCP/vault backend and preserve vault-root bounds.
 - Backlinks are retrieved via a second API call or from the SQLite `brain_links` table (target path lookup).
 - Outgoing wikilinks are parsed from the document content (regex for `[[...]]`).
 
@@ -965,13 +1151,13 @@ For overwrites: "Updated: {path} ({N} lines, was {M} lines)"
 
 **Error cases:**
 
-- Obsidian API unreachable → same as brain_read
+- Backend unavailable → same as brain_read
 - Write failed → "Error: failed to write brain document: {details}"
 
 **Implementation notes:**
 
-- Delegates to `ObsidianClient` PUT request.
-- Historical note: the original v0.1 plan wrote through the Obsidian REST API only. Current runtime note mutation is MCP/vault-backed; semantic/index-backed brain updates remain future work.
+- Writes through the configured MCP/vault backend.
+- After a successful write, marks the derived brain index stale. Operators refresh relational metadata, semantic chunks, and graph data with `yard brain index`.
 - Parses the written content to extract tags, wikilinks, and frontmatter for the confirmation output.
 - Creates parent directories in the vault if needed.
 
@@ -1001,19 +1187,18 @@ Section: 8 lines replaced with 12 lines
 
 - Document not found → same as brain_read
 - Section not found (for replace_section) → "Error: section '## Workaround' not found in {path}.\nAvailable sections: ## Problem, ## Root Cause, ## Impact, ## Related"
-- Obsidian API unreachable → same as brain_read
+- Backend unavailable → same as brain_read
 
 **Implementation notes:**
 
-- Read the document via `ObsidianClient`, apply the operation in Go, write back.
+- Read the document through the MCP/vault backend, apply the operation in Go, write back, and mark the derived brain index stale after a successful mutation.
 - For `replace_section`: parse the document into heading-delimited sections. Find the target heading (exact match on heading text). Replace everything from that heading to the next heading of equal or higher level (or end of file).
-- Historical note: the original v0.1 plan used an Obsidian REST read-modify-write flow. Current runtime note mutation is MCP/vault-backed; re-embedding and graph updates remain future work.
 
 ### brain_search
 
-**Purpose:** Search the project brain for relevant documents. Historical v0.1 planning text below describes keyword search via Obsidian REST; current runtime uses MCP/vault-backed keyword search, while semantic/index-backed brain retrieval is still future work.
+**Purpose:** Search the project brain for relevant documents. Keyword mode performs deterministic MCP/vault-backed lexical search. Semantic and auto modes use the derived runtime search path when available, combining keyword hits, LanceDB semantic chunks, and optional graph/backlink expansion.
 
-**Purity:** Pure
+**Purity:** Pure when query logging is disabled; mutating when `brain.log_brain_queries` appends the query log.
 
 **Return format:**
 
@@ -1038,13 +1223,26 @@ Found 3 results for "authentication" (mode: keyword):
 
 - No results → "No brain documents found for '{query}'. The brain may not contain relevant knowledge yet."
 - Historical REST-path error case → "Error: brain search unavailable...". Current runtime availability depends on the MCP/vault backend instead.
-- `mode=semantic` or `mode=auto` → return a note that semantic search is not yet available in v0.1, then continue with keyword search
+- `mode=semantic` or `mode=auto` without a runtime searcher → return a note that semantic/index-backed brain search is unavailable in that runtime, then continue with keyword search
 
 **Implementation notes:**
 
-- Historical plan: delegate keyword mode to Obsidian's search endpoint. Current runtime performs keyword-backed search through the MCP/vault backend.
-- **Semantic / auto modes in v0.1:** Return guidance that semantic search is planned for v0.2, then fall back to the keyword-search path.
-- No internal brain vector index or wikilink-graph traversal is used in v0.1.
+- Keyword mode uses the configured MCP/vault backend and excludes operational `_log.md` notes from search results.
+- Semantic and auto modes call the runtime `HybridBrainSearcher` when present. That searcher merges lexical results, semantic chunks from the brain LanceDB store, and optional graph/backlink hops from derived brain link metadata.
+- The tool defaults to `keyword` when `mode` is omitted. Context assembly may use its own auto/hybrid retrieval path.
+
+### brain_lint
+
+**Purpose:** Inspect the brain vault for maintainability issues: orphan documents, dead links, stale references, missing pages, tag hygiene, and explicitly opted-in contradiction checks.
+
+**Purity:** Mutating when operation logging is enabled; otherwise read-only in effect.
+
+**Behavior:**
+
+- `scope` defaults to `full` and can target supported document/tag scopes.
+- `checks` can narrow the lint run to specific checks.
+- `contradictions` requires `allow_model_calls: true` because it may call the configured provider.
+- The result is a structured markdown report suitable for receipts and operational review.
 
 ---
 
@@ -1141,10 +1339,7 @@ tools:
 
 brain:
   enabled: true
-  vault_path: ~/obsidian-vaults/sodoryard-brain
-  obsidian_api_url: http://localhost:27124
-  obsidian_api_key: "your-api-key-here"
-  # v0.2+ smart-retrieval fields (reactive keyword tools are the v0.1 scope)
+  vault_path: .brain
   max_brain_tokens: 8000
   brain_relevance_threshold: 0.30
   include_graph_hops: true
@@ -1164,9 +1359,10 @@ The tool system decomposes into 6 implementation epics. Each epic can be impleme
 |03: Search Tools|`search_text` (ripgrep wrapper), `search_semantic` (RAG searcher bridge)|Epic 01, [[04-code-intelligence-and-rag]] searcher|
 |04: Git Tools|`git_status`, `git_diff`. Shell out to git binary, structured output parsing|Epic 01|
 |05: Shell Tool|`shell`. Process group management, timeout, SIGTERM/SIGKILL escalation, denylist, stdout/stderr capture|Epic 01|
-|06: Brain Tools & Legacy REST Plan|Historical `ObsidianClient` HTTP wrapper plus brain tools. Current runtime uses MCP/vault-backed keyword brain tooling; semantic/index-backed expansion remains deferred.|Epic 01, [[09-project-brain]] current brain contract|
+|06: Brain Tools|MCP/vault-backed `brain_search`, `brain_read`, `brain_write`, `brain_update`, `brain_lint`, plus derived semantic/graph search when the runtime searcher is available.|Epic 01, [[09-project-brain]] current brain contract|
+|07: Directory/Test/SQLC Tools|`list_directory`, `find_files`, `test_run`, `db_sqlc` utility groups used by role-specific registries.|Epic 01|
 
-Epic 01 ships first. Epics 02-06 can proceed in parallel once 01 is complete. Epic 03 (`search_semantic`) has an external dependency on the RAG searcher from [[04-code-intelligence-and-rag]]. Epic 06's Obsidian REST dependency is historical planning context, not the current runtime requirement.
+Epic 01 ships first. Epics 02-07 can proceed in parallel once 01 is complete. Epic 03 (`search_semantic`) has an external dependency on the RAG searcher from [[04-code-intelligence-and-rag]].
 
 ---
 
@@ -1195,12 +1391,12 @@ Very little. topham's pipeline model made single-shot LLM calls per phase with n
 
 - The entire `Tool` interface and registry
 - Purity classification and dispatch logic
-- All 12 tool implementations
+- All current tool implementations across file, search, git, shell, directory, test, sqlc, and brain groups
 - JSON Schema definitions
 - Input validation
 - Error enrichment
 - Output truncation with tool-specific guidance
-- Brain tools and Obsidian client
+- Brain tools and MCP/vault backend integration
 
 ---
 
@@ -1209,7 +1405,7 @@ Very little. topham's pipeline model made single-shot LLM calls per phase with n
 - **Validation library choice.** `santhosh-tekuri/jsonschema` (pure Go, spec-compliant) vs `xeipuuv/gojsonschema` (more mature, larger dependency). Either works. Decide at implementation time.
 - **Diff library.** `sergi/go-diff` for unified diffs in `file_write` and `file_edit` results. Alternatively, shell out to `diff -u`. The Go library is cleaner; shelling out is simpler. Either works for v0.1.
 - **Ripgrep as a hard dependency.** The `search_text` tool requires `rg` on PATH. This is documented in prerequisites. Alternative: use Go's `regexp` package with `filepath.Walk` — much slower but removes the dependency. Ripgrep is the right call for a tool targeting developers.
-- **Tool definition caching for prompt stability.** Tool definitions are part of the LLM request and affect prompt caching. If the tool set changes between turns (e.g., brain tools become available mid-session because Obsidian started), the cached prefix is invalidated. Worth ensuring the tool set is stable for the session lifetime. Brain tool availability should be checked once at session start, not per-turn.
+- **Tool definition caching for prompt stability.** Tool definitions are part of the LLM request and affect prompt caching. If the tool set changes between turns, the cached prefix is invalidated. The role-based registry should be stable for the session lifetime.
 - **File edit conflict with concurrent shell edits.** If the LLM issues a `file_edit` and a `shell sed ...` in the same batch, the mutating sequential dispatch handles ordering. But if they target the same file, the second operation sees the first's changes. This is correct behavior — but worth noting that the LLM must be aware that mutating operations execute in order.
 
 ---
@@ -1217,7 +1413,7 @@ Very little. topham's pipeline model made single-shot LLM calls per phase with n
 ## References
 
 - [[05-agent-loop]] — Tool dispatch, purity classification, error recovery tiers, output handling
-- [[09-project-brain]] — Brain tool specifications, Obsidian REST API integration
+- [[09-project-brain]] — Brain tool specifications, MCP/vault backend, derived semantic index, and graph metadata
 - [[08-data-model]] — tool_executions table, role=tool message format
 - [[04-code-intelligence-and-rag]] — RAG searcher that search_semantic delegates to
 - [[03-provider-architecture]] — Tool definition serialization into provider requests
@@ -1225,5 +1421,4 @@ Very little. topham's pipeline model made single-shot LLM calls per phase with n
 - Anthropic tool use: https://docs.anthropic.com/en/docs/build-with-claude/tool-use
 - OpenAI function calling: https://platform.openai.com/docs/guides/function-calling
 - Hermes Agent tools: `tools/` directory in hermes-agent repo (reference for tool patterns)
-- Obsidian Local REST API: https://github.com/coddingtonbear/obsidian-local-rest-api
 - ripgrep: https://github.com/BurntSushi/ripgrep

@@ -1,6 +1,6 @@
 # 04 — Code Intelligence & RAG Pipeline
 
-**Status:** Draft v0.1 — LanceDB Evaluation Complete **Last Updated:** 2026-03-27 **Author:** Mitchell
+**Status:** Draft v0.1 — LanceDB Evaluation Complete **Last Updated:** 2026-04-29 **Author:** Mitchell
 
 ---
 
@@ -184,16 +184,20 @@ The LanceDB API surface is minimal enough that sqlite-vec could be a drop-in rep
 
 ### Change Detection
 
-- File hashes stored in `rag_file_hashes.json` in the project data directory
-- On re-index, files with unchanged hashes are skipped entirely
-- Schema version changes trigger a full re-index (drop and recreate table)
-- Force flag available for manual full re-index
+- File state is stored in SQLite (`index_state`) under `.yard/yard.db`, not in a separate `rag_file_hashes.json` cache
+- On re-index, files with unchanged content hashes are skipped unless a full rebuild is requested
+- The code vector store lives under `.yard/lancedb/code`
+- The structural graph index is rebuilt into `.yard/graph.db`
+- The indexer records previous/current git revisions and whether the worktree was dirty
+- A project-level lock prevents concurrent index runs for the same project
+- Local LLM service readiness is checked before indexing; `local_services.mode` decides whether missing required services produce remediation only (`manual`/`off`) or are started automatically (`auto`)
 
 ### Indexing Triggers for sodoryard
 
-- **Full index:** on `yard init` or first run against a project
-- **Incremental index:** via `yard index` without `--force`; file-hash change detection decides what gets re-parsed and re-embedded
-- **Manual re-index:** via `yard index`
+- **First/full index:** `yard index --full` or the first run against a project
+- **Incremental index:** `yard index`; SQLite file-state change detection decides what gets re-parsed and re-embedded
+- **Machine-readable run:** `yard index --json`
+- **Quiet run:** `yard index --quiet`
 - **No startup or conversation auto-reindex today:** `serve` does not trigger indexing, so operators should run `yard index` explicitly before expecting fresh retrieval
 
 ---
@@ -289,7 +293,7 @@ From `internal/graph/`:
 
 ## What's Net-New for sodoryard
 
-- **Incremental indexing via git-aware/manual change detection** (incremental runs happen when `yard index` is invoked without `--force`)
+- **Incremental indexing via git-aware/manual change detection** (incremental runs happen when `yard index` is invoked without `--full`)
 - **Explicit operator-controlled indexing before `serve`**
 - **Turn-aware search** (replacing work-order-aware search with conversational query extraction)
 - **Combined RAG + graph queries** driven by the context assembly turn analyzer

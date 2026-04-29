@@ -1,7 +1,7 @@
 # 02 — Tech Stack Decisions
 
 **Status:** Draft v0.1
-**Last Updated:** 2026-03-27
+**Last Updated:** 2026-04-29
 **Author:** Mitchell
 
 ---
@@ -35,7 +35,7 @@ Each decision records what was chosen, what alternatives were considered, and wh
 
 **Rationale:**
 - Tree-sitter (code parsing) requires CGo bindings. There is no pure-Go equivalent with comparable quality. This is non-negotiable.
-- LanceDB (vector store, pending evaluation) also uses CGo. Since CGo is already required for tree-sitter, LanceDB's CGo dependency is not an incremental cost.
+- LanceDB (vector store) also uses CGo. Since CGo is already required for tree-sitter, LanceDB's CGo dependency is not an incremental cost.
 - Cross-compilation is not a concern. This builds and runs on one machine.
 
 **Implications:**
@@ -66,18 +66,19 @@ Each decision records what was chosen, what alternatives were considered, and wh
 
 ---
 
-## Vector Store: LanceDB (Pending Evaluation)
+## Vector Store: LanceDB
 
-**Decision:** Carry forward LanceDB from topham, contingent on evaluation of retrieval quality.
+**Decision:** Use LanceDB for derived vector indexes.
 
-**Status:** ⚠️ PENDING — Must evaluate before committing.
+**Status:** Implemented for both code and brain semantic retrieval.
 
 **What we know:**
-- LanceDB is integrated in topham via CGo bindings.
-- It stores code chunk embeddings and supports similarity search.
-- It has never been evaluated for retrieval quality in practice. The indexer was run but output quality was never assessed.
+- LanceDB is integrated via CGo bindings.
+- Code semantic chunks are stored under `.yard/lancedb/code`.
+- Brain semantic chunks are stored under `.yard/lancedb/brain`.
+- Both stores support similarity search through the runtime searcher layer.
 
-**Evaluation criteria:**
+**Ongoing evaluation criteria:**
 - Given a natural language query ("auth middleware", "how does routing work"), does it return the right code chunks?
 - Are the chunks well-formed (complete functions, not arbitrary text splits)?
 - Is the ranking sensible (most relevant first)?
@@ -88,7 +89,7 @@ Each decision records what was chosen, what alternatives were considered, and wh
 - **pgvector:** Known to be good, but requires running PostgreSQL. Significant operational overhead for a local tool. Last resort.
 - **Brute-force cosine similarity in SQLite:** Store embeddings as BLOBs, compute distance in Go. At codebase scale this might be fast enough. Simplest possible approach.
 
-**Action item:** Audit topham's LanceDB integration code, indexing pipeline, and chunking strategy. Run test queries against an indexed project. Evaluate before proceeding with Layer 1 implementation.
+**Operational note:** Retrieval quality still needs continued validation with real indexed projects, but the architectural decision is no longer pending.
 
 ---
 

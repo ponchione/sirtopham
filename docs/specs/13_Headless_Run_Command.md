@@ -1,6 +1,6 @@
 # 13 — Headless Run Command
 
-**Status:** Draft v0.1 **Last Updated:** 2026-04-11 **Author:** Mitchell
+**Status:** Draft v0.1 **Last Updated:** 2026-04-29 **Author:** Mitchell
 
 ---
 
@@ -127,8 +127,8 @@ agent_roles:
     brain_write_paths:
       - "specs/**"
       - "architecture/**"
-      - "receipts/arbiter/**"
-      - "logs/arbiter/**"
+      - "receipts/docs-arbiter/**"
+      - "logs/docs-arbiter/**"
     max_turns: 20
     max_tokens: 200000
 
@@ -155,9 +155,13 @@ The `tools` list maps to existing registration functions:
 |---|---|---|
 | `brain` | `brain_search`, `brain_read`, `brain_write`, `brain_update`, `brain_lint` | mixed |
 | `file` | `file_read`, `file_write`, `file_edit` | mixed |
+| `file:read` | `file_read` | pure |
 | `git` | `git_status`, `git_diff` | pure |
 | `shell` | `shell` | mutating |
 | `search` | `search_text`, `search_semantic` | pure |
+| `directory` | `list_directory`, `find_files` | pure |
+| `test` | `test_run` | mutating |
+| `sqlc` | `db_sqlc` | mutating |
 
 ### Brain Path Enforcement
 
@@ -165,7 +169,7 @@ When `brain_write_paths` is configured, `BrainWrite.Execute` and `BrainUpdate.Ex
 
 When `brain_deny_paths` is configured, those paths are blocked even if they match an allow pattern. Deny takes precedence over allow.
 
-Brain read operations (`brain_read`, `brain_search`, `brain_list`) are never restricted — every agent can read the full brain. The context bias firewall is achieved through *what the system prompt tells the agent to focus on*, not by hiding information.
+Brain read operations (`brain_read`, `brain_search`) are never restricted — every agent can read the full brain. `brain_lint` can inspect the full brain, but may become mutating when operation logging is enabled and requires explicit `allow_model_calls: true` before running contradiction checks. The context bias firewall is achieved through *what the system prompt tells the agent to focus on*, not by hiding information.
 
 ---
 

@@ -1,6 +1,6 @@
 # 08 — Data Model
 
-**Status:** Draft v0.1 **Last Updated:** 2026-03-28 **Author:** Mitchell
+**Status:** Draft v0.1 **Last Updated:** 2026-04-29 **Author:** Mitchell
 
 ---
 
@@ -381,7 +381,7 @@ CREATE INDEX idx_context_reports_quality
 
 ### brain_documents
 
-Derived index of Obsidian vault content. Rebuilt from vault on startup, updated incrementally on agent writes and developer edits.
+Derived index of brain vault content. Rebuilt from the vault by `yard brain index`. Agent writes through `brain_write` and `brain_update` mark the derived brain index stale; they do not promise immediate semantic/graph refresh. Developer edits also require an explicit `yard brain index` before derived metadata should be assumed fresh.
 
 ```sql
 CREATE TABLE brain_documents (
@@ -422,6 +422,10 @@ CREATE TABLE brain_links (
 CREATE INDEX idx_brain_links_source ON brain_links(project_id, source_path);
 CREATE INDEX idx_brain_links_target ON brain_links(project_id, target_path);
 ```
+
+### Chain Orchestrator Tables
+
+The chain orchestrator owns additional `chains`, `steps`, and `events` tables in the same `.yard/yard.db` database. Their schema changes more frequently with orchestration behavior and is specified in [[15-chain-orchestrator]], including `steps.task_context`, `events.step_output`, and event timestamp indexes.
 
 ### index_state
 

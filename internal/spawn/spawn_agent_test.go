@@ -74,6 +74,13 @@ Done.
 	if len(gotArgs) == 0 || gotArgs[0] != "run" || !strings.Contains(joinedArgs, "--receipt-path receipts/coder/"+chainID+"-step-001.md") {
 		t.Fatalf("unexpected args: %v", gotArgs)
 	}
+	gotTask := argValue(gotArgs, "--task")
+	if !strings.Contains(gotTask, "do work") ||
+		!strings.Contains(gotTask, "Chain ID: "+chainID) ||
+		!strings.Contains(gotTask, "Step number: 1") ||
+		!strings.Contains(gotTask, "Receipt path: receipts/coder/"+chainID+"-step-001.md") {
+		t.Fatalf("spawn task missing harness context: %q", gotTask)
+	}
 	if strings.Contains(joinedArgs, "--quiet") {
 		t.Fatalf("spawn args unexpectedly include --quiet: %v", gotArgs)
 	}
@@ -264,6 +271,15 @@ func TestSpawnAgentFailsWhenReceiptMissing(t *testing.T) {
 	if len(steps) != 1 || steps[0].Status != "failed" {
 		t.Fatalf("unexpected failed step: %+v", steps)
 	}
+}
+
+func argValue(args []string, name string) string {
+	for i := 0; i < len(args)-1; i++ {
+		if args[i] == name {
+			return args[i+1]
+		}
+	}
+	return ""
 }
 
 func TestSpawnAgentRejectsStepLimit(t *testing.T) {

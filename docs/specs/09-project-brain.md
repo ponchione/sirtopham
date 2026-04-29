@@ -1,10 +1,10 @@
 # 09 — Project Brain
 
-**Status:** Draft, carried into v0.2 scoping **Last Updated:** 2026-04-07 **Author:** Mitchell
+**Status:** Draft, carried into v0.2 scoping **Last Updated:** 2026-04-29 **Author:** Mitchell
 
 Note: portions of this draft still describe the pre-MCP Obsidian Local REST design. The implemented runtime has since moved to an MCP-backed vault backend; treat REST-specific details here as historical planning context, not the current supported path.
 
-Current phase note: v0.1 shipped the brain as reactive tools only. The first v0.2 slice is now landed: context assembly performs proactive keyword-backed brain retrieval against the MCP/vault backend, budget fitting has a real brain tier, serialization/reporting expose those hits, reserve/estimate/reconcile token-budget reporting is visible on the context report surface, and a maintained live validation package now exists. The current product/runtime decision is explicit: keyword-backed MCP/vault retrieval is the supported operator-facing path for now, while semantic/index-backed brain retrieval remains future work unless code and validation land for it. The maintained live proofs now cover three prompt families: fact canary, rationale/decision notes, and prior-debugging/history notes.
+Current phase note: v0.1 shipped the brain as reactive tools only. The v0.2 runtime now includes proactive brain retrieval in context assembly, a dedicated brain budget tier, context-report visibility, explicit `yard brain index`, relational brain metadata, a semantic LanceDB brain index, and hybrid keyword/semantic/graph search when the runtime searcher is available. The maintained live proofs cover fact canaries, rationale/decision notes, convention/policy notes, and prior-debugging/history notes.
 
 ---
 
@@ -44,7 +44,7 @@ The brain is not a feature bolted onto sodoryard. It's a first-class component w
 
 ### Integration Model
 
-Historical-design note: the diagram below still contains older REST/indexer boxes to preserve planning context, but the live runtime path today is narrower: MCP/vault-backed keyword retrieval and tool access are real; the semantic/indexer pieces shown here are future-facing unless separately landed.
+Historical-design note: the diagram below still contains older REST boxes to preserve planning context, but the live runtime path today is MCP/vault-backed tool access plus derived SQLite/LanceDB brain indexes rebuilt by `yard brain index`.
 
 Obsidian runs alongside sodoryard as the human-facing vault UI, but the implemented runtime path is now the in-process MCP-backed vault backend. sodoryard talks to the vault through `internal/brain/mcpclient` and MCP `vault_*` tools rather than the older Obsidian Local REST API design.
 
@@ -198,46 +198,37 @@ There is no size limit on the vault. No document count limit. No enforced struct
 
 ## Retrieval
 
-Current runtime truth is intentionally narrower than earlier drafts implied.
+The current runtime has two coordinated brain retrieval paths:
 
-### What is live today
+- **MCP/vault-backed lexical search:** `brain_search` keyword mode and context assembly can query the vault source of truth directly.
+- **Derived hybrid search:** when the runtime has a brain searcher, semantic and auto modes merge keyword hits, LanceDB semantic chunks, and optional graph/backlink hops from derived brain metadata.
 
-Brain retrieval currently has one real operator-facing path:
-- MCP/vault-backed keyword search for both `brain_search` and proactive context assembly retrieval
-- post-hoc tag filtering in `brain_search`
-- `_log.md` operational notes excluded from proactive context and tool search results
-- analyzer/query shaping that can emit brain-oriented signals such as `brain_intent` / `brain_seeking_intent`, plus stopword-stripped fallback keyword queries for weak long-form prompts
+`_log.md` operational notes are excluded from proactive context and tool search results so they do not compete with durable knowledge notes. `brain_search` also supports post-hoc tag filtering. The turn analyzer can emit brain-oriented signals such as `brain_intent` and `brain_seeking_intent`, plus stopword-stripped fallback keyword queries for weak long-form prompts.
 
-This is the primary retrieval mode for structured knowledge with clear textual anchors.
+### Search Modes
 
-### What is not live yet
+- `keyword`: deterministic lexical search through the configured MCP/vault backend. This is the tool default when `mode` is omitted.
+- `semantic`: runtime search over the derived brain semantic index when available. If a runtime searcher is unavailable, the tool reports that limitation and falls back to keyword search.
+- `auto`: hybrid runtime search that can combine keyword, semantic, and derived graph/backlink signals.
 
-The following ideas still belong to future-facing design, not current operator expectations:
-- semantic/vector-backed brain retrieval via a separate LanceDB collection
-- wikilink/backlink graph traversal as a live retrieval source
-- automatic brain indexing pipelines beyond the current MCP/vault-backed keyword path
-
-Those may still be worthwhile v0.2+ work, but the docs should not imply they are already part of the runtime contract.
+Context assembly may use its own hybrid retrieval path even though the explicit `brain_search` tool defaults to `keyword`.
 
 ---
 
 ## Indexing
 
-Historical/future-design note: this section describes the older planned indexing model, not the current operator-facing runtime contract. Today the live brain path is MCP/vault-backed keyword retrieval; the vector/graph indexing story below remains reserved future work unless code and validation land for it.
+Brain notes remain source-of-truth files in the configured vault (`.brain/` by default). `yard brain index` rebuilds derived metadata from that vault:
 
-### MCP/vault backend handles the live keyword path
+- scans vault documents and computes content hashes
+- parses frontmatter, titles, tags, and wikilinks
+- rebuilds relational metadata in SQLite (`brain_documents`, `brain_links`)
+- chunks note content, embeds chunks, and writes semantic vectors to `.yard/lancedb/brain`
+- deletes semantic chunks for notes that were removed
+- marks the brain index state fresh on success
 
-The current operator-facing brain path is MCP/vault-backed keyword retrieval. sodoryard does not currently promise a separate live FTS/vector/graph indexing pipeline for brain content.
+Agent mutations through `brain_write` and `brain_update` mark the derived brain index stale with reason `brain_write` or `brain_update`. Operators refresh derived metadata and semantic chunks by running `yard brain index` again. Developer edits outside the agent path likewise require an explicit index run before semantic/graph retrieval should be assumed fresh.
 
-### Future brain-index work remains future work
-
-If semantic/vector-backed brain retrieval is added later, it should be described as a derived layer under the vault source of truth. That future work may include:
-
-**On explicit future indexing runs:** Scan the vault directory, compute content hashes, re-embed changed notes, parse wikilinks, and extract frontmatter/tags.
-
-**On agent write:** Any immediate vector/graph refresh guarantees should only be documented once they actually exist.
-
-**On developer edit:** Any startup or periodic refresh behavior should only be documented once it is implemented and validated.
+The web/API project metadata exposes brain index state as `brain_index.status`, `last_indexed_at`, `stale_since`, and `stale_reason`. Expected statuses are `never_indexed`, `fresh`, and `stale`.
 
 ### Chunking Strategy
 
@@ -257,21 +248,21 @@ These tables live in the main sodoryard SQLite database alongside conversation a
 
 ## Tools
 
-Four tools for the agent. All project-scoped — they operate on the current project's brain vault via the MCP/vault backend.
+Five tools for the agent. All project-scoped — they operate on the current project's brain vault via the MCP/vault backend and, where noted, the derived brain index.
 
 ### brain_search
 
-Search the brain by keyword query. Returns document titles, paths, and relevant snippets. Semantic/index-backed search is still future work unless the runtime explicitly grows that path.
+Search the brain by query. Returns document titles, paths, relevant snippets, match source information when available, tags, and derived relationship context.
 
-**Purity:** Pure (read-only)
+**Purity:** Pure when query logging is disabled; mutating when `brain.log_brain_queries` appends an operation note.
 
 **Parameters:**
 - `query` (string, required): The search query
-- `mode` (string, optional): currently `keyword` is the only implemented runtime behavior; older `semantic` / `auto` wording in this draft should be treated as future-facing design, not a guaranteed live contract
+- `mode` (string, optional): `keyword`, `semantic`, or `auto`; default is `keyword`
 - `tags` ([]string, optional): Filter by tags
 - `max_results` (int, optional): Maximum results to return (default 10)
 
-**Returns:** Ranked list of matches with: document path, title, relevant snippet, match score, tags, linked documents.
+**Returns:** Ranked list of matches with: document path, title, relevant snippet, match score/source when available, tags, linked documents.
 
 ### brain_read
 
@@ -297,7 +288,7 @@ Create a new document or overwrite an existing one. The agent writes Obsidian-na
 
 **Behavior:**
 - Creates or overwrites the file through the MCP/vault backend
-- Any future index/graph refresh behavior should be documented separately when it actually exists
+- Marks the derived brain index stale after successful mutation
 - Returns confirmation with the document path
 
 ### brain_update
@@ -314,16 +305,33 @@ Append to or edit a section of an existing document. More surgical than full ove
 
 **Behavior:**
 - Reads the current document, applies the operation, and writes back through the MCP/vault backend
-- Any future vector/graph refresh behavior should be documented separately when it actually exists
+- Marks the derived brain index stale after successful mutation
 - Returns the updated document content
+
+### brain_lint
+
+Lint the brain for structural and curation issues.
+
+**Purity:** Mutating when operation logging is enabled; otherwise read-only in effect.
+
+**Parameters:**
+- `scope` (string, optional): Scope to inspect; defaults to `full`
+- `checks` ([]string, optional): Subset of checks: `orphans`, `dead_links`, `stale_references`, `missing_pages`, `contradictions`, `tag_hygiene`
+- `allow_model_calls` (bool, optional): Required for `contradictions`
+
+**Behavior:**
+- Loads the scoped documents through the MCP/vault backend
+- Runs deterministic hygiene checks locally
+- Runs contradiction checks only when explicitly allowed because they can call the configured provider
+- Returns a markdown lint report suitable for receipts or operator review
 
 ---
 
 ## v0.2 Integration with Context Assembly
 
-This section is no longer just distant future direction; the first runtime slice is already live. In v0.1, the brain was reactive-only and accessed through Layer 4 brain tools. In current v0.2 runtime, context assembly already performs proactive keyword retrieval from the MCP/vault backend and reports those results through the inspector/context-report path.
+This section is no longer just distant future direction. In v0.1, the brain was reactive-only and accessed through Layer 4 brain tools. In current v0.2 runtime, context assembly performs proactive brain retrieval and reports those results through the inspector/context-report path.
 
-The current runtime answer is: proactive brain retrieval is sourced directly from the MCP/vault backend, keyword-only. Operational brain log notes like `_log.md` are now excluded from proactive context so they do not compete with real knowledge notes. The still-open product/runtime contract question is whether semantic/index-backed retrieval should join that path in v0.2 or stay future work. The code/docs should keep telling the current operator truth until a broader path is actually landed.
+The current runtime answer is: proactive brain retrieval starts from the MCP/vault backend and can be enriched by the derived semantic/graph index after `yard brain index`. Operational brain log notes like `_log.md` are excluded from proactive context so they do not compete with real knowledge notes.
 
 ### How Brain Queries Are Derived
 
@@ -338,8 +346,9 @@ Today the flow is roughly:
 - User says "have we seen a vite rebuild loop before? what was the fix?" → analyzer emits a `brain_seeking_intent` signal (`value: "history"`) on a narrow prior-debugging/history phrase set (`have we seen`, `have we hit`, `have we debugged`, `have we fixed`, `what was the fix`, `what was the workaround`, `what was the root cause`, `did we ever fix`, `did we already fix`, `prior debugging`, `past debugging`, `previously debugged`). Bare `did we` and bare `what was` are deliberately excluded because they collide with the rationale family, arbitrary past-tense questions, and debug prompts like `what was null here`. Only the first brain-seeking family to match a turn emits a signal, so a prompt that combines rationale + convention + history phrases still emits exactly one `brain_seeking_intent` — the precedence order is: explicit `brain_intent` → `rationale` → `convention` → `history`.
 
 So the current operator truth is:
-- the existing signal/query path is good enough to make proactive keyword-backed brain retrieval work for explicit brain prompts and all three non-explicit families (rationale/decision, convention/policy, prior-debugging/history)
-- tag/semantic/wikilink-aware brain query expansion remains future work unless explicitly landed later
+- the existing signal/query path makes proactive brain retrieval work for explicit brain prompts and all three non-explicit families (rationale/decision, convention/policy, prior-debugging/history)
+- semantic and graph enrichment are derived-index features; they require a fresh `yard brain index` and a runtime searcher
+- richer tag-aware query expansion remains future work unless explicitly landed later
 
 ### Budget Fitting Priority
 
@@ -448,15 +457,18 @@ Current runtime uses the project brain vault plus the MCP/vault backend. The min
 ```yaml
 brain:
   enabled: true
-  vault_path: ~/obsidian-vaults/sodoryard-brain
+  vault_path: .brain
   log_brain_queries: true
+  include_graph_hops: true
+  graph_hop_depth: 1
 ```
 
 Notes:
 - `vault_path` is the source of truth for the brain content the tools and proactive retrieval operate on
 - `log_brain_queries` gates both reactive `brain_search` trace logging and proactive brain-query debug logging
+- `include_graph_hops` and `graph_hop_depth` control derived link/backlink expansion when a runtime searcher is available
 - older REST-specific fields in historical drafts (`obsidian_api_url`, `obsidian_api_key`) should be treated as pre-MCP design baggage unless/until they are reintroduced intentionally
-- future semantic/index-backed brain settings should stay documented as reserved or experimental until the runtime actually uses them
+- semantic index storage is derived from `yard brain index` and lives under `.yard/lancedb/brain`
 
 ---
 
@@ -518,7 +530,7 @@ Separate collection `brain_chunks` in the same LanceDB instance as code:
 
 ## Differences from Existing Components
 
-**Brain vs. Code RAG ([[04-code-intelligence-and-rag]]):** Code RAG indexes source code — function bodies, type definitions, file structures. The brain stores knowledge *about* code — why things are the way they are, how systems relate, what to watch out for. Today the code path is semantic/vector-backed while the brain path is keyword-backed through the MCP/vault backend; that asymmetry is intentional until a broader brain retrieval path is actually implemented.
+**Brain vs. Code RAG ([[04-code-intelligence-and-rag]]):** Code RAG indexes source code — function bodies, type definitions, file structures. The brain stores knowledge *about* code — why things are the way they are, how systems relate, what to watch out for. Both code and brain now have semantic/vector-backed derived indexes, but the brain keeps the vault files as the source of truth and can always fall back to MCP/vault-backed keyword retrieval.
 
 **Brain vs. Convention Extractor:** The convention extractor derives patterns mechanically from code analysis — "tests use `_test.go` suffix." The brain stores conventions that require judgment — "we don't use go-git because of index desync issues." They're complementary. The extractor tells you *what patterns exist*. The brain tells you *why certain patterns are followed* and *what patterns to avoid*.
 
@@ -559,9 +571,9 @@ Separate collection `brain_chunks` in the same LanceDB instance as code:
 
 **v0.1 (foundation):** Brain tools were reactive-only. The agent could `brain_read`, `brain_write`, `brain_update`, and `brain_search`, but context assembly did not proactively include brain content.
 
-**Current v0.2 state:** MCP/vault-backed proactive keyword retrieval is live in context assembly. Brain hits have an explicit budget tier, serialize into a Project Brain section, persist in context reports, and now have a dedicated ordered signal-flow endpoint at `/api/metrics/conversation/:id/context/:turn/signals`.
+**Current v0.2 state:** MCP/vault-backed proactive retrieval is live in context assembly. Derived relational metadata and semantic chunks are rebuilt by `yard brain index`; runtime search can merge keyword, semantic, and graph/backlink results. Brain hits have an explicit budget tier, serialize into a Project Brain section, persist in context reports, and have a dedicated ordered signal-flow endpoint at `/api/metrics/conversation/:id/context/:turn/signals`.
 
-**Remaining v0.2 work:** Decide whether semantic/index-backed brain retrieval becomes real runtime behavior, package a repeatable live validation recipe, and keep query shaping/observability aligned with what the runtime actually does.
+**Remaining v0.2 work:** Package a repeatable live validation recipe, keep query shaping/observability aligned with what the runtime actually does, and tune semantic-vs-keyword ranking quality.
 
 **v0.3+ ideas:** Obsidian URI links from the web UI, session summary proposals, richer brain-aware quality metrics, cross-project queries, and templated brain documents remain future-facing design rather than committed runtime behavior.
 
@@ -569,11 +581,10 @@ Separate collection `brain_chunks` in the same LanceDB instance as code:
 
 ## Open Questions
 
-- **Semantic/index-backed brain retrieval:** Should v0.2 stop at MCP/vault keyword search, or should a separate semantic/index-backed brain path become part of the real runtime contract?
-- **Embedding model for prose vs code:** If semantic brain retrieval is added later, would a general-purpose embedding model outperform the current code-oriented defaults for prose-heavy notes?
-- **Brain document size limits for future indexing:** Very long brain documents (5000+ words) would need chunking for effective embedding if index-backed retrieval becomes real.
+- **Embedding model for prose vs code:** Would a general-purpose embedding model outperform the current code-oriented defaults for prose-heavy notes?
+- **Brain document size limits:** Very long brain documents (5000+ words) may need chunking beyond heading boundaries for effective embedding.
 - **Conflict resolution:** If the agent writes a brain document while the developer has the same file open in Obsidian, what exact UX does the current vault workflow produce? Worth verifying directly.
-- **Brain search latency in context assembly:** Current keyword-backed proactive brain retrieval is cheap, but any future semantic/index path should still be validated against the context-assembly latency budget.
+- **Brain search latency in context assembly:** Hybrid retrieval should stay within the context-assembly latency budget.
 
 ---
 

@@ -2,7 +2,7 @@
 
 **Phase:** 8 — CLI consolidation
 **Status:** approved design, ready for implementation planning
-**Date:** 2026-04-12
+**Date:** 2026-04-29
 
 ---
 
@@ -82,6 +82,18 @@ yard [--config yard.yaml]
 Every retained operator-facing subcommand preserves its existing flags and arguments exactly. Compatibility-only install/substitution flows do not survive the no-legacy cleanup.
 
 Commands that currently take `configPath *string` as a constructor argument will receive it from the root persistent flag instead.
+
+### 3.4 Current command-specific flags
+
+- `yard index`: `--full` forces a full code-index rebuild, `--json` emits machine-readable results, and `--quiet` suppresses the human summary.
+- `yard brain index`: rebuilds brain relational metadata and semantic chunks from the configured vault.
+- `yard llm status`: accepts `--json` and reports Docker, Compose, network, service health, problems, and remediation.
+- `yard llm up`: ensures required services are healthy according to `local_services.mode`; `auto` may create networks and run `docker compose up -d`, while `manual` reports remediation.
+- `yard llm down`: runs compose down for the configured stack.
+- `yard llm logs`: accepts `--tail` for recent compose logs.
+- `yard chain start`: accepts `--watch` and `--verbosity normal|debug`; it prints the chain ID to stdout immediately and streams progress to stderr when watch is enabled.
+- `yard chain logs`: supports following a running chain and uses the same verbosity model as `chain start`.
+- `yard chain status`: without a chain ID lists recent chains; with a chain ID shows chain and step detail.
 
 ## 4. Architecture
 

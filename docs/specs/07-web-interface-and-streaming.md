@@ -1,7 +1,7 @@
 # 07 — Web Interface & Streaming Protocol
 
 **Status:** Living spec — aligned with the current Layer 6 v0.1 contract
-**Last Updated:** 2026-03-29
+**Last Updated:** 2026-04-29
 **Author:** Mitchell
 
 ---
@@ -119,21 +119,30 @@ GET    /api/conversations/:id/messages Get messages for conversation
 DELETE /api/conversations/:id          Delete conversation
 GET    /api/conversations/search?q=... Search conversations via FTS5
 
-GET    /api/project                    Project metadata (id, name, root_path, language, last indexed info)
+GET    /api/health                     Process health probe; returns {"status":"ok"}
+
+GET    /api/project                    Project metadata (id, name, root_path, language, last indexed info, brain_index)
 GET    /api/project/tree               File tree
 GET    /api/project/file?path=...      Plain-text file contents plus path/language metadata
 
 GET    /api/config                     Current UI-relevant runtime config
-PUT    /api/config                     Update mutable runtime config (v0.1: default provider/model)
-GET    /api/providers                  Configured providers and available models
+PUT    /api/config                     Update mutable runtime config (current runtime default override is locked to codex/gpt-5.5)
+GET    /api/providers                  Configured providers, health, auth summaries, and available models
 GET    /api/auth/providers             Provider auth/status diagnostics for operator-facing surfaces
 
-GET    /api/metrics/conversation/:id              Per-conversation token/tool/context metrics
+GET    /api/metrics/conversation/:id              Per-conversation token/tool/context metrics plus last_turn
 GET    /api/metrics/conversation/:id/context/:turn ContextAssemblyReport for a specific turn
 GET    /api/metrics/conversation/:id/context/:turn/signals Ordered signal-flow stream for a specific turn
 
 WS     /api/ws                         WebSocket for streaming
 ```
+
+### REST Payload Notes
+
+- `/api/project` includes `brain_index` when available: `status`, `last_indexed_at`, `stale_since`, and `stale_reason`.
+- `/api/providers` returns one entry per configured provider with `name`, `type`, `status`, `healthy`, optional `last_error`, `models`, and optional structured `auth`.
+- `/api/auth/providers` returns the same health/auth diagnostic shape without model lists.
+- `/api/metrics/conversation/:id` includes `last_turn` with the most recent turn number, iteration count, input/output tokens, and latency.
 
 ---
 

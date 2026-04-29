@@ -1,12 +1,12 @@
 # 06 — Context Assembly
 
-**Status:** Draft, v0.1 implemented and first v0.2 brain retrieval slice landed **Last Updated:** 2026-04-07 **Author:** Mitchell
+**Status:** Draft, v0.1 implemented and first v0.2 brain retrieval slice landed **Last Updated:** 2026-04-29 **Author:** Mitchell
 
 ---
 
 ## Overview
 
-Context assembly is the implementation of sodoryard's core thesis: programmatic, task-specific, minimal context beats static context files. Every turn, before the first LLM call, the system examines the user's message and recent conversation history, retrieves relevant code and project knowledge via code RAG, explicit file reads, structural analysis, project-brain retrieval, conventions, and git context, and packages it within the available token budget. The project brain was intentionally reactive-only in v0.1; the first v0.2 slice now wires proactive keyword-backed brain retrieval into this layer, with broader semantic/graph brain work still deferred.
+Context assembly is the implementation of sodoryard's core thesis: programmatic, task-specific, minimal context beats static context files. Every turn, before the first LLM call, the system examines the user's message and recent conversation history, retrieves relevant code and project knowledge via code RAG, explicit file reads, structural analysis, project-brain retrieval, conventions, and git context, and packages it within the available token budget. The project brain was intentionally reactive-only in v0.1; the v0.2 runtime now wires proactive brain retrieval into this layer, with derived keyword, semantic, and graph/backlink signals available when the brain index is fresh and the runtime searcher is present.
 
 This is what makes sodoryard "understand" the codebase. Get this right and the agent feels like a senior engineer who's read every file. Get it wrong and it's just another chatbot.
 
@@ -382,7 +382,7 @@ func (s *AuthService) GenerateToken(user *User) (string, error) {
 
 ### Format Principles
 
-**Current runtime includes proactive brain content.** Project-brain documents can now be serialized into assembled context through the MCP/vault-backed proactive keyword retrieval path. The current operator truth is intentionally narrow: brain hits are keyword-backed, `_log.md` operational notes are filtered, and broader semantic/index-backed brain retrieval is still future work unless it is explicitly landed.
+**Current runtime includes proactive brain content.** Project-brain documents can now be serialized into assembled context through the MCP/vault-backed retrieval path, enriched by the derived semantic/graph brain index when available. `_log.md` operational notes are filtered so operational trace noise does not displace durable knowledge.
 
 **File path + line range as headers.** The LLM needs exact paths to make correct tool calls later (`file_read`, `file_edit` require paths and line ranges).
 

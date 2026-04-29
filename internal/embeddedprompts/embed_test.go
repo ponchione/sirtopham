@@ -3,6 +3,7 @@ package embeddedprompts
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -65,6 +66,21 @@ func TestEmbeddedPromptsMatchRepoRootAgents(t *testing.T) {
 		}
 		if embedded != string(data) {
 			t.Fatalf("embedded prompt %q does not match %s", role, repoPath)
+		}
+	}
+}
+
+func TestEmbeddedPromptsUseRuntimeToolNamesAndCleanMarkdown(t *testing.T) {
+	for role := range roleToAsset {
+		content, ok := Get(role)
+		if !ok {
+			t.Fatalf("Get(%q) ok = false", role)
+		}
+		if !strings.HasPrefix(content, "# ") {
+			t.Fatalf("prompt %q starts with %q, want markdown heading", role, content[:min(len(content), 20)])
+		}
+		if strings.Contains(content, "spawn_engine") {
+			t.Fatalf("prompt %q references obsolete spawn_engine tool name", role)
 		}
 	}
 }

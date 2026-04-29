@@ -112,6 +112,7 @@ func (t *SpawnAgentTool) Execute(ctx context.Context, projectRoot string, raw js
 	}
 	seq := len(steps) + 1
 	receiptPath := receipt.StepPath(in.Role, t.ChainID, seq)
+	task := taskWithHarnessContext(in.Task, t.ChainID, seq, receiptPath)
 	stepID, err := t.Store.StartStep(ctx, chain.StepSpec{ChainID: t.ChainID, SequenceNum: seq, Role: in.Role, Task: in.Task, TaskContext: in.TaskContext})
 	if err != nil {
 		return nil, fmt.Errorf("spawn_agent: create step: %w", err)
@@ -125,7 +126,7 @@ func (t *SpawnAgentTool) Execute(ctx context.Context, projectRoot string, raw js
 	agentTimeout := resolveAgentRunTimeout(roleCfg)
 	res := t.runCommand(ctx, RunCommandInput{
 		Name:   t.EngineBinary,
-		Args:   []string{"run", "--config", appconfig.ConfigFilename, "--role", in.Role, "--task", in.Task, "--chain-id", t.ChainID, "--receipt-path", receiptPath, "--timeout", agentTimeout.String()},
+		Args:   []string{"run", "--config", appconfig.ConfigFilename, "--role", in.Role, "--task", task, "--chain-id", t.ChainID, "--receipt-path", receiptPath, "--timeout", agentTimeout.String()},
 		Stdout: &stdout,
 		Stderr: &stderr,
 		OnStdoutLine: func(line string) {
@@ -244,3 +245,14 @@ func infrastructureExitCode(code int) bool {
 }
 
 func intPtr(v int) *int { return &v }
+
+func taskWithHarnessContext(task string, chainID string, step int, receiptPath string) string {
+	return fmt.Sprintf(`%s
+
+Harness context:
+- Chain ID: %s
+- Step number: %d
+- Receipt path: %s
+
+Before finishing, write your receipt to the exact brain path above. If you cannot complete the task, still write the receipt there with the appropriate verdict and concerns.`, strings.TrimSpace(task), chainID, step, receiptPath)
+}

@@ -1,6 +1,6 @@
 # 15 — Chain Orchestrator (SirTopham)
 
-**Status:** Draft v0.1 **Last Updated:** 2026-04-11 **Author:** Mitchell
+**Status:** Draft v0.1 **Last Updated:** 2026-04-29 **Author:** Mitchell
 
 **Note:** Project names (SirTopham, Tidmouth, Knapford, engine aliases) are working titles subject to renaming. The architecture is name-agnostic.
 
@@ -197,7 +197,9 @@ CREATE TABLE IF NOT EXISTS chains (
     source_specs        TEXT,           -- JSON array of spec paths
     source_task         TEXT,           -- free-form task if not spec-driven
     status              TEXT NOT NULL DEFAULT 'running',
-                                        -- running, paused, completed, failed, cancelled
+                                        -- running, pause_requested, paused,
+                                        -- cancel_requested, completed, partial,
+                                        -- failed, cancelled
     summary             TEXT,
     total_steps         INTEGER NOT NULL DEFAULT 0,
     total_tokens        INTEGER NOT NULL DEFAULT 0,
@@ -227,6 +229,7 @@ CREATE TABLE IF NOT EXISTS steps (
     sequence_num        INTEGER NOT NULL,
     role                TEXT NOT NULL,       -- engine role (e.g., 'thomas', 'percy')
     task                TEXT NOT NULL,       -- task given to the engine
+    task_context        TEXT,                -- optional resolver-loop grouping key
     status              TEXT NOT NULL DEFAULT 'pending',
                                              -- pending, running, completed, failed
     verdict             TEXT,                -- from receipt frontmatter
@@ -260,23 +263,25 @@ CREATE TABLE IF NOT EXISTS events (
 );
 
 CREATE INDEX IF NOT EXISTS idx_events_chain ON events(chain_id);
+CREATE INDEX IF NOT EXISTS idx_events_created ON events(created_at);
 ```
 
 ### Event Types
 
 | Event Type | When | Data |
 |---|---|---|
-| `chain_started` | Chain begins | specs, limits |
-| `step_started` | Engine spawned | role, task |
+| `chain_started` | Chain begins | specs, limits, `orchestrator_pid`, `execution_id`, `active_execution`, optional `resumed_by`/`continued_by` |
+| `step_started` | Engine spawned | role, task, optional `task_context` |
+| `step_output` | Spawned engine emitted stdout/stderr | stream, line |
 | `step_completed` | Engine exited | verdict, metrics |
 | `step_failed` | Engine errored | error, exit code |
 | `reindex_started` | Reindex triggered | trigger (before/after which role) |
 | `reindex_completed` | Reindex done | duration, files indexed |
-| `resolver_loop` | Resolver cycle detected | loop count, task |
+| `resolver_loop` | Resolver cycle detected | loop count, `task_context` |
 | `safety_limit_hit` | Chain limit reached | which limit, current value |
 | `chain_paused` | Human paused | — |
-| `chain_resumed` | Human resumed | — |
-| `chain_completed` | Chain finished | summary, status, total metrics |
+| `chain_resumed` | Human resumed | `resumed_by`, `orchestrator_pid`, `execution_id`, `active_execution` |
+| `chain_completed` | Chain finished | summary, status, total metrics, `execution_id`, optional `finalized_from` |
 | `chain_cancelled` | Human cancelled | — |
 
 ---
@@ -363,7 +368,7 @@ Practical approach: the `spawn_agent` tool accepts an optional `task_context` fi
 
 ### Pause
 
-The CLI writes a `pause_requested` flag to the chain record. The `spawn_agent` implementation checks this flag before spawning. If set:
+The CLI transitions the chain status from `running` to `pause_requested`. The `spawn_agent` implementation checks control state before spawning. If set:
 - If an engine is currently running: let it finish, then pause.
 - If no engine is running: pause immediately.
 - Log `chain_paused` event.
@@ -371,13 +376,13 @@ The CLI writes a `pause_requested` flag to the chain record. The `spawn_agent` i
 
 ### Resume
 
-The CLI clears the `pause_requested` flag and writes a `resume` command to a command queue table. The orchestrator binary picks this up, logs `chain_resumed`, and resumes the orchestrator agent's session (or starts a new one if the session was terminated).
+The CLI transitions a `paused` chain back to `running`, logs `chain_resumed`, and starts a fresh active execution with a new `execution_id`. There is no separate command queue table. Resume state is represented by the chain status plus event-log payloads such as `resumed_by`, `orchestrator_pid`, `execution_id`, and `active_execution`.
 
 Implementation detail: resuming may require starting a fresh orchestrator agent session with context about what has already been done. The brain contains all the receipts, so the new orchestrator session can read them and continue from where things left off. This is the same "fresh context" principle that applies to all agents.
 
 ### Cancel
 
-The CLI writes a `cancel` flag. The orchestrator binary:
+The CLI transitions `running` or `pause_requested` to `cancel_requested`; paused chains can move directly to `cancelled`. The orchestrator binary:
 - Kills any running engine subprocess (SIGTERM → SIGKILL).
 - Writes a cancellation receipt.
 - Logs `chain_cancelled`.
@@ -407,7 +412,7 @@ The prompt should NOT hardcode the chain flow as a rigid sequence. The orchestra
 
 ### Stdout / Stderr
 
-In non-quiet mode, the orchestrator binary streams progress to stderr:
+`yard chain start` prints the chain ID to stdout as soon as the chain record exists. By default it also watches live progress on stderr (`--watch=true`). Use `--watch=false` when a caller only wants the chain ID. The watch/log rendering supports `--verbosity normal` and `--verbosity debug`; normal mode suppresses noisy `step_output` lines unless they are important, while debug mode shows the full event stream.
 
 ```
 [chain] Started chain auth-2026-04-11 from specs/auth.md
@@ -423,6 +428,8 @@ In non-quiet mode, the orchestrator binary streams progress to stderr:
 ...
 [chain] Chain completed — 18 steps, 340k tokens, 12m 30s
 ```
+
+`yard chain logs --follow <chain-id>` reattaches to the event stream for an existing chain and uses the same verbosity rules. `yard chain status` without a chain ID lists the latest chains; with a chain ID it prints chain and step status.
 
 ### SQLite
 

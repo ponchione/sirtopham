@@ -1,7 +1,7 @@
 # 03 — Provider Architecture
 
 **Status:** Draft v0.1
-**Last Updated:** 2026-03-27
+**Last Updated:** 2026-04-29
 **Author:** Mitchell
 
 ---
@@ -43,6 +43,41 @@ type Provider interface {
 **StreamEvent** is a union type: `TokenDelta`, `ToolCallStart`, `ToolCallDelta`, `ToolCallEnd`, `Usage`, `Error`, `Done`.
 
 This interface must be sufficient for all three providers. The design constraint is: design around the hardest provider (Anthropic's native API with its unique content block structure), not the easiest.
+
+### Optional Diagnostics Interfaces
+
+Providers may also implement optional interfaces consumed by router validation, `yard doctor`, `/api/providers`, and `/api/auth/providers`.
+
+```go
+type Pinger interface {
+    // Ping performs a lightweight reachability/auth check.
+    // Router validation uses this instead of a heavier Models call when present.
+    Ping(ctx context.Context) error
+}
+
+type AuthStatusReporter interface {
+    // AuthStatus reports structured operator-facing auth state.
+    AuthStatus(ctx context.Context) (*AuthStatus, error)
+}
+
+type AuthStatus struct {
+    Provider        string    `json:"provider"`
+    Mode            string    `json:"mode,omitempty"`
+    Source          string    `json:"source,omitempty"`
+    StorePath       string    `json:"store_path,omitempty"`
+    SourcePath      string    `json:"source_path,omitempty"`
+    ActiveProvider  string    `json:"active_provider,omitempty"`
+    Version         int       `json:"version,omitempty"`
+    LastRefresh     time.Time `json:"last_refresh,omitempty"`
+    ExpiresAt       time.Time `json:"expires_at,omitempty"`
+    HasAccessToken  bool      `json:"has_access_token"`
+    HasRefreshToken bool      `json:"has_refresh_token"`
+    Detail          string    `json:"detail,omitempty"`
+    Remediation     string    `json:"remediation,omitempty"`
+}
+```
+
+These are deliberately not part of the core `Provider` interface. Inference only depends on `Complete`, `Stream`, `Models`, and `Name`; operational surfaces can discover health/auth detail when a provider supports it. Provider aliases and router wrappers must delegate these optional interfaces when the wrapped provider implements them.
 
 ---
 

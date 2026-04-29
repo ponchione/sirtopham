@@ -1,6 +1,6 @@
 # 14 — Agent Roles and Brain Conventions
 
-**Status:** Draft v0.1 **Last Updated:** 2026-04-11 **Author:** Mitchell
+**Status:** Draft v0.1 **Last Updated:** 2026-04-29 **Author:** Mitchell
 
 ---
 
@@ -114,7 +114,7 @@ receipts/orchestrator/{chain-id}.md
 Example:
 ```
 receipts/coder/auth-2026-04-11-step-001.md
-receipts/correctness/auth-2026-04-11-step-002.md
+receipts/correctness-auditor/auth-2026-04-11-step-002.md
 receipts/orchestrator/auth-2026-04-11.md
 ```
 
@@ -294,8 +294,8 @@ correctness-auditor:
     - file
     - git
   brain_write_paths:
-    - "receipts/correctness/**"
-    - "logs/correctness/**"
+    - "receipts/correctness-auditor/**"
+    - "logs/correctness-auditor/**"
   brain_deny_paths:
     - "specs/**"
     - "architecture/**"
@@ -324,8 +324,8 @@ quality-auditor:
     - file
     - git
   brain_write_paths:
-    - "receipts/quality/**"
-    - "logs/quality/**"
+    - "receipts/quality-auditor/**"
+    - "logs/quality-auditor/**"
   brain_deny_paths:
     - "specs/**"
     - "architecture/**"
@@ -354,8 +354,8 @@ performance-auditor:
     - file
     - git
   brain_write_paths:
-    - "receipts/performance/**"
-    - "logs/performance/**"
+    - "receipts/performance-auditor/**"
+    - "logs/performance-auditor/**"
   brain_deny_paths:
     - "specs/**"
     - "architecture/**"
@@ -384,8 +384,8 @@ security-auditor:
     - file
     - git
   brain_write_paths:
-    - "receipts/security/**"
-    - "logs/security/**"
+    - "receipts/security-auditor/**"
+    - "logs/security-auditor/**"
   brain_deny_paths:
     - "specs/**"
     - "architecture/**"
@@ -414,8 +414,8 @@ integration-auditor:
     - file
     - git
   brain_write_paths:
-    - "receipts/integration/**"
-    - "logs/integration/**"
+    - "receipts/integration-auditor/**"
+    - "logs/integration-auditor/**"
   brain_deny_paths:
     - "specs/**"
     - "architecture/**"
@@ -445,8 +445,8 @@ test-writer:
     - git
     - shell
   brain_write_paths:
-    - "receipts/tests/**"
-    - "logs/tests/**"
+    - "receipts/test-writer/**"
+    - "logs/test-writer/**"
   brain_deny_paths:
     - "specs/**"
     - "architecture/**"
@@ -506,8 +506,8 @@ docs-arbiter:
   brain_write_paths:
     - "specs/**"
     - "architecture/**"
-    - "receipts/arbiter/**"
-    - "logs/arbiter/**"
+    - "receipts/docs-arbiter/**"
+    - "logs/docs-arbiter/**"
   brain_deny_paths:
     - "epics/**"
     - "tasks/**"
@@ -631,6 +631,16 @@ tools:
 ```
 
 Implementation: `RegisterFileTools` is split into `RegisterFileReadTools` (registers only `file_read`) and `RegisterFileWriteTools` (registers `file_write` and `file_edit`). The role-based registry builder maps `file:read` to the read-only variant.
+
+The role-based registry builder also supports the utility groups documented in [[10_Tool_System]]:
+
+| Group | Tools |
+|---|---|
+| `directory` | `list_directory`, `find_files` |
+| `test` | `test_run` |
+| `sqlc` | `db_sqlc` |
+
+These are not automatically added to every stock role. Add them only when a role's prompt and responsibilities require the narrower structured surface instead of general `shell`.
 
 ---
 
