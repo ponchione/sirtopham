@@ -591,6 +591,39 @@ func TestLoadAcceptsFileReadAgentRoleToolGroup(t *testing.T) {
 	}
 }
 
+func TestLoadAcceptsUtilityAgentRoleToolGroups(t *testing.T) {
+	projectRoot := t.TempDir()
+	ensureDir(t, filepath.Join(projectRoot, ".brain"))
+	configPath := filepath.Join(t.TempDir(), "sirtopham.yaml")
+	content := "project_root: \"" + projectRoot + "\"\n" +
+		"brain:\n" +
+		"  vault_path: \"" + filepath.Join(projectRoot, ".brain") + "\"\n" +
+		"agent_roles:\n" +
+		"  utility:\n" +
+		"    system_prompt: prompts/utility.md\n" +
+		"    tools:\n" +
+		"      - directory\n" +
+		"      - test\n" +
+		"      - sqlc\n"
+
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+
+	role, ok := cfg.AgentRoles["utility"]
+	if !ok {
+		t.Fatalf("AgentRoles = %#v, want utility role", cfg.AgentRoles)
+	}
+	if !slices.Equal(role.Tools, []string{"directory", "test", "sqlc"}) {
+		t.Fatalf("role.Tools = %#v, want [directory test sqlc]", role.Tools)
+	}
+}
+
 func TestLoadParsesReadOnlyFileRoleAndCustomTools(t *testing.T) {
 	projectRoot := t.TempDir()
 	ensureDir(t, filepath.Join(projectRoot, ".brain"))
@@ -670,7 +703,7 @@ func TestLoadRejectsInvalidAgentRoles(t *testing.T) {
 			yaml: "project_root: \"" + projectRoot + "\"\n" +
 				"brain:\n  vault_path: \"" + filepath.Join(projectRoot, ".brain") + "\"\n" +
 				"agent_roles:\n  reviewer:\n    system_prompt: prompts/reviewer.md\n    tools:\n      - browser\n",
-			wantSubstr: "unsupported tool group \"browser\"; expected brain, file, file:read, git, shell, or search",
+			wantSubstr: "unsupported tool group \"browser\"; expected brain, file, file:read, git, shell, search, directory, test, or sqlc",
 		},
 		{
 			name: "negative max turns",

@@ -30,12 +30,15 @@ Every headless run writes a receipt document to the brain vault at a known path.
 
 A headless run is configured with a role that determines which tools are available. Roles are defined in the project config and map to tool groups. This enables the orchestrator to spawn a coder with full tool access, an auditor with read-only file and brain access, or an orchestrator agent with brain-only access plus custom tools.
 
+Custom tools are not globally available just because a role lists `custom_tools`. They require the caller constructing the role registry to provide concrete tool factories. Today, orchestrator-managed chain execution provides `spawn_agent` and `chain_complete`; an ordinary direct `yard run` / `tidmouth run` role build without that orchestrator factory fails fast with a clear "custom_tools are not implemented" configuration error. This prevents a direct headless session from advertising tools it cannot actually execute.
+
 ---
 
 ## CLI Interface
 
 ```
-tidmouth run [flags]
+yard run [flags]
+tidmouth run [flags]  # retained internal equivalent for chain spawning
 ```
 
 ### Required Flags
@@ -73,7 +76,7 @@ tidmouth run [flags]
 On successful exit (code 0 or 2), the last line of stdout is the brain-relative path to the receipt document. This allows simple scripting:
 
 ```bash
-receipt=$(tidmouth run --role coder --task "implement auth middleware" 2>/dev/null | tail -1)
+receipt=$(yard run --role coder --task "implement auth middleware" 2>/dev/null | tail -1)
 ```
 
 In non-quiet mode, progress information (turn count, tool calls, token usage) streams to stderr.
@@ -178,7 +181,7 @@ Brain read operations (`brain_read`, `brain_search`) are never restricted — ev
 ### 1. Initialization
 
 ```
-tidmouth run --role coder --task "implement JWT auth" --chain-id auth-2026-04-11
+yard run --role coder --task "implement JWT auth" --chain-id auth-2026-04-11
     │
     ├─ Load config, resolve brain vault path
     ├─ Validate role exists in agent_roles config
@@ -318,7 +321,7 @@ What the agent recommends the next agent (or human) should do.
 
 These are explicitly out of scope for the initial implementation but inform design decisions:
 
-- **`spawn_agent` custom tool** — Used by the orchestrator agent role. Implemented by the conductor/orchestrator layer, not by the engine binary. The engine contract provided here is the headless `tidmouth run` entrypoint that the conductor calls.
+- **`spawn_agent` custom tool** — Used by the orchestrator agent role. Implemented by the conductor/orchestrator layer, not by the ordinary direct run path. The public operator contract is `yard run`; the current internal chain-spawn contract still calls the retained `tidmouth run` engine entrypoint until that subprocess contract is redesigned.
 - **Multi-turn headless sessions** — Allowing the orchestrator to send follow-up messages mid-session. Not needed initially; agents should be self-directed within a single turn.
 - **Parallel agent execution** — Running multiple agents concurrently against the same brain. Requires brain-level write locking or conflict resolution. Deferred.
 - **Brain write hooks** — Triggering events when specific brain paths are written (e.g., auto-spawning the arbiter when `specs/` changes). Deferred.

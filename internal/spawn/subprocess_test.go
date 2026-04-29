@@ -14,9 +14,22 @@ func TestRunCommandSuccessAndCapture(t *testing.T) {
 		t.Skip("unix shell test")
 	}
 	var stdout, stderr bytes.Buffer
-	res := RunCommand(context.Background(), RunCommandInput{Name: "/bin/sh", Args: []string{"-c", "printf ok; printf warn >&2"}, Stdout: &stdout, Stderr: &stderr, Timeout: 5 * time.Second})
+	var pid int
+	res := RunCommand(context.Background(), RunCommandInput{
+		Name:    "/bin/sh",
+		Args:    []string{"-c", "printf ok; printf warn >&2"},
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		Timeout: 5 * time.Second,
+		OnStart: func(startedPID int) {
+			pid = startedPID
+		},
+	})
 	if res.Err != nil || res.ExitCode != 0 {
 		t.Fatalf("result = %+v", res)
+	}
+	if pid <= 0 {
+		t.Fatalf("pid = %d, want process pid", pid)
 	}
 	if stdout.String() != "ok" || stderr.String() != "warn" {
 		t.Fatalf("stdout/stderr = %q/%q", stdout.String(), stderr.String())

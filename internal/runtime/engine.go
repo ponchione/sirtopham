@@ -20,7 +20,6 @@ import (
 	"github.com/ponchione/sodoryard/internal/conversation"
 	appdb "github.com/ponchione/sodoryard/internal/db"
 	"github.com/ponchione/sodoryard/internal/provider/router"
-	"github.com/ponchione/sodoryard/internal/provider/tracking"
 )
 
 // EngineRuntime holds all runtime dependencies required to serve engine
@@ -61,32 +60,12 @@ func BuildEngineRuntime(ctx context.Context, cfg *appconfig.Config) (*EngineRunt
 		return closeOnError(fmt.Errorf("ensure project record: %w", err))
 	}
 
-	routerCfg := router.RouterConfig{
-		Default: router.RouteTarget{
-			Provider: cfg.Routing.Default.Provider,
-			Model:    cfg.Routing.Default.Model,
-		},
-		Fallback: router.RouteTarget{
-			Provider: cfg.Routing.Fallback.Provider,
-			Model:    cfg.Routing.Fallback.Model,
-		},
-	}
-	provRouter, err := router.NewRouter(routerCfg, tracking.NewSQLiteSubCallStore(queries), logger)
+	provRouter, err := BuildProviderRouter(ctx, cfg, queries, logger, ProviderRouterOptions{
+		ProviderNames: providerMapNames(cfg.Providers),
+		LogAuthStatus: true,
+	})
 	if err != nil {
-		return closeOnError(fmt.Errorf("create router: %w", err))
-	}
-	for name, provCfg := range cfg.Providers {
-		p, err := BuildProvider(name, provCfg)
-		if err != nil {
-			return closeOnError(fmt.Errorf("build provider %q: %w", name, err))
-		}
-		if err := provRouter.RegisterProvider(p); err != nil {
-			return closeOnError(fmt.Errorf("register provider %q: %w", name, err))
-		}
-		LogProviderAuthStatus(ctx, logger, name, provCfg, p)
-	}
-	if err := provRouter.Validate(ctx); err != nil {
-		return closeOnError(fmt.Errorf("validate providers: %w", err))
+		return closeOnError(err)
 	}
 
 	codeStore, err := codestore.Open(ctx, cfg.CodeLanceDBPath())

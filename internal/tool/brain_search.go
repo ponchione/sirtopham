@@ -163,9 +163,17 @@ func (b *BrainSearch) Execute(ctx context.Context, projectRoot string, input jso
 	}, nil
 }
 
-func (b *BrainSearch) searchHits(ctx context.Context, query string) ([]brain.SearchHit, error) {
+func (b *BrainSearch) searchHits(ctx context.Context, query string, maxResults int) ([]brain.SearchHit, error) {
 	if query != "" {
-		hits, err := b.client.SearchKeyword(ctx, query)
+		var (
+			hits []brain.SearchHit
+			err  error
+		)
+		if limited, ok := b.client.(brain.LimitedKeywordSearcher); ok {
+			hits, err = limited.SearchKeywordLimit(ctx, query, maxResults)
+		} else {
+			hits, err = b.client.SearchKeyword(ctx, query)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -227,7 +235,7 @@ func (b *BrainSearch) searchFormattedHits(ctx context.Context, query string, mod
 		return formatRuntimeBrainSearchHits(results), nil
 	}
 
-	hits, err := b.searchHits(ctx, query)
+	hits, err := b.searchHits(ctx, query, maxResults)
 	if err != nil {
 		return nil, err
 	}

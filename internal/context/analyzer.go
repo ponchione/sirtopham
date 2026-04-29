@@ -196,7 +196,7 @@ var questionPatterns = []string{
 	"why",
 }
 
-var debuggingPatterns = []string {
+var debuggingPatterns = []string{
 	"error",
 	"panic",
 	"nil",
@@ -217,75 +217,69 @@ var brainIntentPatterns = []string{
 	"brain",
 }
 
-// brainSeekingRationalePatterns describes non-explicit prompt shapes that
-// strongly imply the user wants project rationale / design decision history
-// rather than fresh code lookup. The list is intentionally narrow: phrases
-// must read as "asking about why we decided something" and not as a generic
-// code-explanation question. The prior-debugging/history family is
-// deliberately deferred to a later analyzer slice.
-var brainSeekingRationalePatterns = []string{
-	"design decision",
-	"design choice",
-	"design rationale",
-	"rationale behind",
-	"rationale for",
-	"rationale was",
-	"rationale is",
-	"why did we",
-	"why are we",
+type brainSeekingRule struct {
+	value    string
+	patterns []string
 }
 
-// brainSeekingLayoutPatterns describes non-explicit prompt shapes that read as
-// requests for layout/navigation rationale or graph-linked layout note recall
-// rather than fresh code lookup. The list stays narrow so generic UI/code
-// questions like "how does the sidebar layout work" do not get hijacked.
-var brainSeekingLayoutPatterns = []string{
-	"layout graph notes",
-	"layout rationale notes",
-}
-
-// brainSeekingConventionPatterns describes non-explicit prompt shapes that
-// strongly imply the user is asking about how-we-usually-do-things — a team
-// convention, policy, or established practice — rather than how a specific
-// piece of code works. The list is intentionally narrow: bare "how do we"
-// is excluded because it collides with code-explanation questions like
-// "how do we parse this response". Each phrase must include the longer
-// convention-shaped tail.
-var brainSeekingConventionPatterns = []string{
-	"how do we usually",
-	"how do we normally",
-	"what do we prefer",
-	"what's our convention",
-	"what is our convention",
-	"our convention for",
-	"our convention is",
-	"our policy for",
-	"our policy is",
-	"what's our policy",
-	"what is our policy",
-}
-
-// brainSeekingHistoryPatterns describes non-explicit prompt shapes that
-// strongly imply the user is asking about prior debugging history — whether
-// a bug has been seen before, how a past bug was fixed, what the workaround
-// was, or what the root cause turned out to be. The list is intentionally
-// narrow: bare "did we" is excluded because it collides with the rationale
-// family and arbitrary past-tense questions, and bare "what was" is
-// excluded because it collides with general history questions ("what was
-// null here"). Every phrase must include the longer debug-history tail.
-var brainSeekingHistoryPatterns = []string{
-	"have we seen",
-	"have we hit",
-	"have we debugged",
-	"have we fixed",
-	"what was the fix",
-	"what was the workaround",
-	"what was the root cause",
-	"did we ever fix",
-	"did we already fix",
-	"prior debugging",
-	"past debugging",
-	"previously debugged",
+// brainSeekingRules describes non-explicit prompt shapes that should prefer
+// brain context over generic code lookup. The phrase lists are intentionally
+// narrow so generic code explanation questions do not get hijacked.
+var brainSeekingRules = []brainSeekingRule{
+	{
+		value: "rationale",
+		patterns: []string{
+			"design decision",
+			"design choice",
+			"design rationale",
+			"rationale behind",
+			"rationale for",
+			"rationale was",
+			"rationale is",
+			"why did we",
+			"why are we",
+		},
+	},
+	{
+		value: "layout",
+		patterns: []string{
+			"layout graph notes",
+			"layout rationale notes",
+		},
+	},
+	{
+		value: "convention",
+		patterns: []string{
+			"how do we usually",
+			"how do we normally",
+			"what do we prefer",
+			"what's our convention",
+			"what is our convention",
+			"our convention for",
+			"our convention is",
+			"our policy for",
+			"our policy is",
+			"what's our policy",
+			"what is our policy",
+		},
+	},
+	{
+		value: "history",
+		patterns: []string{
+			"have we seen",
+			"have we hit",
+			"have we debugged",
+			"have we fixed",
+			"what was the fix",
+			"what was the workaround",
+			"what was the root cause",
+			"did we ever fix",
+			"did we already fix",
+			"prior debugging",
+			"past debugging",
+			"previously debugged",
+		},
+	},
 }
 
 // RuleBasedAnalyzer implements the v0.1 deterministic TurnAnalyzer.
@@ -321,10 +315,7 @@ func (RuleBasedAnalyzer) AnalyzeTurn(message string, recentHistory []db.Message)
 	applyContinuation(message, recentHistory, needs)
 	applyQuestionIntent(message, needs)
 	applyBrainIntent(message, needs)
-	applyBrainSeekingRationaleIntent(message, needs)
-	applyBrainSeekingLayoutIntent(message, needs)
-	applyBrainSeekingConventionIntent(message, needs)
-	applyBrainSeekingHistoryIntent(message, needs)
+	applyBrainSeekingIntents(message, needs)
 	applyDebuggingHints(message, needs)
 
 	return needs
@@ -659,115 +650,23 @@ func applyBrainIntent(message string, needs *ContextNeeds) {
 	})
 }
 
-// applyBrainSeekingRationaleIntent flags turns whose natural-language shape
-// reads as a request for project rationale / design-decision history. It
-// prefers brain context for those turns so that the retrieval orchestrator
-// skips generic code RAG when no explicit file or symbol references are
-// present; when explicit refs ARE present, shouldRunSemanticSearch still keeps
-// semantic search enabled so the turn stays code-capable.
-//
-// The phrase list is intentionally narrow to avoid hijacking generic code
-// explanation questions (e.g. "why does ValidateToken return nil?" must NOT
-// fire here — those belong to applyQuestionIntent). If applyBrainIntent has
-// already fired, this function is a no-op so we do not emit duplicate signals
-// for the same turn.
-func applyBrainSeekingRationaleIntent(message string, needs *ContextNeeds) {
+func applyBrainSeekingIntents(message string, needs *ContextNeeds) {
 	if needs.PreferBrainContext {
 		return
 	}
-	source, _ := findPhrase(message, brainSeekingRationalePatterns)
-	if source == "" {
+	for _, rule := range brainSeekingRules {
+		source, _ := findPhrase(message, rule.patterns)
+		if source == "" {
+			continue
+		}
+		needs.PreferBrainContext = true
+		needs.Signals = append(needs.Signals, Signal{
+			Type:   "brain_seeking_intent",
+			Source: source,
+			Value:  rule.value,
+		})
 		return
 	}
-
-	needs.PreferBrainContext = true
-	needs.Signals = append(needs.Signals, Signal{
-		Type:   "brain_seeking_intent",
-		Source: source,
-		Value:  "rationale",
-	})
-}
-
-// applyBrainSeekingLayoutIntent flags turns whose natural-language shape
-// reads as a request for layout or structural design information. It prefers
-// brain context for those turns so that the retrieval orchestrator skips
-// generic code RAG when no explicit file or symbol references are present.
-func applyBrainSeekingLayoutIntent(message string, needs *ContextNeeds) {
-	if needs.PreferBrainContext {
-		return
-	}
-	source, _ := findPhrase(message, brainSeekingLayoutPatterns)
-	if source == "" {
-		return
-	}
-
-	needs.PreferBrainContext = true
-	needs.Signals = append(needs.Signals, Signal{
-		Type:   "brain_seeking_intent",
-		Source: source,
-		Value:  "layout",
-	})
-}
-
-// applyBrainSeekingConventionIntent flags turns whose natural-language shape
-// reads as a request for a team convention, policy, or established practice.
-// It prefers brain context for those turns so that the retrieval orchestrator
-// skips generic code RAG when no explicit file or symbol references are
-// present; when explicit refs ARE present, shouldRunSemanticSearch still keeps
-// semantic search enabled so the turn stays code-capable.
-//
-// The phrase list is intentionally narrow to avoid hijacking generic code
-// explanation questions (e.g. "how do we parse this response?" must NOT fire
-// here — those belong to applyQuestionIntent). If applyBrainIntent or
-// applyBrainSeekingRationaleIntent has already fired, this function is a
-// no-op so we do not emit duplicate brain_seeking signals for the same turn.
-func applyBrainSeekingConventionIntent(message string, needs *ContextNeeds) {
-	if needs.PreferBrainContext {
-		return
-	}
-	source, _ := findPhrase(message, brainSeekingConventionPatterns)
-	if source == "" {
-		return
-	}
-
-	needs.PreferBrainContext = true
-	needs.Signals = append(needs.Signals, Signal{
-		Type:   "brain_seeking_intent",
-		Source: source,
-		Value:  "convention",
-	})
-}
-
-// applyBrainSeekingHistoryIntent flags turns whose natural-language shape
-// reads as a request for prior debugging history — has this bug been seen
-// before, how was it fixed, what was the workaround, what was the root
-// cause. It prefers brain context for those turns so that the retrieval
-// orchestrator skips generic code RAG when no explicit file or symbol
-// references are present; when explicit refs ARE present,
-// shouldRunSemanticSearch still keeps semantic search enabled so the turn
-// stays code-capable.
-//
-// The phrase list is intentionally narrow to avoid hijacking generic
-// past-tense or "what was" questions (e.g. "what was null here?" must NOT
-// fire here — those belong to applyQuestionIntent or applyDebuggingHints).
-// If applyBrainIntent or any earlier brain-seeking pass has already fired,
-// this function is a no-op so we do not emit duplicate brain_seeking
-// signals for the same turn.
-func applyBrainSeekingHistoryIntent(message string, needs *ContextNeeds) {
-	if needs.PreferBrainContext {
-		return
-	}
-	source, _ := findPhrase(message, brainSeekingHistoryPatterns)
-	if source == "" {
-		return
-	}
-
-	needs.PreferBrainContext = true
-	needs.Signals = append(needs.Signals, Signal{
-		Type:   "brain_seeking_intent",
-		Source: source,
-		Value:  "history",
-	})
 }
 
 func applyDebuggingHints(message string, needs *ContextNeeds) {
@@ -847,4 +746,3 @@ func appendUnique(values *[]string, value string) bool {
 	*values = append(*values, value)
 	return true
 }
-

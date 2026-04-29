@@ -1,7 +1,6 @@
 package openai
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -11,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ponchione/sodoryard/internal/provider"
+	providersse "github.com/ponchione/sodoryard/internal/provider/sse"
 )
 
 // streamChunk is one parsed SSE data payload from the streaming response.
@@ -99,63 +99,25 @@ func (p *OpenAIProvider) Stream(ctx context.Context, req *provider.Request) (<-c
 // processStream reads SSE lines from the response body and emits StreamEvents.
 func (p *OpenAIProvider) processStream(ctx context.Context, resp *http.Response, ch chan<- provider.StreamEvent) {
 	accumulated := make(map[int]*accumulatedToolCall)
-	scanner := bufio.NewScanner(resp.Body)
-	var dataLines []string
+	reader := providersse.NewReader(resp.Body, providersse.DefaultMaxEventBytes)
 
-	flushEvent := func() bool {
-		if len(dataLines) == 0 {
-			return true
-		}
-		payload := strings.Join(dataLines, "\n")
-		dataLines = dataLines[:0]
-		if payload == "[DONE]" {
-			return false
-		}
-		p.handleStreamPayload(ctx, payload, accumulated, ch)
-		return true
-	}
-
-	for scanner.Scan() {
-		if ctx.Err() != nil {
+	for {
+		event, ok, err := reader.Next(ctx)
+		if err != nil {
 			sendEvent(ctx, ch, provider.StreamError{
-				Err:     ctx.Err(),
+				Err:     err,
 				Fatal:   true,
-				Message: ctx.Err().Error(),
+				Message: fmt.Sprintf("OpenAI-compatible provider '%s': stream read error: %s", p.name, err),
 			})
 			return
 		}
-
-		line := scanner.Text()
-		if strings.TrimSpace(line) == "" {
-			if !flushEvent() {
-				return
-			}
-			continue
-		}
-		if strings.HasPrefix(line, ":") {
-			continue
-		}
-
-		field, value, ok := strings.Cut(line, ":")
 		if !ok {
-			continue
+			return
 		}
-		value = strings.TrimPrefix(value, " ")
-		if field != "data" {
-			continue
+		if event.Data == "[DONE]" {
+			return
 		}
-		dataLines = append(dataLines, value)
-	}
-
-	if !flushEvent() {
-		return
-	}
-	if err := scanner.Err(); err != nil {
-		sendEvent(ctx, ch, provider.StreamError{
-			Err:     err,
-			Fatal:   true,
-			Message: fmt.Sprintf("OpenAI-compatible provider '%s': stream read error: %s", p.name, err),
-		})
+		p.handleStreamPayload(ctx, event.Data, accumulated, ch)
 	}
 }
 

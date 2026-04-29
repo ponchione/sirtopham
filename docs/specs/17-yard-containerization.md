@@ -127,8 +127,12 @@ The runtime image should contain exactly what is needed for the supported contai
 - `yard`
 - any retained internal binary still required by the orchestrator (`tidmouth` today)
 - `liblancedb_go.so`
+- Node.js and npm for mounted-project commands that expect Node tooling
+- global `@openai/codex` CLI installation as an available runtime tool; Yard's Codex auth/runtime path does not shell out to it
 - embedded frontend assets via the built Go binary
 - the files needed for project initialization and runtime execution
+
+Node/npm and the Codex CLI do not make additional operator-facing Yard commands. They are available inside the container for mounted-project commands and operator workflows that expect Node tooling; the supported container control surface remains `yard`.
 
 ### 5.2 Filesystem layout
 

@@ -46,7 +46,12 @@ var allowedAgentRoleToolGroups = map[string]struct{}{
 	"git":       {},
 	"shell":     {},
 	"search":    {},
+	"directory": {},
+	"test":      {},
+	"sqlc":      {},
 }
+
+const allowedAgentRoleToolGroupsMessage = "brain, file, file:read, git, shell, search, directory, test, or sqlc"
 
 type Config struct {
 	ProjectRoot string `yaml:"project_root"`
@@ -931,7 +936,7 @@ func (c *Config) validateAgentRoles() error {
 		}
 		for _, group := range role.Tools {
 			if _, ok := allowedAgentRoleToolGroups[strings.TrimSpace(group)]; !ok {
-				return fmt.Errorf("invalid field agent_roles.%s.tools (unsupported tool group %q; expected brain, file, file:read, git, shell, or search)", name, group)
+				return fmt.Errorf("invalid field agent_roles.%s.tools (unsupported tool group %q; expected %s)", name, group, allowedAgentRoleToolGroupsMessage)
 			}
 		}
 		if role.MaxTurns <= 0 && role.MaxTurns != 0 {

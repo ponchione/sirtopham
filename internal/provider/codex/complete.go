@@ -1,7 +1,6 @@
 package codex
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -10,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ponchione/sodoryard/internal/provider"
+	providersse "github.com/ponchione/sodoryard/internal/provider/sse"
 )
 
 // responsesResponse is the top-level Responses API JSON response.
@@ -230,9 +230,7 @@ func (p *CodexProvider) Complete(ctx context.Context, req *provider.Request) (*p
 // parseOutputItems converts Responses API output items to unified ContentBlock
 // values and determines the stop reason.
 func readStreamedResponse(body io.Reader) ([]provider.ContentBlock, provider.Usage, provider.StopReason, error) {
-	scanner := bufio.NewScanner(body)
-	scanner.Buffer(make([]byte, 0, 64*1024), maxSSEScannerTokenSize)
-	var eventType string
+	reader := providersse.NewReader(body, maxSSEScannerTokenSize)
 	var text strings.Builder
 	var usage provider.Usage
 	stopReason := provider.StopReasonEndTurn
@@ -240,26 +238,25 @@ func readStreamedResponse(body io.Reader) ([]provider.ContentBlock, provider.Usa
 	var reasoningBlocks []provider.ContentBlock
 	var toolBlocks []provider.ContentBlock
 
-	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.HasPrefix(line, "event: ") {
-			eventType = strings.TrimPrefix(line, "event: ")
-			continue
+	for {
+		event, ok, err := reader.Next(context.Background())
+		if err != nil {
+			return nil, provider.Usage{}, "", err
 		}
-		if !strings.HasPrefix(line, "data: ") {
-			continue
+		if !ok {
+			break
 		}
-		data := strings.TrimPrefix(line, "data: ")
-		switch eventType {
+		data := []byte(event.Data)
+		switch event.Type {
 		case "response.output_text.delta":
 			var delta sseTextDelta
-			if err := json.Unmarshal([]byte(data), &delta); err != nil {
+			if err := json.Unmarshal(data, &delta); err != nil {
 				return nil, provider.Usage{}, "", err
 			}
 			text.WriteString(delta.Delta)
 		case "response.output_item.added":
 			var added sseOutputItemAdded
-			if err := json.Unmarshal([]byte(data), &added); err != nil {
+			if err := json.Unmarshal(data, &added); err != nil {
 				return nil, provider.Usage{}, "", err
 			}
 			if added.Item.Type == "function_call" {
@@ -275,13 +272,13 @@ func readStreamedResponse(body io.Reader) ([]provider.ContentBlock, provider.Usa
 			}
 		case "response.function_call_arguments.delta":
 			var delta sseFuncArgDelta
-			if err := json.Unmarshal([]byte(data), &delta); err != nil {
+			if err := json.Unmarshal(data, &delta); err != nil {
 				return nil, provider.Usage{}, "", err
 			}
 			toolState.getToolCall(delta.ItemID).args.WriteString(delta.Delta)
 		case "response.output_item.done":
 			var done sseOutputItemDone
-			if err := json.Unmarshal([]byte(data), &done); err != nil {
+			if err := json.Unmarshal(data, &done); err != nil {
 				return nil, provider.Usage{}, "", err
 			}
 			if done.Item.Type == "function_call" {
@@ -308,7 +305,7 @@ func readStreamedResponse(body io.Reader) ([]provider.ContentBlock, provider.Usa
 			}
 		case "response.completed":
 			var completed sseCompleted
-			if err := json.Unmarshal([]byte(data), &completed); err != nil {
+			if err := json.Unmarshal(data, &completed); err != nil {
 				return nil, provider.Usage{}, "", err
 			}
 			usage = provider.Usage{
@@ -323,9 +320,6 @@ func readStreamedResponse(body io.Reader) ([]provider.ContentBlock, provider.Usa
 				}
 			}
 		}
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, provider.Usage{}, "", err
 	}
 	blocks := make([]provider.ContentBlock, 0, len(reasoningBlocks)+1+len(toolBlocks))
 	blocks = append(blocks, reasoningBlocks...)

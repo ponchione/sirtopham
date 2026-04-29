@@ -29,6 +29,7 @@ yard [--config yard.yaml]
 ├── run                         # single headless agent session
 ├── index                       # code index build/rebuild
 ├── auth                        # provider auth group
+│   ├── login PROVIDER          # provider login flow; currently supports codex
 │   └── status                  # auth status detail
 ├── doctor                      # auth diagnostics
 ├── config                      # show/validate config
@@ -71,6 +72,7 @@ yard [--config yard.yaml]
 | `tidmouth index brain` | `yard brain index` | brain group owns brain indexing |
 | `tidmouth brain-serve` | `yard brain serve` | brain group owns brain MCP |
 | legacy auth command | `yard auth` | top-level group |
+| legacy auth login command | `yard auth login codex` | provider login under auth group |
 | legacy auth status command | `yard auth status` | same nesting |
 | `tidmouth doctor` | `yard doctor` | top-level |
 | legacy config command | `yard config` | top-level |
@@ -87,6 +89,7 @@ Commands that currently take `configPath *string` as a constructor argument will
 
 - `yard index`: `--full` forces a full code-index rebuild, `--json` emits machine-readable results, and `--quiet` suppresses the human summary.
 - `yard brain index`: rebuilds brain relational metadata and semantic chunks from the configured vault.
+- `yard auth login codex`: starts the OpenAI Codex device-code login flow and writes credentials to Yard's private auth store. Other provider names currently fail with an unsupported-provider error.
 - `yard llm status`: accepts `--json` and reports Docker, Compose, network, service health, problems, and remediation.
 - `yard llm up`: ensures required services are healthy according to `local_services.mode`; `auto` may create networks and run `docker compose up -d`, while `manual` reports remediation.
 - `yard llm down`: runs compose down for the configured stack.
@@ -94,6 +97,22 @@ Commands that currently take `configPath *string` as a constructor argument will
 - `yard chain start`: accepts `--watch` and `--verbosity normal|debug`; it prints the chain ID to stdout immediately and streams progress to stderr when watch is enabled.
 - `yard chain logs`: supports following a running chain and uses the same verbosity model as `chain start`.
 - `yard chain status`: without a chain ID lists recent chains; with a chain ID shows chain and step detail.
+
+### 3.5 Local LLM service management contract
+
+`yard llm` is the operator surface for the configured `local_services` stack. The shipped manager reports and acts on these fields:
+
+- `mode`: `off`, `manual`, or `auto`
+- `compose_file` and `project_dir`
+- Docker capability booleans: `docker_available`, `daemon_available`, `compose_available`, `compose_file_exists`
+- `network_status`: map of required Docker network names to availability
+- `services`: per-service `name`, `healthy`, `reachable`, `models_ready`, `required`, `base_url`, `health_url`, `models_url`, and optional `detail`
+- `required_services`
+- `problems` and `remediation`
+
+`yard llm status --json` returns that `StackStatus` shape. `yard llm up` first computes status. In `off` or `manual` mode, unhealthy required services produce a manager error plus remediation. In `auto` mode, the manager may create configured required networks when `auto_create_networks` is true, run `docker compose up -d` for required services, poll health/model readiness until `startup_timeout_seconds`, and then return the final status. `yard llm down` runs compose down for the configured stack, and `yard llm logs --tail N` returns compose logs for configured services.
+
+`yard index` uses this same local-service precheck path before retrieval/runtime validation that depends on local embedding or model services.
 
 ## 4. Architecture
 
@@ -202,11 +221,12 @@ The no-legacy target state does not preserve duplicated public command trees in 
 5. `yard index` indexes code identically to `tidmouth index`
 6. `yard llm status/up/down/logs` exposes the supported local-service management flow from the unified CLI
 7. `yard auth status` exposes provider auth state from the unified CLI
-8. `make all` builds the supported artifact set for the no-legacy target state; compatibility-only binaries are not acceptance requirements
-9. `make test` green
-10. No acceptance criterion requires `sodoryard` to remain as a working public binary
-11. A chain started via `yard chain start` successfully spawns engine subprocesses (proving the internal spawn path still works)
-12. `internal/runtime/` package exists with extracted runtime builders callable from `cmd/yard/` and any retained minimal internal engine wrapper
+8. `yard auth login codex` starts the supported Codex login flow from the unified CLI
+9. `make build` and `make all` build the supported artifact set for the no-legacy target state; compatibility-only binaries are not acceptance requirements
+10. `make test` green
+11. No acceptance criterion requires `sodoryard` to remain as a working public binary
+12. A chain started via `yard chain start` successfully spawns engine subprocesses (proving the internal spawn path still works)
+13. `internal/runtime/` package exists with extracted runtime builders callable from `cmd/yard/` and any retained minimal internal engine wrapper
 
 ## 8. Out of scope
 

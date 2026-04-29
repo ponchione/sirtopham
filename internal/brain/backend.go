@@ -22,6 +22,12 @@ type Backend interface {
 	ListDocuments(ctx context.Context, directory string) ([]string, error)
 }
 
+// LimitedKeywordSearcher is an optional extension for backends that can push a
+// result limit down to their keyword search implementation.
+type LimitedKeywordSearcher interface {
+	SearchKeywordLimit(ctx context.Context, query string, maxResults int) ([]SearchHit, error)
+}
+
 // IsOperationalDocument returns true for brain documents that are operational
 // bookkeeping (e.g. _log.md) rather than real knowledge notes. These should be
 // excluded from proactive retrieval and search results.

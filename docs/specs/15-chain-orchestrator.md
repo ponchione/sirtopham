@@ -128,9 +128,9 @@ The orchestrator agent's primary tool. Spawns a headless engine session and bloc
 
 1. Validate role exists in config.
 2. Check chain safety limits (max steps, token budget, duration).
-3. If `reindex_before`: exec `tidmouth index --quiet` and wait.
+3. If `reindex_before`: exec `tidmouth index --quiet`; when `brain.enabled` is true, also exec `yard brain index --quiet`; wait for both to complete before spawning the engine.
 4. Create a step record in SQLite (status: running).
-5. Exec `tidmouth run --role {role} --task {task} --chain-id {chain-id} --receipt-path receipts/{role}/{chain-id}-step-{NNN}.md --quiet` as subprocess.
+5. Exec `tidmouth run --role {role} --task {task} --chain-id {chain-id} --receipt-path receipts/{role}/{chain-id}-step-{NNN}.md` as subprocess.
 6. Wait for process exit.
 7. Read receipt from brain at the expected path.
 8. Parse receipt frontmatter (verdict, tokens used, turns used, duration).
@@ -146,7 +146,7 @@ The orchestrator agent's primary tool. Spawns a headless engine session and bloc
 
 **Timeout handling:**
 
-If the engine subprocess exceeds its configured timeout, the orchestrator binary sends SIGTERM, waits 10 seconds, then SIGKILL. It writes a `safety_limit` receipt on behalf of the killed engine.
+If the engine subprocess exceeds its configured timeout, the orchestrator process requests termination and waits a short grace period. If the engine exits without producing a receipt, `spawn_agent` writes a synthetic `safety_limit` receipt at the expected path so chain state and brain state remain reconcilable.
 
 ### chain_complete
 
@@ -272,6 +272,8 @@ CREATE INDEX IF NOT EXISTS idx_events_created ON events(created_at);
 |---|---|---|
 | `chain_started` | Chain begins | specs, limits, `orchestrator_pid`, `execution_id`, `active_execution`, optional `resumed_by`/`continued_by` |
 | `step_started` | Engine spawned | role, task, optional `task_context` |
+| `step_process_started` | Engine subprocess has a PID | `process_id`, role, active_process |
+| `step_process_exited` | Engine subprocess exited | `process_id`, exit_code |
 | `step_output` | Spawned engine emitted stdout/stderr | stream, line |
 | `step_completed` | Engine exited | verdict, metrics |
 | `step_failed` | Engine errored | error, exit code |
@@ -279,10 +281,10 @@ CREATE INDEX IF NOT EXISTS idx_events_created ON events(created_at);
 | `reindex_completed` | Reindex done | duration, files indexed |
 | `resolver_loop` | Resolver cycle detected | loop count, `task_context` |
 | `safety_limit_hit` | Chain limit reached | which limit, current value |
-| `chain_paused` | Human paused | — |
+| `chain_paused` | Human requested or finalized pause | request event: `status: "pause_requested"`; final event: `status: "paused"`, `execution_id`, optional `finalized_from` |
 | `chain_resumed` | Human resumed | `resumed_by`, `orchestrator_pid`, `execution_id`, `active_execution` |
 | `chain_completed` | Chain finished | summary, status, total metrics, `execution_id`, optional `finalized_from` |
-| `chain_cancelled` | Human cancelled | — |
+| `chain_cancelled` | Human requested or finalized cancellation | request event: `status: "cancel_requested"`; final event: `status: "cancelled"`, `execution_id`, optional `finalized_from` |
 
 ---
 
@@ -371,21 +373,25 @@ Practical approach: the `spawn_agent` tool accepts an optional `task_context` fi
 The CLI transitions the chain status from `running` to `pause_requested`. The `spawn_agent` implementation checks control state before spawning. If set:
 - If an engine is currently running: let it finish, then pause.
 - If no engine is running: pause immediately.
-- Log `chain_paused` event.
+- Log a request `chain_paused` event with `status: "pause_requested"` when the CLI records the request.
 - The orchestrator agent's current turn continues but `spawn_agent` returns a special "chain paused" result.
+
+When the active orchestrator execution actually observes the request and stops, the runtime finalizes the chain to `paused` and logs a terminal `chain_paused` event with `status: "paused"`, the active `execution_id` when known, and `finalized_from: "pause_requested"`.
 
 ### Resume
 
-The CLI transitions a `paused` chain back to `running`, logs `chain_resumed`, and starts a fresh active execution with a new `execution_id`. There is no separate command queue table. Resume state is represented by the chain status plus event-log payloads such as `resumed_by`, `orchestrator_pid`, `execution_id`, and `active_execution`.
+The CLI transitions a `paused` chain back to `running`, logs `chain_resumed`, and starts a fresh active execution with a new `execution_id`. Resume is only valid from `paused`; a `pause_requested` chain must first finish pausing, and a `running` chain is already active. There is no separate command queue table. Resume state is represented by the chain status plus event-log payloads such as `resumed_by`, `orchestrator_pid`, `execution_id`, and `active_execution`.
 
 Implementation detail: resuming may require starting a fresh orchestrator agent session with context about what has already been done. The brain contains all the receipts, so the new orchestrator session can read them and continue from where things left off. This is the same "fresh context" principle that applies to all agents.
 
 ### Cancel
 
 The CLI transitions `running` or `pause_requested` to `cancel_requested`; paused chains can move directly to `cancelled`. The orchestrator binary:
-- Kills any running engine subprocess (SIGTERM → SIGKILL).
-- Writes a cancellation receipt.
-- Logs `chain_cancelled`.
+- Signals any active engine subprocess PID recorded by `step_process_started` before signaling the active orchestrator execution.
+- Records a request `chain_cancelled` event with `status: "cancel_requested"` for active chains.
+- Signals the latest active orchestrator execution PID from the most recent active `chain_started` or `chain_resumed` event, if present. Missing or already-exited PIDs are ignored.
+- Writes a cancellation receipt when the active runtime can do so.
+- Logs a terminal `chain_cancelled` event with `status: "cancelled"`, the active `execution_id` when known, and `finalized_from: "cancel_requested"`.
 - Exits with code 4.
 
 ---

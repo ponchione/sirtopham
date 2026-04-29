@@ -34,6 +34,9 @@ func TestSpawnAgentRunsSubprocessAndStoresReceipt(t *testing.T) {
 	var gotArgs []string
 	tool.runCommand = func(ctx context.Context, in RunCommandInput) RunResult {
 		gotArgs = append([]string(nil), in.Args...)
+		if in.OnStart != nil {
+			in.OnStart(4321)
+		}
 		if in.Stdout != nil {
 			_, _ = in.Stdout.Write([]byte("stdout line 1\nstdout line 2\n"))
 		}
@@ -105,20 +108,31 @@ Done.
 	if len(events) < 5 {
 		t.Fatalf("expected step output events, got %+v", events)
 	}
-	var stdoutSeen, stderrSeen bool
+	var stdoutSeen, stderrSeen, processStartedSeen, processExitedSeen bool
 	for _, event := range events {
-		if event.EventType != chain.EventStepOutput {
-			continue
-		}
-		if strings.Contains(event.EventData, `"stream":"stdout"`) && strings.Contains(event.EventData, "stdout line 1") {
-			stdoutSeen = true
-		}
-		if strings.Contains(event.EventData, `"stream":"stderr"`) && strings.Contains(event.EventData, "stderr line 1") {
-			stderrSeen = true
+		switch event.EventType {
+		case chain.EventStepOutput:
+			if strings.Contains(event.EventData, `"stream":"stdout"`) && strings.Contains(event.EventData, "stdout line 1") {
+				stdoutSeen = true
+			}
+			if strings.Contains(event.EventData, `"stream":"stderr"`) && strings.Contains(event.EventData, "stderr line 1") {
+				stderrSeen = true
+			}
+		case chain.EventStepProcessStarted:
+			if strings.Contains(event.EventData, `"process_id":4321`) {
+				processStartedSeen = true
+			}
+		case chain.EventStepProcessExited:
+			if strings.Contains(event.EventData, `"process_id":4321`) && strings.Contains(event.EventData, `"exit_code":0`) {
+				processExitedSeen = true
+			}
 		}
 	}
 	if !stdoutSeen || !stderrSeen {
 		t.Fatalf("step output events missing stdout/stderr lines: %+v", events)
+	}
+	if !processStartedSeen || !processExitedSeen {
+		t.Fatalf("step process events missing start/exit: %+v", events)
 	}
 }
 
@@ -224,11 +238,15 @@ func TestSpawnAgentRunsReindexBeforeWhenRequested(t *testing.T) {
 	store := chain.NewStore(newSpawnTestDB(t))
 	chainID, _ := store.StartChain(ctx, chain.ChainSpec{MaxSteps: 10, MaxResolverLoops: 1, MaxDuration: time.Hour, TokenBudget: 100})
 	backend := &fakeBrainBackend{docs: map[string]string{}}
-	tool := NewSpawnAgentTool(SpawnAgentDeps{Store: store, Backend: backend, Config: &appconfig.Config{AgentRoles: map[string]appconfig.AgentRoleConfig{"coder": {}}}, ChainID: chainID, EngineBinary: "tidmouth", ProjectRoot: t.TempDir()})
-	var calls [][]string
+	tool := NewSpawnAgentTool(SpawnAgentDeps{Store: store, Backend: backend, Config: &appconfig.Config{Brain: appconfig.BrainConfig{Enabled: true}, AgentRoles: map[string]appconfig.AgentRoleConfig{"coder": {}}}, ChainID: chainID, EngineBinary: "tidmouth", ProjectRoot: t.TempDir()})
+	type commandCall struct {
+		name string
+		args []string
+	}
+	var calls []commandCall
 	tool.runCommand = func(ctx context.Context, in RunCommandInput) RunResult {
-		calls = append(calls, append([]string(nil), in.Args...))
-		if len(calls) == 2 {
+		calls = append(calls, commandCall{name: in.Name, args: append([]string(nil), in.Args...)})
+		if len(calls) == 3 {
 			backend.docs["receipts/coder/"+chainID+"-step-001.md"] = `---
 agent: coder
 chain_id: ` + chainID + `
@@ -249,11 +267,14 @@ Done.
 	if err != nil {
 		t.Fatalf("Execute returned error: %v", err)
 	}
-	if len(calls) != 2 || calls[0][0] != "index" || calls[1][0] != "run" {
+	if len(calls) != 3 ||
+		calls[0].name != "tidmouth" || calls[0].args[0] != "index" ||
+		calls[1].name != "yard" || strings.Join(calls[1].args, " ") != "brain index --config yard.yaml --quiet" ||
+		calls[2].name != "tidmouth" || calls[2].args[0] != "run" {
 		t.Fatalf("unexpected calls: %+v", calls)
 	}
-	if !strings.Contains(strings.Join(calls[0], " "), "--quiet") {
-		t.Fatalf("reindex args = %v, want --quiet", calls[0])
+	if !strings.Contains(strings.Join(calls[0].args, " "), "--quiet") {
+		t.Fatalf("code reindex args = %v, want --quiet", calls[0].args)
 	}
 }
 
@@ -261,7 +282,9 @@ func TestSpawnAgentFailsWhenReceiptMissing(t *testing.T) {
 	ctx := context.Background()
 	store := chain.NewStore(newSpawnTestDB(t))
 	chainID, _ := store.StartChain(ctx, chain.ChainSpec{MaxSteps: 10, MaxResolverLoops: 1, MaxDuration: time.Hour, TokenBudget: 100})
-	tool := NewSpawnAgentTool(SpawnAgentDeps{Store: store, Backend: &fakeBrainBackend{docs: map[string]string{}}, Config: &appconfig.Config{AgentRoles: map[string]appconfig.AgentRoleConfig{"coder": {}}}, ChainID: chainID, EngineBinary: "tidmouth", ProjectRoot: t.TempDir()})
+	backend := &fakeBrainBackend{docs: map[string]string{}}
+	tool := NewSpawnAgentTool(SpawnAgentDeps{Store: store, Backend: backend, Config: &appconfig.Config{AgentRoles: map[string]appconfig.AgentRoleConfig{"coder": {}}}, ChainID: chainID, EngineBinary: "tidmouth", ProjectRoot: t.TempDir()})
+	tool.now = func() time.Time { return time.Date(2026, 4, 11, 0, 0, 0, 0, time.UTC) }
 	tool.runCommand = func(ctx context.Context, in RunCommandInput) RunResult { return RunResult{ExitCode: 1} }
 	_, err := tool.Execute(ctx, ".", []byte(`{"role":"coder","task":"do work"}`))
 	if err == nil || !strings.Contains(err.Error(), "missing receipt") {
@@ -270,6 +293,10 @@ func TestSpawnAgentFailsWhenReceiptMissing(t *testing.T) {
 	steps, _ := store.ListSteps(ctx, chainID)
 	if len(steps) != 1 || steps[0].Status != "failed" {
 		t.Fatalf("unexpected failed step: %+v", steps)
+	}
+	safetyReceipt := backend.docs["receipts/coder/"+chainID+"-step-001.md"]
+	if !strings.Contains(safetyReceipt, "verdict: safety_limit") || !strings.Contains(safetyReceipt, "missing receipt") {
+		t.Fatalf("safety receipt = %q, want safety_limit receipt explaining missing receipt", safetyReceipt)
 	}
 }
 

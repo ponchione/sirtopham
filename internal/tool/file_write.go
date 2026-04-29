@@ -170,33 +170,13 @@ func (f FileWrite) Execute(ctx context.Context, projectRoot string, input json.R
 		return &ToolResult{
 			Success: true,
 			Content: fmt.Sprintf("[new file created] %s (%d bytes)", params.Path, len(params.Content)),
-			Details: newFileMutationDetails(map[string]any{
-				"operation":       "write",
-				"path":            params.Path,
-				"created":         true,
-				"changed":         true,
-				"diff_format":     "unified",
-				"diff_line_count": 0,
-				"diff_truncated":  false,
-				"bytes_before":    0,
-				"bytes_after":     len(params.Content),
-			}),
+			Details: newFileMutationDetails(fileMutationDetailFields("write", params.Path, true, true, "", 0, len(params.Content))),
 		}, nil
 	}
 
 	// Generate diff for overwrites.
 	diff := unifiedDiff("a/"+params.Path, "b/"+params.Path, oldContent, params.Content, 3)
-	details := map[string]any{
-		"operation":       "write",
-		"path":            params.Path,
-		"created":         false,
-		"changed":         diff != "",
-		"diff_format":     "unified",
-		"diff_line_count": detailLineCount(diff),
-		"diff_truncated":  false,
-		"bytes_before":    len(oldContent),
-		"bytes_after":     len(params.Content),
-	}
+	details := fileMutationDetailFields("write", params.Path, false, diff != "", diff, len(oldContent), len(params.Content))
 	if diff == "" {
 		return &ToolResult{
 			Success: true,

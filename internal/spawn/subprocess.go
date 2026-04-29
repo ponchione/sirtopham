@@ -17,6 +17,7 @@ type RunCommandInput struct {
 	Stderr               io.Writer
 	OnStdoutLine         func(string)
 	OnStderrLine         func(string)
+	OnStart              func(pid int)
 	Env                  []string
 	Dir                  string
 	Timeout              time.Duration
@@ -50,7 +51,13 @@ func RunCommand(ctx context.Context, in RunCommandInput) RunResult {
 		return cmd.Process.Signal(syscall.SIGTERM)
 	}
 	cmd.WaitDelay = in.TerminateGracePeriod
-	if err := cmd.Run(); err != nil {
+	if err := cmd.Start(); err != nil {
+		return RunResult{ExitCode: -1, Err: fmt.Errorf("start command: %w", err)}
+	}
+	if in.OnStart != nil && cmd.Process != nil {
+		in.OnStart(cmd.Process.Pid)
+	}
+	if err := cmd.Wait(); err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			return RunResult{ExitCode: exitErr.ExitCode()}
 		}

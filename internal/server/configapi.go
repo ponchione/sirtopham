@@ -93,31 +93,13 @@ func (h *ConfigHandler) handleGetConfig(w http.ResponseWriter, r *http.Request) 
 
 	var providers []providerInfo
 	if h.runtime != nil {
-		models, modelErr := h.runtime.Models(r.Context())
-		authStatuses, authErr := h.runtime.AuthStatuses(r.Context())
-		health := h.runtime.ProviderHealthMap()
-		if modelErr == nil || authErr == nil {
-			if modelErr != nil {
-				models = nil
-			}
-			if authErr != nil {
-				authStatuses = nil
-			}
-			providers = h.buildProviderList(providerNames, models, authStatuses, health)
+		runtime := h.collectProviderRuntimeData(r.Context(), true, true)
+		if runtime.modelsOK || runtime.authOK {
+			providers = h.buildProviderList(providerNames, runtime)
 		}
 	}
 	if providers == nil {
-		for _, name := range providerNames {
-			pc, ok := h.providers[name]
-			if !ok {
-				continue
-			}
-			pi := providerInfo{Name: name, Type: pc.Type, Healthy: true, Status: "available"}
-			if pc.Model != "" {
-				pi.Models = []string{pc.Model}
-			}
-			providers = append(providers, pi)
-		}
+		providers = h.configuredProviderList(providerNames)
 	}
 
 	writeJSON(w, http.StatusOK, configResponse{
@@ -171,46 +153,38 @@ func (h *ConfigHandler) availableModelsByProvider(ctx context.Context) map[strin
 	return available
 }
 
-func (h *ConfigHandler) buildProviderList(providerNames []string, models []provider.Model, authStatuses map[string]*provider.AuthStatus, health map[string]*routerpkg.ProviderHealth) []providerInfo {
-	provModels := map[string][]string{}
-	for _, name := range providerNames {
-		provModels[name] = []string{}
-	}
-	for _, m := range models {
-		name := m.Provider
-		if name == "" {
-			continue
-		}
-		if _, ok := provModels[name]; ok {
-			provModels[name] = append(provModels[name], m.ID)
-		}
-	}
-
+func (h *ConfigHandler) configuredProviderList(providerNames []string) []providerInfo {
 	var result []providerInfo
 	for _, name := range providerNames {
 		pc, ok := h.providers[name]
 		if !ok {
 			continue
 		}
-		lastError := ""
-		healthy := false
-		status := "unavailable"
-		if hp, ok := health[name]; ok && hp != nil {
-			healthy = hp.Healthy
-			if healthy {
-				status = "available"
-			} else if hp.LastError != nil {
-				lastError = hp.LastError.Error()
-			}
+		pi := providerInfo{Name: name, Type: pc.Type, Healthy: true, Status: "available"}
+		if pc.Model != "" {
+			pi.Models = []string{pc.Model}
 		}
+		result = append(result, pi)
+	}
+	return result
+}
+
+func (h *ConfigHandler) buildProviderList(providerNames []string, runtime providerRuntimeData) []providerInfo {
+	var result []providerInfo
+	for _, name := range providerNames {
+		pc, ok := h.providers[name]
+		if !ok {
+			continue
+		}
+		status, healthy, lastError := providerHealthSummary(runtime.health[name])
 		result = append(result, providerInfo{
 			Name:      name,
 			Type:      pc.Type,
-			Models:    provModels[name],
+			Models:    providerModelIDs(runtime.modelsByProvider[name]),
 			Status:    status,
 			Healthy:   healthy,
 			LastError: lastError,
-			Auth:      authStatuses[name],
+			Auth:      runtime.authStatuses[name],
 		})
 	}
 	return result
@@ -274,23 +248,7 @@ type providerStatus struct {
 }
 
 func (h *ConfigHandler) handleProviders(w http.ResponseWriter, r *http.Request) {
-	provModels := map[string][]provider.Model{}
-	authStatuses := map[string]*provider.AuthStatus{}
-	health := map[string]*routerpkg.ProviderHealth{}
-	if h.runtime != nil {
-		all, err := h.runtime.Models(r.Context())
-		if err == nil {
-			for _, m := range all {
-				if m.Provider != "" {
-					provModels[m.Provider] = append(provModels[m.Provider], m)
-				}
-			}
-		}
-		if statuses, err := h.runtime.AuthStatuses(r.Context()); err == nil {
-			authStatuses = statuses
-		}
-		health = h.runtime.ProviderHealthMap()
-	}
+	runtime := h.collectProviderRuntimeData(r.Context(), true, true)
 
 	var result []providerStatus
 	for _, name := range h.cfg.ProviderNamesForSurfaces() {
@@ -298,18 +256,19 @@ func (h *ConfigHandler) handleProviders(w http.ResponseWriter, r *http.Request) 
 		if !ok {
 			continue
 		}
-		status, healthy, lastError := providerHealthSummary(health[name])
+		status, healthy, lastError := providerHealthSummary(runtime.health[name])
+		models := runtime.modelsByProvider[name]
+		if models == nil {
+			models = []provider.Model{}
+		}
 		ps := providerStatus{
 			Name:      name,
 			Type:      pc.Type,
 			Status:    status,
 			Healthy:   healthy,
 			LastError: lastError,
-			Models:    provModels[name],
-			Auth:      authStatuses[name],
-		}
-		if ps.Models == nil {
-			ps.Models = []provider.Model{}
+			Models:    models,
+			Auth:      runtime.authStatuses[name],
 		}
 		result = append(result, ps)
 	}
@@ -327,14 +286,7 @@ type authProviderStatus struct {
 }
 
 func (h *ConfigHandler) handleAuthProviders(w http.ResponseWriter, r *http.Request) {
-	authStatuses := map[string]*provider.AuthStatus{}
-	health := map[string]*routerpkg.ProviderHealth{}
-	if h.runtime != nil {
-		if statuses, err := h.runtime.AuthStatuses(r.Context()); err == nil {
-			authStatuses = statuses
-		}
-		health = h.runtime.ProviderHealthMap()
-	}
+	runtime := h.collectProviderRuntimeData(r.Context(), false, true)
 
 	var result []authProviderStatus
 	for _, name := range h.cfg.ProviderNamesForSurfaces() {
@@ -342,17 +294,70 @@ func (h *ConfigHandler) handleAuthProviders(w http.ResponseWriter, r *http.Reque
 		if !ok {
 			continue
 		}
-		status, healthy, lastError := providerHealthSummary(health[name])
+		status, healthy, lastError := providerHealthSummary(runtime.health[name])
 		result = append(result, authProviderStatus{
 			Name:      name,
 			Type:      pc.Type,
 			Status:    status,
 			Healthy:   healthy,
 			LastError: lastError,
-			Auth:      authStatuses[name],
+			Auth:      runtime.authStatuses[name],
 		})
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+type providerRuntimeData struct {
+	modelsByProvider map[string][]provider.Model
+	authStatuses     map[string]*provider.AuthStatus
+	health           map[string]*routerpkg.ProviderHealth
+	modelsOK         bool
+	authOK           bool
+}
+
+func (h *ConfigHandler) collectProviderRuntimeData(ctx context.Context, includeModels bool, includeAuth bool) providerRuntimeData {
+	data := providerRuntimeData{
+		modelsByProvider: map[string][]provider.Model{},
+		authStatuses:     map[string]*provider.AuthStatus{},
+		health:           map[string]*routerpkg.ProviderHealth{},
+	}
+	if h.runtime == nil {
+		return data
+	}
+	if includeModels {
+		models, err := h.runtime.Models(ctx)
+		if err == nil {
+			data.modelsOK = true
+			data.modelsByProvider = modelsByProvider(models)
+		}
+	}
+	if includeAuth {
+		statuses, err := h.runtime.AuthStatuses(ctx)
+		if err == nil {
+			data.authOK = true
+			data.authStatuses = statuses
+		}
+	}
+	data.health = h.runtime.ProviderHealthMap()
+	return data
+}
+
+func modelsByProvider(models []provider.Model) map[string][]provider.Model {
+	grouped := map[string][]provider.Model{}
+	for _, m := range models {
+		if m.Provider != "" {
+			grouped[m.Provider] = append(grouped[m.Provider], m)
+		}
+	}
+	return grouped
+}
+
+func providerModelIDs(models []provider.Model) []string {
+	ids := make([]string, 0, len(models))
+	for _, m := range models {
+		ids = append(ids, m.ID)
+	}
+	return ids
 }
 
 func providerHealthSummary(hp *routerpkg.ProviderHealth) (string, bool, string) {

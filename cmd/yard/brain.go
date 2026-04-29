@@ -21,6 +21,7 @@ func newYardBrainCmd(configPath *string) *cobra.Command {
 
 func newYardBrainIndexCmd(configPath *string) *cobra.Command {
 	var jsonOut bool
+	var quiet bool
 	cmd := &cobra.Command{
 		Use:   "index",
 		Short: "Rebuild derived brain metadata from the vault",
@@ -32,11 +33,15 @@ func newYardBrainIndexCmd(configPath *string) *cobra.Command {
 			if jsonOut {
 				return cmdutil.WriteJSON(cmd.OutOrStdout(), result)
 			}
+			if quiet {
+				return nil
+			}
 			cmdutil.PrintBrainIndexSummary(cmd.OutOrStdout(), result)
 			return nil
 		},
 	}
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Emit machine-readable JSON output")
+	cmd.Flags().BoolVar(&quiet, "quiet", false, "Suppress human-readable brain index summary")
 	return cmd
 }
 

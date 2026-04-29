@@ -12,6 +12,11 @@ type ActiveExecution struct {
 	OrchestratorPID int
 }
 
+type ActiveStepProcess struct {
+	StepID    string
+	ProcessID int
+}
+
 type TerminalChainClosure struct {
 	Status    string
 	EventType EventType
@@ -169,9 +174,9 @@ func LatestActiveExecution(events []Event) (ActiveExecution, bool) {
 			}
 		case EventChainStarted, EventChainResumed:
 			var payload struct {
-				OrchestratorPID int   `json:"orchestrator_pid"`
+				OrchestratorPID int    `json:"orchestrator_pid"`
 				ExecutionID     string `json:"execution_id"`
-				ActiveExecution *bool `json:"active_execution"`
+				ActiveExecution *bool  `json:"active_execution"`
 			}
 			if err := json.Unmarshal([]byte(event.EventData), &payload); err != nil {
 				continue
@@ -191,6 +196,57 @@ func LatestActiveExecution(events []Event) (ActiveExecution, bool) {
 		}
 	}
 	return ActiveExecution{}, false
+}
+
+func LatestActiveStepProcess(events []Event) (ActiveStepProcess, bool) {
+	terminatedSteps := make(map[string]struct{})
+	terminatedPIDs := make(map[int]struct{})
+	for i := len(events) - 1; i >= 0; i-- {
+		event := events[i]
+		switch event.EventType {
+		case EventStepCompleted, EventStepFailed:
+			if event.StepID != "" {
+				terminatedSteps[event.StepID] = struct{}{}
+			}
+		case EventStepProcessExited:
+			if event.StepID != "" {
+				terminatedSteps[event.StepID] = struct{}{}
+			}
+			var payload struct {
+				ProcessID int `json:"process_id"`
+			}
+			if err := json.Unmarshal([]byte(event.EventData), &payload); err != nil {
+				continue
+			}
+			if payload.ProcessID > 0 {
+				terminatedPIDs[payload.ProcessID] = struct{}{}
+			}
+		case EventStepProcessStarted:
+			var payload struct {
+				ProcessID     int   `json:"process_id"`
+				ActiveProcess *bool `json:"active_process"`
+			}
+			if err := json.Unmarshal([]byte(event.EventData), &payload); err != nil {
+				continue
+			}
+			if payload.ProcessID <= 0 {
+				continue
+			}
+			if payload.ActiveProcess != nil && !*payload.ActiveProcess {
+				continue
+			}
+			if event.StepID != "" {
+				if _, done := terminatedSteps[event.StepID]; done {
+					continue
+				}
+			}
+			if _, done := terminatedPIDs[payload.ProcessID]; done {
+				continue
+			}
+			return ActiveStepProcess{StepID: event.StepID, ProcessID: payload.ProcessID}, true
+		}
+	}
+	return ActiveStepProcess{}, false
 }
 
 func ShouldStopScheduling(status string) bool {

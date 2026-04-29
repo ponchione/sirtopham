@@ -223,3 +223,68 @@ func TestLatestActiveExecutionReturnsLatestNonTerminalRegistration(t *testing.T)
 		t.Fatalf("LatestActiveExecution() = %+v, want exec-2/2222", exec)
 	}
 }
+
+func TestLatestActiveStepProcessSkipsExitedProcess(t *testing.T) {
+	ctx := context.Background()
+	store := NewStore(newChainTestDB(t))
+	chainID, err := store.StartChain(ctx, ChainSpec{MaxSteps: 5, MaxResolverLoops: 1, MaxDuration: 1, TokenBudget: 10})
+	if err != nil {
+		t.Fatalf("StartChain returned error: %v", err)
+	}
+	stepID, err := store.StartStep(ctx, StepSpec{ChainID: chainID, SequenceNum: 1, Role: "coder", Task: "do work"})
+	if err != nil {
+		t.Fatalf("StartStep returned error: %v", err)
+	}
+	if err := store.LogEvent(ctx, chainID, stepID, EventStepProcessStarted, map[string]any{"process_id": 1111, "active_process": true}); err != nil {
+		t.Fatalf("LogEvent returned error: %v", err)
+	}
+	if err := store.LogEvent(ctx, chainID, stepID, EventStepProcessExited, map[string]any{"process_id": 1111, "exit_code": 0}); err != nil {
+		t.Fatalf("LogEvent returned error: %v", err)
+	}
+
+	events, err := store.ListEvents(ctx, chainID)
+	if err != nil {
+		t.Fatalf("ListEvents returned error: %v", err)
+	}
+	if proc, ok := LatestActiveStepProcess(events); ok || proc.ProcessID != 0 {
+		t.Fatalf("LatestActiveStepProcess() = (%+v, %t), want empty,false", proc, ok)
+	}
+}
+
+func TestLatestActiveStepProcessReturnsLatestRunningProcess(t *testing.T) {
+	ctx := context.Background()
+	store := NewStore(newChainTestDB(t))
+	chainID, err := store.StartChain(ctx, ChainSpec{MaxSteps: 5, MaxResolverLoops: 1, MaxDuration: 1, TokenBudget: 10})
+	if err != nil {
+		t.Fatalf("StartChain returned error: %v", err)
+	}
+	firstStepID, err := store.StartStep(ctx, StepSpec{ChainID: chainID, SequenceNum: 1, Role: "coder", Task: "do work"})
+	if err != nil {
+		t.Fatalf("StartStep returned error: %v", err)
+	}
+	secondStepID, err := store.StartStep(ctx, StepSpec{ChainID: chainID, SequenceNum: 2, Role: "auditor", Task: "audit work"})
+	if err != nil {
+		t.Fatalf("StartStep returned error: %v", err)
+	}
+	if err := store.LogEvent(ctx, chainID, firstStepID, EventStepProcessStarted, map[string]any{"process_id": 1111, "active_process": true}); err != nil {
+		t.Fatalf("LogEvent returned error: %v", err)
+	}
+	if err := store.LogEvent(ctx, chainID, firstStepID, EventStepCompleted, map[string]any{"verdict": "completed"}); err != nil {
+		t.Fatalf("LogEvent returned error: %v", err)
+	}
+	if err := store.LogEvent(ctx, chainID, secondStepID, EventStepProcessStarted, map[string]any{"process_id": 2222, "active_process": true}); err != nil {
+		t.Fatalf("LogEvent returned error: %v", err)
+	}
+
+	events, err := store.ListEvents(ctx, chainID)
+	if err != nil {
+		t.Fatalf("ListEvents returned error: %v", err)
+	}
+	proc, ok := LatestActiveStepProcess(events)
+	if !ok {
+		t.Fatal("LatestActiveStepProcess() ok = false, want true")
+	}
+	if proc.StepID != secondStepID || proc.ProcessID != 2222 {
+		t.Fatalf("LatestActiveStepProcess() = %+v, want %s/2222", proc, secondStepID)
+	}
+}

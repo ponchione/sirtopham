@@ -1,13 +1,13 @@
 package codex
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
 
 	"github.com/ponchione/sodoryard/internal/provider"
+	providersse "github.com/ponchione/sodoryard/internal/provider/sse"
 )
 
 const maxSSEScannerTokenSize = 16 * 1024 * 1024
@@ -151,46 +151,24 @@ func (p *CodexProvider) Stream(ctx context.Context, req *provider.Request) (<-ch
 		defer close(ch)
 
 		state := &streamState{}
-		scanner := bufio.NewScanner(resp.Body)
-		scanner.Buffer(make([]byte, 0, 64*1024), maxSSEScannerTokenSize)
+		reader := providersse.NewReader(resp.Body, maxSSEScannerTokenSize)
 
-		var eventType string
-
-		for scanner.Scan() {
-			if ctx.Err() != nil {
+		for {
+			event, ok, err := reader.Next(ctx)
+			if err != nil {
 				sendStreamEvent(ctx, ch, provider.StreamError{
-					Err:     ctx.Err(),
+					Err:     err,
 					Fatal:   true,
-					Message: "stream cancelled",
+					Message: fmt.Sprintf("stream read error: %v", err),
 				})
 				return
 			}
-
-			line := scanner.Text()
-
-			if strings.HasPrefix(line, "event: ") {
-				eventType = strings.TrimPrefix(line, "event: ")
-				continue
+			if !ok {
+				return
 			}
-
-			if strings.HasPrefix(line, "data: ") {
-				data := strings.TrimPrefix(line, "data: ")
-				if !p.handleSSEEvent(ctx, eventType, []byte(data), state, ch) {
-					return
-				}
-				eventType = ""
-				continue
+			if !p.handleSSEEvent(ctx, event.Type, []byte(event.Data), state, ch) {
+				return
 			}
-
-			// Empty lines and other lines are ignored (SSE separator)
-		}
-
-		if err := scanner.Err(); err != nil {
-			sendStreamEvent(ctx, ch, provider.StreamError{
-				Err:     err,
-				Fatal:   true,
-				Message: fmt.Sprintf("stream read error: %v", err),
-			})
 		}
 	}()
 

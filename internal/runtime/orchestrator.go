@@ -16,7 +16,6 @@ import (
 	appdb "github.com/ponchione/sodoryard/internal/db"
 	"github.com/ponchione/sodoryard/internal/provider"
 	"github.com/ponchione/sodoryard/internal/provider/router"
-	"github.com/ponchione/sodoryard/internal/provider/tracking"
 	"github.com/ponchione/sodoryard/internal/role"
 	spawnpkg "github.com/ponchione/sodoryard/internal/spawn"
 	"github.com/ponchione/sodoryard/internal/tool"
@@ -89,39 +88,15 @@ func BuildOrchestratorRuntime(ctx context.Context, cfg *appconfig.Config) (*Orch
 		return nil, fmt.Errorf("ensure project record: %w", err)
 	}
 
-	routerCfg := router.RouterConfig{
-		Default:  router.RouteTarget{Provider: cfg.Routing.Default.Provider, Model: cfg.Routing.Default.Model},
-		Fallback: router.RouteTarget{Provider: cfg.Routing.Fallback.Provider, Model: cfg.Routing.Fallback.Model},
-	}
-	provRouter, err := router.NewRouter(routerCfg, tracking.NewSQLiteSubCallStore(queries), logger)
-	if err != nil {
-		cleanup()
-		return nil, fmt.Errorf("create router: %w", err)
-	}
-
 	// Only register providers the YAML explicitly listed. This avoids
 	// registering Default() providers (anthropic, openrouter) that the
 	// operator's config never asked for (TECH-DEBT R6).
-	providerNames := cfg.ProviderNamesForSurfaces()
-	for _, name := range providerNames {
-		provCfg, ok := cfg.Providers[name]
-		if !ok {
-			continue
-		}
-		p, err := BuildProvider(name, provCfg)
-		if err != nil {
-			cleanup()
-			return nil, fmt.Errorf("build provider %q: %w", name, err)
-		}
-		if err := provRouter.RegisterProvider(p); err != nil {
-			cleanup()
-			return nil, fmt.Errorf("register provider %q: %w", name, err)
-		}
-	}
-
-	if err := provRouter.Validate(ctx); err != nil {
+	provRouter, err := BuildProviderRouter(ctx, cfg, queries, logger, ProviderRouterOptions{
+		ProviderNames: cfg.ProviderNamesForSurfaces(),
+	})
+	if err != nil {
 		cleanup()
-		return nil, fmt.Errorf("validate providers: %w", err)
+		return nil, err
 	}
 
 	brainBackend, err := buildOrchestratorBrainBackend(ctx, cfg.Brain)

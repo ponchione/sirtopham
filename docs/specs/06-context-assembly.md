@@ -6,7 +6,7 @@
 
 ## Overview
 
-Context assembly is the implementation of sodoryard's core thesis: programmatic, task-specific, minimal context beats static context files. Every turn, before the first LLM call, the system examines the user's message and recent conversation history, retrieves relevant code and project knowledge via code RAG, explicit file reads, structural analysis, project-brain retrieval, conventions, and git context, and packages it within the available token budget. The project brain was intentionally reactive-only in v0.1; the v0.2 runtime now wires proactive brain retrieval into this layer, with derived keyword, semantic, and graph/backlink signals available when the brain index is fresh and the runtime searcher is present.
+Context assembly is the implementation of sodoryard's core thesis: programmatic, task-specific, minimal context beats static context files. Every turn, before the first LLM call, the system examines the user's message and recent conversation history, retrieves relevant code and project knowledge via code RAG, explicit file reads, structural analysis, project-brain retrieval, conventions, and git context, and packages it within the available token budget. The project brain was intentionally reactive-only in v0.1; the v0.2 runtime now wires proactive brain retrieval into this layer, with derived keyword, semantic, and graph/backlink signals available when the brain index is clean/up-to-date and the runtime searcher is present.
 
 This is what makes sodoryard "understand" the codebase. Get this right and the agent feels like a senior engineer who's read every file. Get it wrong and it's just another chatbot.
 
@@ -140,6 +140,32 @@ The rule-based analyzer extracts signals in priority order:
 **Git context:** Keywords — "commit", "diff", "PR", "pull request", "merge", "branch", "recent changes", "what changed", "last push". Flag `IncludeGitContext = true` with appropriate depth.
 
 **Continuation:** Signals — "continue", "keep going", "finish", "next", "also", "too", combined with the absence of strong new-topic signals. Flag momentum lookup.
+
+**Question intent:** General explanatory phrasing such as "what is", "how does", or "why does" boosts convention/documentation context by setting `IncludeConventions = true` and emitting `question_intent`.
+
+**Debugging hints:** Error, crash, panic, failure, timeout, regression, and similar troubleshooting phrases emit `debugging_hints` with `error_handling_boost`. This is an observability signal for retrieval tuning; it does not replace explicit file/symbol extraction.
+
+**Brain intent:** Direct references to the project brain, vault, notes, decisions, or memory set `PreferBrainContext = true` and emit `brain_intent`.
+
+**Brain-seeking intent:** Natural-language requests for rationale, layout, conventions, or prior debugging history set `PreferBrainContext = true` and emit `brain_seeking_intent` with one of `rationale`, `layout`, `convention`, or `history`. These signals are deliberately narrow so generic code explanation questions still use code retrieval.
+
+**Rejected file references:** Ambiguous path-like phrases emit `file_ref_rejected` instead of being fetched. Current rejection values are `unanchored_multi_segment_path`, `vault_rooted_note_path`, and `low_confidence_slash_path`. Rejections are surfaced in reports so false positives can be tuned without silently polluting explicit-file context.
+
+Current shipped signal type values are:
+
+| Signal type | Meaning |
+|---|---|
+| `file_ref` | accepted file or directory reference |
+| `file_ref_rejected` | path-like text rejected as too ambiguous or brain-vault-rooted |
+| `symbol_ref` | accepted symbol/identifier reference |
+| `modification_intent` | edit/refactor/remove style intent tied to a target |
+| `creation_intent` | create/add/build style intent that should include conventions |
+| `git_context` | request for diff, commit, branch, PR, or recent-change context |
+| `continuation` | weak follow-up turn using recent momentum |
+| `question_intent` | explanatory question that should boost documentation/conventions |
+| `brain_intent` | direct request for brain/vault/project-memory context |
+| `brain_seeking_intent` | indirect request for rationale/layout/convention/history notes |
+| `debugging_hints` | troubleshooting language that should be visible in reports |
 
 ### Replaceability
 

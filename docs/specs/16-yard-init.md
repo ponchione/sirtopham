@@ -363,7 +363,7 @@ The idempotency is also the spec's only "validation" gate: if `yard init && yard
 
 Phase 5b is complete when **all** of the following are true:
 
-1. `make all` builds the retained artifact set for the current no-legacy target state with the required FTS5 + lancedb cgo flags.
+1. `make build` builds the retained artifact set for the current no-legacy target state with the required FTS5 + lancedb cgo flags; `make all` is an alias for the same artifact set.
 2. `make test` is green, including new tests in `internal/initializer/`.
 3. `cmd/tidmouth/init.go` and `cmd/tidmouth/init_test.go` no longer exist; `tidmouth init` returns `unknown command` from cobra.
 4. `internal/initializer/` exists and houses all the file/directory/database creation logic.

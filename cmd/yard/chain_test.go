@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -372,6 +373,40 @@ func TestSignalYardActiveChainProcessUsesLatestRegisteredOrchestratorPID(t *test
 	}
 	if called != 1 {
 		t.Fatalf("interrupt call count = %d, want 1", called)
+	}
+}
+
+func TestSignalYardActiveChainProcessSignalsEngineBeforeOrchestrator(t *testing.T) {
+	ctx := context.Background()
+	store := chain.NewStore(newYardChainControlTestDB(t))
+	chainID, err := store.StartChain(ctx, chain.ChainSpec{MaxSteps: 5, MaxResolverLoops: 1, MaxDuration: time.Hour, TokenBudget: 100})
+	if err != nil {
+		t.Fatalf("StartChain returned error: %v", err)
+	}
+	if err := store.LogEvent(ctx, chainID, "", chain.EventChainStarted, map[string]any{"orchestrator_pid": 1111, "execution_id": "exec-1", "active_execution": true}); err != nil {
+		t.Fatalf("LogEvent returned error: %v", err)
+	}
+	stepID, err := store.StartStep(ctx, chain.StepSpec{ChainID: chainID, SequenceNum: 1, Role: "coder", Task: "do work"})
+	if err != nil {
+		t.Fatalf("StartStep returned error: %v", err)
+	}
+	if err := store.LogEvent(ctx, chainID, stepID, chain.EventStepProcessStarted, map[string]any{"process_id": 2222, "active_process": true}); err != nil {
+		t.Fatalf("LogEvent returned error: %v", err)
+	}
+
+	originalInterrupt := interruptYardChainPID
+	var pids []int
+	interruptYardChainPID = func(pid int) error {
+		pids = append(pids, pid)
+		return nil
+	}
+	defer func() { interruptYardChainPID = originalInterrupt }()
+
+	if err := signalYardActiveChainProcess(ctx, store, chainID); err != nil {
+		t.Fatalf("signalYardActiveChainProcess returned error: %v", err)
+	}
+	if got, want := fmt.Sprint(pids), "[2222 1111]"; got != want {
+		t.Fatalf("interrupt pids = %s, want %s", got, want)
 	}
 }
 

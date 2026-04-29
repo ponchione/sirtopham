@@ -1,7 +1,6 @@
 package anthropic
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -11,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/ponchione/sodoryard/internal/provider"
+	providersse "github.com/ponchione/sodoryard/internal/provider/sse"
 )
 
 // SSE event deserialization types.
@@ -110,52 +110,24 @@ func (p *AnthropicProvider) processSSEStream(ctx context.Context, body io.Reader
 		activeBlocks: make(map[int]activeBlock),
 	}
 
-	var currentEventType string
 	var stopReason string
 	var finalUsage provider.Usage
 
-	scanner := bufio.NewScanner(body)
-	scanner.Split(bufio.ScanLines)
-
-	for scanner.Scan() {
-		// Check context before processing each line.
-		if ctx.Err() != nil {
+	reader := providersse.NewReader(body, providersse.DefaultMaxEventBytes)
+	for {
+		event, ok, err := reader.Next(ctx)
+		if err != nil {
 			send(ctx, ch, provider.StreamError{
-				Err:     ctx.Err(),
+				Err:     err,
 				Fatal:   true,
-				Message: "stream cancelled",
+				Message: fmt.Sprintf("SSE stream read error: %s", err),
 			})
 			return
 		}
-
-		line := scanner.Text()
-
-		// Ignore empty lines (SSE event separators) and comments.
-		if line == "" {
-			continue
+		if !ok {
+			return
 		}
-		if strings.HasPrefix(line, ":") {
-			continue
-		}
-
-		if strings.HasPrefix(line, "event: ") {
-			currentEventType = strings.TrimPrefix(line, "event: ")
-			continue
-		}
-
-		if strings.HasPrefix(line, "data: ") {
-			data := strings.TrimPrefix(line, "data: ")
-			p.handleSSEData(ctx, ch, state, currentEventType, []byte(data), &stopReason, &finalUsage)
-			continue
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		send(ctx, ch, provider.StreamError{
-			Err:     err,
-			Fatal:   true,
-			Message: fmt.Sprintf("SSE stream read error: %s", err),
-		})
+		p.handleSSEData(ctx, ch, state, event.Type, []byte(event.Data), &stopReason, &finalUsage)
 	}
 }
 

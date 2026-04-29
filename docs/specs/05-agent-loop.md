@@ -380,7 +380,6 @@ Every turn persists the following to SQLite:
 - User message (role=user, turn_number=N, sequence=0)
 - Assistant responses (role=assistant, with tool_calls JSON, thinking content)
 - Tool results (role=tool, with tool_call_id, tool_name, result content)
-- Each message records: tokens_in, tokens_out, model, provider, latency_ms
 
 **Sub_calls table:**
 

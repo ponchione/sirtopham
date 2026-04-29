@@ -583,7 +583,7 @@ Orchestrator reads specs/
 
 ### Reindexing
 
-Reindexing is a deterministic operation, not an agent. The orchestrator binary (conductor) calls `tidmouth index` as an internal subprocess at two points:
+Reindexing is a deterministic operation, not an agent. The orchestrator binary (conductor) calls `tidmouth index` for code and, when the project brain is enabled, `yard brain index` for derived brain metadata/semantic chunks at two points:
 
 1. **Before the planner** — ensures the planner's search tools reflect the current codebase state.
 2. **After the coder** — ensures auditors' context assembly picks up the new/changed files.
@@ -641,6 +641,8 @@ The role-based registry builder also supports the utility groups documented in [
 | `sqlc` | `db_sqlc` |
 
 These are not automatically added to every stock role. Add them only when a role's prompt and responsibilities require the narrower structured surface instead of general `shell`.
+
+Config validation and role-registry construction must accept the same group set. `custom_tools` are separate from these groups and require an execution environment that provides concrete factories; today that means the orchestrator runner for `spawn_agent` and `chain_complete`.
 
 ---
 

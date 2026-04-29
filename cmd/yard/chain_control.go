@@ -17,17 +17,24 @@ func signalYardActiveChainProcess(ctx context.Context, store *chain.Store, chain
 	if err != nil {
 		return err
 	}
-	exec, ok := chain.LatestActiveExecution(events)
-	if !ok || exec.OrchestratorPID <= 0 {
-		return nil
-	}
-	if err := interruptYardChainPID(exec.OrchestratorPID); err != nil {
-		if errors.Is(err, errYardChainPIDNotRunning) {
-			return nil
+
+	var firstErr error
+	if stepProcess, ok := chain.LatestActiveStepProcess(events); ok && stepProcess.ProcessID > 0 {
+		if err := interruptYardChainPID(stepProcess.ProcessID); err != nil {
+			if !errors.Is(err, errYardChainPIDNotRunning) {
+				firstErr = err
+			}
 		}
-		return err
 	}
-	return nil
+
+	if exec, ok := chain.LatestActiveExecution(events); ok && exec.OrchestratorPID > 0 {
+		if err := interruptYardChainPID(exec.OrchestratorPID); err != nil {
+			if !errors.Is(err, errYardChainPIDNotRunning) && firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+	return firstErr
 }
 
 func validateYardChainStatusTransition(currentStatus string, targetStatus string, chainID string) error {

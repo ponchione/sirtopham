@@ -29,9 +29,13 @@ IDs use the type that best fits each table's access pattern:
 
 ### Migration Strategy
 
-During active development: nuke and rebuild. The schema lives in a single `schema.sql` file. `yard init` creates the database from scratch. No migration framework during dev.
+During active development, the canonical schema still lives in a single `schema.sql` file and fresh `yard init` databases are created from that schema. The runtime also carries a small set of idempotent compatibility upgrades for live dev databases that predate recent fields or triggers:
 
-Once the schema stabilizes (v0.5+), migrate to versioned migration files — either golang-migrate or hand-written `.sql` files with a version table. The schema is simple enough that manual migrations are viable for a personal tool.
+- rebuild `messages_fts` triggers so `role='tool'` messages are indexed
+- add `context_reports.token_budget_json` when missing
+- ensure the chain orchestrator tables and indexes exist
+
+This is not a general migration framework. It is a narrow bridge for dev-era databases whose data is useful enough to preserve. Once the schema stabilizes (v0.5+), migrate to versioned migration files — either golang-migrate or hand-written `.sql` files with a version table. The schema is simple enough that manual migrations are viable for a personal tool.
 
 ### SQLite Pragmas
 
@@ -277,6 +281,7 @@ CREATE TABLE tool_executions (
     tool_name       TEXT    NOT NULL,
     input           TEXT,               -- JSON: tool arguments (small, queryable)
     output_size     INTEGER,            -- byte count of result (not the result itself)
+    normalized_size INTEGER,            -- byte count after result normalization/truncation prep
     error           TEXT,               -- error message if failed
     success         INTEGER NOT NULL,   -- 0/1
     duration_ms     INTEGER NOT NULL,
@@ -289,7 +294,7 @@ CREATE INDEX idx_tool_exec_name
     ON tool_executions(tool_name);
 ```
 
-`output_size` instead of the full output — the full result is already in the corresponding `role=tool` message row. `input` is stored as JSON because it's small (tool arguments) and queryable — "most frequently read file paths" is an extract from `file_read` inputs.
+`output_size` and `normalized_size` are scalar observability fields instead of the full output — the full result is already in the corresponding `role=tool` message row. `input` is stored as JSON because it's small (tool arguments) and queryable — "most frequently read file paths" is an extract from `file_read` inputs.
 
 ### sub_calls
 
@@ -358,6 +363,7 @@ CREATE TABLE context_reports (
     budget_total          INTEGER,         -- tokens available for context
     budget_used           INTEGER,         -- tokens consumed
     budget_breakdown_json TEXT,            -- JSON: {"rag": 15000, "brain": 5000, ...}
+    token_budget_json     TEXT,            -- JSON: estimated/actual token budget report
     included_count        INTEGER,         -- chunks included in final context
     excluded_count        INTEGER,         -- chunks cut for budget or threshold
 
@@ -425,7 +431,7 @@ CREATE INDEX idx_brain_links_target ON brain_links(project_id, target_path);
 
 ### Chain Orchestrator Tables
 
-The chain orchestrator owns additional `chains`, `steps`, and `events` tables in the same `.yard/yard.db` database. Their schema changes more frequently with orchestration behavior and is specified in [[15-chain-orchestrator]], including `steps.task_context`, `events.step_output`, and event timestamp indexes.
+The chain orchestrator owns additional `chains`, `steps`, and `events` tables in the same `.yard/yard.db` database. Their schema changes more frequently with orchestration behavior and is specified in [[15-chain-orchestrator]], including `steps.task_context`, JSON `events.event_data` payloads for `step_output` and process lifecycle events, and event timestamp indexes.
 
 ### index_state
 
@@ -460,19 +466,28 @@ CREATE VIRTUAL TABLE messages_fts USING fts5(
 );
 
 CREATE TRIGGER messages_fts_insert AFTER INSERT ON messages
-WHEN NEW.role IN ('user', 'assistant')
+WHEN NEW.role IN ('user', 'assistant', 'tool')
 BEGIN
     INSERT INTO messages_fts(rowid, content) VALUES (NEW.id, NEW.content);
 END;
 
 CREATE TRIGGER messages_fts_delete AFTER DELETE ON messages
+WHEN OLD.role IN ('user', 'assistant', 'tool')
 BEGIN
     INSERT INTO messages_fts(messages_fts, rowid, content)
     VALUES ('delete', OLD.id, OLD.content);
 END;
+
+CREATE TRIGGER messages_fts_update AFTER UPDATE OF content ON messages
+WHEN NEW.role IN ('user', 'assistant', 'tool')
+BEGIN
+    INSERT INTO messages_fts(messages_fts, rowid, content)
+    VALUES ('delete', OLD.id, OLD.content);
+    INSERT INTO messages_fts(rowid, content) VALUES (NEW.id, NEW.content);
+END;
 ```
 
-For assistant messages, this indexes the raw JSON content blocks. A search for "auth middleware" matches because those words appear in the text blocks within the JSON. It also matches if "auth" appears in a tool_use input — imperfect, but good enough for conversation search. Extracting only text blocks on insert adds complexity for minimal gain.
+For assistant messages, this indexes the raw JSON content blocks. A search for "auth middleware" matches because those words appear in the text blocks within the JSON. It also matches if "auth" appears in a tool_use input — imperfect, but good enough for conversation search. Tool result messages are indexed too so conversation search can find important terminal output or tool errors that never appear in assistant prose. Extracting only text blocks on insert adds complexity for minimal gain.
 
 Search query pattern:
 

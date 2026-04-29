@@ -80,13 +80,13 @@ type ServerEvent =
   | { type: "conversation_created"; data: { conversation_id: string } }
   | { type: "token"; data: { token: string } }
   | { type: "thinking_start"; data: {} }
-  | { type: "thinking_delta"; data: { text: string } }
+  | { type: "thinking_delta"; data: { delta: string } }
   | { type: "thinking_end"; data: {} }
   | { type: "tool_call_start"; data: { tool_call_id: string; tool_name: string; arguments: object } }
-  | { type: "tool_call_output"; data: { tool_call_id: string; output: string } }
-  | { type: "tool_call_end"; data: { tool_call_id: string; result: string; duration: number; success: boolean } }
+  | { type: "tool_call_output"; data: { tool_call_id: string; output?: string } }
+  | { type: "tool_call_end"; data: { tool_call_id: string; result?: string; details?: object; duration?: number; success?: boolean } }
   | { type: "turn_complete"; data: { turn_number: number; iteration_count: number; total_input_tokens: number; total_output_tokens: number; duration: number } }
-  | { type: "turn_cancelled"; data: {} }
+  | { type: "turn_cancelled"; data: { turn_number: number; completed_iterations?: number; reason?: string } }
   | { type: "error"; data: { message: string; recoverable?: boolean; error_code?: string } }
   | { type: "context_debug"; data: ContextDebugInfo }
   | { type: "status"; data: { state: AgentState } };
@@ -101,6 +101,8 @@ type ClientEvent =
 ### Protocol Notes
 - Tool outputs stream incrementally via `tool_call_output` events.
 - Multiple concurrent tool calls are represented as interleaved event streams keyed by `tool_call_id`.
+- `tool_call_end.details` carries optional structured, non-model-visible metadata about the completed tool result. Known first-party detail kinds are specified in [[19-tool-result-details]]. Clients must treat it as optional and continue rendering `result` when it is absent or unknown.
+- Agent-loop event payloads are the Go event structs wrapped directly, so `data` also carries event-local `type` and `time` fields in addition to the envelope `type` and `timestamp`. The TypeScript definitions in `web/src/types/events.ts` are the frontend mirror for these payloads.
 - `context_debug` is emitted by the backend after context assembly; the frontend decides whether to render it.
 - the context inspector also fetches stored reports from `GET /api/metrics/conversation/:id/context/:turn` and the ordered signal stream from `GET /api/metrics/conversation/:id/context/:turn/signals` when browsing history.
 - if inspector report loading fails, the shipped UI now renders an explicit error state instead of silently looking empty.
@@ -140,9 +142,14 @@ WS     /api/ws                         WebSocket for streaming
 ### REST Payload Notes
 
 - `/api/project` includes `brain_index` when available: `status`, `last_indexed_at`, `stale_since`, and `stale_reason`.
+- `/api/project/tree` accepts optional `depth` in the inclusive range 1-10 and defaults to 3. Nodes have `name`, `type` (`dir` or `file`), and optional `children`.
+- `/api/project/file?path=...` returns `path`, `content`, `language`, and `line_count`. It rejects empty paths, absolute or traversal paths, directories, files outside the project root, and files over 1 MiB.
+- `/api/config` returns current runtime defaults, fallback routing, UI-relevant agent settings, and configured provider summaries. `PUT /api/config` currently accepts `default_provider` and `default_model`, validates provider/model availability, and only permits the runtime override pair `codex`/`gpt-5.5`.
 - `/api/providers` returns one entry per configured provider with `name`, `type`, `status`, `healthy`, optional `last_error`, `models`, and optional structured `auth`.
 - `/api/auth/providers` returns the same health/auth diagnostic shape without model lists.
 - `/api/metrics/conversation/:id` includes `last_turn` with the most recent turn number, iteration count, input/output tokens, and latency.
+- `/api/metrics/conversation/:id/context/:turn` returns the stored context report with raw JSON payloads for needs, signals, RAG, brain, graph, explicit files, budget breakdown, agent-read files, and optional `token_budget`.
+- `/api/metrics/conversation/:id/context/:turn/signals` returns an ordered stream of analyzer signals, derived semantic queries, explicit files, explicit symbols, momentum files/modules, and active flags. Each item has `index`, `kind`, and optional `type`, `source`, and `value`.
 
 ---
 

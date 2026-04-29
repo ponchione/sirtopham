@@ -58,10 +58,34 @@ func TestConnectProvidesBackendOperations(t *testing.T) {
 	}
 }
 
+func TestSearchKeywordLimitPassesLimitToVaultSearch(t *testing.T) {
+	ctx := context.Background()
+	vaultPath := t.TempDir()
+
+	client, err := Connect(ctx, vaultPath)
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	defer client.Close()
+
+	for _, path := range []string{"notes/a.md", "notes/b.md", "notes/c.md"} {
+		if err := client.WriteDocument(ctx, path, "pipeline notes"); err != nil {
+			t.Fatalf("WriteDocument(%s): %v", path, err)
+		}
+	}
+
+	hits, err := client.SearchKeywordLimit(ctx, "pipeline", 2)
+	if err != nil {
+		t.Fatalf("SearchKeywordLimit: %v", err)
+	}
+	if len(hits) != 2 {
+		t.Fatalf("SearchKeywordLimit returned %d hits, want 2: %#v", len(hits), hits)
+	}
+}
+
 func TestConnectRejectsMissingVaultPath(t *testing.T) {
 	_, err := Connect(context.Background(), filepath.Join(t.TempDir(), "missing"))
 	if err == nil {
 		t.Fatal("expected error for missing vault path")
 	}
 }
-

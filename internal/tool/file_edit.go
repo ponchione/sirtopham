@@ -139,17 +139,7 @@ func (f FileEdit) Execute(ctx context.Context, projectRoot string, input json.Ra
 
 	// Generate diff.
 	diff := unifiedDiff("a/"+params.Path, "b/"+params.Path, oldContent, newContent, 3)
-	details := map[string]any{
-		"operation":       "edit",
-		"path":            params.Path,
-		"created":         false,
-		"changed":         diff != "",
-		"diff_format":     "unified",
-		"diff_line_count": detailLineCount(diff),
-		"diff_truncated":  false,
-		"bytes_before":    len(oldContent),
-		"bytes_after":     len(newContent),
-	}
+	details := fileMutationDetailFields("edit", params.Path, false, diff != "", diff, len(oldContent), len(newContent))
 	if line := firstChangedLine(oldContent, params.OldStr); line > 0 {
 		details["first_changed_line"] = line
 	}

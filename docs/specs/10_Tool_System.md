@@ -130,6 +130,8 @@ Role configuration selects tools by group. The role registry builder currently r
 | `test` | `test_run` | mutating |
 | `sqlc` | `db_sqlc` | mutating |
 
+Config validation accepts the same group set. A configured role using any group in this table should load before the registry builder is invoked; unsupported groups are rejected during config validation with a list of the supported names.
+
 ### Tool Definition Serialization
 
 `ToolDefinitions()` produces the normalized provider tool definitions that get embedded in every LLM request. Tool implementations still author schemas in an Anthropic-style envelope with `input_schema`; provider adapters translate as needed (see [[03-provider-architecture]]):
@@ -164,7 +166,7 @@ Before `Execute` is called, the agent loop validates the LLM's arguments against
 3. If validation fails, return the validation error as the tool result — the LLM sees "Invalid arguments: missing required field 'path'" and self-corrects.
 4. If validation succeeds, pass the raw JSON to `Execute`.
 
-Validation uses a lightweight JSON Schema validator (e.g., `santhosh-tekuri/jsonschema` or `xeipuuv/gojsonschema`). The specific library is an implementation detail — any spec-compliant validator works.
+Current shipped implementation: the agent loop performs a lightweight schema check before dispatch. It validates that arguments are valid JSON and checks top-level required fields, scalar/object/array types, enum values, and array item types present in the tool definition. It is intentionally not a full JSON Schema implementation yet; unsupported schema features are ignored rather than treated as hard failures. A future validator library can replace this without changing the tool interface.
 
 ---
 

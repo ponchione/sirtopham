@@ -49,7 +49,8 @@ RUN go build -tags sqlite_fts5 -o /out/yard ./cmd/yard
 
 # ─── Stage 3: runtime ───────────────────────────────────────────────
 # Slim debian image with glibc + the retained binaries + lancedb shared
-# library + agent prompts. No Go toolchain, no Node, no source.
+# library. No Go toolchain and no source; Node/npm are retained for project
+# commands that expect Node tooling.
 FROM debian:trixie-slim AS runtime
 
 # ca-certificates: needed for HTTPS calls to provider APIs (codex,

@@ -161,8 +161,8 @@ The retained internal binary name (`tidmouth`) follows a naming convention from 
 ```bash
 # Prerequisites: Go 1.25+, Node 22+, Make, GCC (for CGO/SQLite)
 
-# Build all binaries
-make all
+# Build the retained runnable artifact set
+make build
 
 # Binaries land in bin/
 ls bin/

@@ -74,9 +74,9 @@ Obsidian runs alongside sodoryard as the human-facing vault UI, but the implemen
 
 **In Obsidian (source of truth):** All brain documents. Markdown files with frontmatter, wikilinks, tags. The developer reads, edits, organizes, and browses here. Obsidian's graph view visualizes the knowledge structure.
 
-**In sodoryard today (tools + proactive retrieval):** The agent-facing interface and the current proactive retrieval source of truth. Read/write/search operations go through the MCP/vault backend. Proactive context assembly currently uses keyword search from that same backend.
+**In sodoryard today (tools + proactive retrieval):** The agent-facing interface and the current proactive retrieval source of truth. Read/write/search operations go through the MCP/vault backend. Proactive context assembly can use vault keyword search directly and, when the derived index exists, hybrid semantic/graph retrieval.
 
-**In future brain-index work (not yet the active runtime path):** Vector embeddings of brain documents in a separate LanceDB collection. A parsed wikilink graph stored in SQLite. Extracted frontmatter metadata and tags for structured queries. If this becomes real operator-facing behavior, it should be described as a derived layer under the MCP/vault source of truth rather than implied as already-landed runtime.
+**Derived brain index:** Vector embeddings of brain documents live in a separate LanceDB store. Parsed wikilink graph and frontmatter/tag metadata live in SQLite. This remains a derived layer under the MCP/vault source of truth; `yard brain index` rebuilds it and brain writes mark it stale.
 
 **In sodoryard current v0.2 runtime (context assembly):** Brain keyword retrieval runs in parallel with code RAG during context assembly. Results compete for budget alongside code chunks, are serialized into a distinct Project Brain section, and appear in context reports/inspector payloads.
 
@@ -224,11 +224,25 @@ Brain notes remain source-of-truth files in the configured vault (`.brain/` by d
 - rebuilds relational metadata in SQLite (`brain_documents`, `brain_links`)
 - chunks note content, embeds chunks, and writes semantic vectors to `.yard/lancedb/brain`
 - deletes semantic chunks for notes that were removed
-- marks the brain index state fresh on success
+- marks the brain index state clean on success
 
 Agent mutations through `brain_write` and `brain_update` mark the derived brain index stale with reason `brain_write` or `brain_update`. Operators refresh derived metadata and semantic chunks by running `yard brain index` again. Developer edits outside the agent path likewise require an explicit index run before semantic/graph retrieval should be assumed fresh.
 
-The web/API project metadata exposes brain index state as `brain_index.status`, `last_indexed_at`, `stale_since`, and `stale_reason`. Expected statuses are `never_indexed`, `fresh`, and `stale`.
+The web/API project metadata exposes brain index state as `brain_index.status`, `last_indexed_at`, `stale_since`, and `stale_reason`. Expected statuses are `never_indexed`, `clean`, and `stale`.
+
+Brain index state is persisted as a project-local sidecar file at `.yard/brain-index-state.json`:
+
+```json
+{
+  "status": "clean",
+  "last_indexed_at": "2026-04-29T14:32:00Z",
+  "stale_since": "",
+  "stale_reason": "",
+  "updated_at": "2026-04-29T14:32:00Z"
+}
+```
+
+If the file is absent, the runtime reports `never_indexed`. `yard brain index` writes `status: "clean"`, updates `last_indexed_at` and `updated_at`, and clears stale fields. Brain mutations write `status: "stale"`, set `stale_since` if it is not already set, write `stale_reason`, and update `updated_at`.
 
 ### Chunking Strategy
 

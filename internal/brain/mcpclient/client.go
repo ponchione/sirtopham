@@ -100,7 +100,14 @@ func (c *Client) PatchDocument(ctx context.Context, path string, operation strin
 }
 
 func (c *Client) SearchKeyword(ctx context.Context, query string) ([]brain.SearchHit, error) {
-	res, err := c.session.CallTool(ctx, &mcp.CallToolParams{Name: "vault_search", Arguments: map[string]any{"query": query, "max_results": 10}})
+	return c.SearchKeywordLimit(ctx, query, 10)
+}
+
+func (c *Client) SearchKeywordLimit(ctx context.Context, query string, maxResults int) ([]brain.SearchHit, error) {
+	if maxResults <= 0 {
+		maxResults = 10
+	}
+	res, err := c.session.CallTool(ctx, &mcp.CallToolParams{Name: "vault_search", Arguments: map[string]any{"query": query, "max_results": maxResults}})
 	if err != nil {
 		return nil, err
 	}

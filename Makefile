@@ -11,12 +11,12 @@ RETIRED_BINARIES    := $(BIN_DIR)/sirtopham $(BIN_DIR)/knapford
 
 .PHONY: all build cleanup-retired-binaries tidmouth yard install-user-bin test dev-backend dev-frontend dev frontend-deps frontend-build frontend-typecheck clean
 
-# `make all` builds every remaining repo binary after legacy public CLI cleanup.
-# `make build` is an alias for `make tidmouth` because the internal engine
-# binary still carries the frontend embed and runtime harness.
-all: cleanup-retired-binaries tidmouth yard
+# `make build` builds every retained binary needed for a runnable local tree:
+# the operator-facing yard CLI plus the internal tidmouth engine used by chain
+# spawning. `make all` is kept as an alias for the same supported artifact set.
+all: build
 
-build: cleanup-retired-binaries tidmouth
+build: cleanup-retired-binaries tidmouth yard
 
 cleanup-retired-binaries:
 	rm -f $(RETIRED_BINARIES)

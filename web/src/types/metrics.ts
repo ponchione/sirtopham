@@ -64,6 +64,7 @@ export interface ContextReport {
   graph_results?: GraphResult[];
   explicit_files?: ExplicitFileResult[];
   budget_breakdown?: BudgetCategory[];
+  token_budget?: TokenBudgetReport;
   agent_read_files?: string[];
 
   budget_total?: number;
@@ -181,6 +182,25 @@ export interface BudgetCategory {
   category: string;
   tokens: number;
   percentage?: number;
+}
+
+export interface TokenBudgetReport {
+  model_context_limit?: number;
+  history_tokens?: number;
+  reserved_system_prompt_tokens?: number;
+  reserved_tool_schema_tokens?: number;
+  reserved_output_tokens?: number;
+  estimated_context_tokens?: number;
+  estimated_request_tokens?: number;
+  actual_input_tokens?: number;
+  actual_output_tokens?: number;
+  actual_cache_read_tokens?: number;
+  actual_cache_creation_tokens?: number;
+  actual_latency_ms?: number;
+  iteration_count?: number;
+  input_delta_tokens?: number;
+  output_headroom_delta_tokens?: number;
+  output_headroom_exceeded?: boolean;
 }
 
 // ── GET /api/providers ───────────────────────────────────────────────

@@ -63,7 +63,7 @@ func (s *HybridBrainSearcher) Search(ctx stdctx.Context, request BrainSearchRequ
 	results := map[string]*BrainSearchResult{}
 
 	if mode == "auto" || mode == "keyword" {
-		if err := s.addKeywordResults(ctx, query, results); err != nil {
+		if err := s.addKeywordResults(ctx, query, topK, results); err != nil {
 			return nil, err
 		}
 	}
@@ -105,11 +105,19 @@ func (s *HybridBrainSearcher) Search(ctx stdctx.Context, request BrainSearchRequ
 	return flattened, nil
 }
 
-func (s *HybridBrainSearcher) addKeywordResults(ctx stdctx.Context, query string, results map[string]*BrainSearchResult) error {
+func (s *HybridBrainSearcher) addKeywordResults(ctx stdctx.Context, query string, topK int, results map[string]*BrainSearchResult) error {
 	if s.keywordBackend == nil {
 		return nil
 	}
-	hits, err := s.keywordBackend.SearchKeyword(ctx, query)
+	var (
+		hits []brain.SearchHit
+		err  error
+	)
+	if limited, ok := s.keywordBackend.(brain.LimitedKeywordSearcher); ok {
+		hits, err = limited.SearchKeywordLimit(ctx, query, topK)
+	} else {
+		hits, err = s.keywordBackend.SearchKeyword(ctx, query)
+	}
 	if err != nil {
 		return err
 	}
