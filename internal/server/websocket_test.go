@@ -648,6 +648,7 @@ func TestWebSocketMessageUsesNextTurnNumberForExistingConversation(t *testing.T)
 	}
 	base, convMock := setupWSTest(t, agentMock)
 	content := "previous"
+	convMock.nextTurnNumber = 3
 	convMock.messages = []conversation.MessageView{
 		{ID: 1, Role: "user", Content: &content, TurnNumber: 1, Sequence: 0},
 		{ID: 2, Role: "assistant", Content: &content, TurnNumber: 1, Sequence: 1},
@@ -674,6 +675,12 @@ func TestWebSocketMessageUsesNextTurnNumberForExistingConversation(t *testing.T)
 	case req := <-turnStarted:
 		if req.TurnNumber != 3 {
 			t.Fatalf("TurnNumber = %d, want 3", req.TurnNumber)
+		}
+		if convMock.lastNextTurnID != "conv-1" {
+			t.Fatalf("NextTurnNumber conversation = %q, want conv-1", convMock.lastNextTurnID)
+		}
+		if convMock.getMessagesN != 0 {
+			t.Fatalf("GetMessages calls = %d, want 0", convMock.getMessagesN)
 		}
 	case <-ctx.Done():
 		t.Fatal("timed out waiting for RunTurn")

@@ -18,13 +18,13 @@ import (
 // Conversation is the application-level representation of a conversation row.
 // It converts sql.NullString fields to Go-native pointer types.
 type Conversation struct {
-	ID        string     `json:"id"`
-	ProjectID string     `json:"project_id"`
-	Title     *string    `json:"title,omitempty"`
-	Model     *string    `json:"model,omitempty"`
-	Provider  *string    `json:"provider,omitempty"`
-	CreatedAt time.Time  `json:"created_at"`
-	UpdatedAt time.Time  `json:"updated_at"`
+	ID        string    `json:"id"`
+	ProjectID string    `json:"project_id"`
+	Title     *string   `json:"title,omitempty"`
+	Model     *string   `json:"model,omitempty"`
+	Provider  *string   `json:"provider,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // ConversationSummary is a lightweight projection for list views.
@@ -246,6 +246,19 @@ func (m *Manager) Count(ctx context.Context, projectID string) (int64, error) {
 		ctx = context.Background()
 	}
 	return m.queries.CountConversations(ctx, projectID)
+}
+
+// NextTurnNumber returns the next turn number for a conversation without
+// loading message content.
+func (m *Manager) NextTurnNumber(ctx context.Context, conversationID string) (int, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	next, err := m.queries.NextTurnNumber(ctx, conversationID)
+	if err != nil {
+		return 0, fmt.Errorf("conversation manager: next turn number: %w", err)
+	}
+	return int(next), nil
 }
 
 // MessageView is a JSON-friendly representation of a message for the REST API.
@@ -498,7 +511,7 @@ func extractAssistantTextSnippet(trimmed string) (string, bool) {
 		return "", false
 	}
 	text := trimmed[idx+len(marker):]
-	for _, terminator := range []string{`","type":"`, `"},{`, `"}]`, `"}` } {
+	for _, terminator := range []string{`","type":"`, `"},{`, `"}]`, `"}`} {
 		if end := strings.Index(text, terminator); end >= 0 {
 			text = text[:end]
 			break

@@ -238,6 +238,41 @@ func TestManagerDelete(t *testing.T) {
 	}
 }
 
+func TestManagerNextTurnNumberUsesAggregate(t *testing.T) {
+	ctx := context.Background()
+	database := newTestDB(t)
+	projectID := seedProject(t, database)
+	mgr := newTestManager(t, database)
+
+	conv, err := mgr.Create(ctx, projectID)
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+
+	next, err := mgr.NextTurnNumber(ctx, conv.ID)
+	if err != nil {
+		t.Fatalf("NextTurnNumber empty error: %v", err)
+	}
+	if next != 1 {
+		t.Fatalf("empty conversation next turn = %d, want 1", next)
+	}
+
+	if err := mgr.PersistUserMessage(ctx, conv.ID, 1, "first"); err != nil {
+		t.Fatalf("PersistUserMessage first error: %v", err)
+	}
+	if err := mgr.PersistUserMessage(ctx, conv.ID, 3, "third"); err != nil {
+		t.Fatalf("PersistUserMessage third error: %v", err)
+	}
+
+	next, err = mgr.NextTurnNumber(ctx, conv.ID)
+	if err != nil {
+		t.Fatalf("NextTurnNumber populated error: %v", err)
+	}
+	if next != 4 {
+		t.Fatalf("populated conversation next turn = %d, want 4", next)
+	}
+}
+
 func TestManagerSetTitle(t *testing.T) {
 	ctx := context.Background()
 	database := newTestDB(t)

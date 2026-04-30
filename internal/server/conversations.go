@@ -19,6 +19,7 @@ type ConversationService interface {
 	List(ctx context.Context, projectID string, limit, offset int) ([]conversation.ConversationSummary, error)
 	Delete(ctx context.Context, conversationID string) error
 	SetRuntimeDefaults(ctx context.Context, conversationID string, provider, model *string) error
+	NextTurnNumber(ctx context.Context, conversationID string) (int, error)
 	GetMessages(ctx context.Context, conversationID string) ([]conversation.MessageView, error)
 	Search(ctx context.Context, query string) ([]conversation.SearchResult, error)
 }

@@ -231,17 +231,7 @@ func (h *WebSocketHandler) readLoop(ctx context.Context, cancel context.CancelFu
 // handleMessage processes a "message" client command — creates or resumes a
 // conversation and runs a turn.
 func (h *WebSocketHandler) nextTurnNumber(ctx context.Context, conversationID string) (int, error) {
-	messages, err := h.convSvc.GetMessages(ctx, conversationID)
-	if err != nil {
-		return 0, err
-	}
-	maxTurn := 0
-	for _, msg := range messages {
-		if int(msg.TurnNumber) > maxTurn {
-			maxTurn = int(msg.TurnNumber)
-		}
-	}
-	return maxTurn + 1, nil
+	return h.convSvc.NextTurnNumber(ctx, conversationID)
 }
 
 func (h *WebSocketHandler) resolveModelContextLimit(providerName string) (int, error) {

@@ -16,6 +16,11 @@ SELECT COALESCE(MAX(sequence) + 1.0, 0.0)
 FROM messages
 WHERE conversation_id = ?;
 
+-- name: NextTurnNumber :one
+SELECT COALESCE(MAX(turn_number), 0) + 1
+FROM messages
+WHERE conversation_id = ?;
+
 -- name: InsertUserMessage :exec
 INSERT INTO messages (
     conversation_id,

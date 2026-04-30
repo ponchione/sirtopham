@@ -450,6 +450,19 @@ func (q *Queries) NextMessageSequence(ctx context.Context, conversationID string
 	return coalesce, err
 }
 
+const nextTurnNumber = `-- name: NextTurnNumber :one
+SELECT COALESCE(MAX(turn_number), 0) + 1
+FROM messages
+WHERE conversation_id = ?
+`
+
+func (q *Queries) NextTurnNumber(ctx context.Context, conversationID string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, nextTurnNumber, conversationID)
+	var coalesce int64
+	err := row.Scan(&coalesce)
+	return coalesce, err
+}
+
 const reconstructConversationHistory = `-- name: ReconstructConversationHistory :many
 SELECT role, content, tool_use_id, tool_name
 FROM messages

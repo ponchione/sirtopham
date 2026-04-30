@@ -40,6 +40,11 @@ type mockConversationService struct {
 	deleteErr error
 	msgErr    error
 	searchErr error
+
+	nextTurnNumber int
+	nextTurnErr    error
+	lastNextTurnID string
+	getMessagesN   int
 }
 
 func (m *mockConversationService) Create(_ context.Context, projectID string, opts ...conversation.CreateOption) (*conversation.Conversation, error) {
@@ -107,7 +112,19 @@ func (m *mockConversationService) SetRuntimeDefaults(_ context.Context, conversa
 	return nil
 }
 
+func (m *mockConversationService) NextTurnNumber(_ context.Context, conversationID string) (int, error) {
+	m.lastNextTurnID = conversationID
+	if m.nextTurnErr != nil {
+		return 0, m.nextTurnErr
+	}
+	if m.nextTurnNumber > 0 {
+		return m.nextTurnNumber, nil
+	}
+	return 1, nil
+}
+
 func (m *mockConversationService) GetMessages(_ context.Context, conversationID string) ([]conversation.MessageView, error) {
+	m.getMessagesN++
 	if m.msgErr != nil {
 		return nil, m.msgErr
 	}
