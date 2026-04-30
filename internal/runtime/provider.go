@@ -48,7 +48,8 @@ func BuildProvider(name string, cfg appconfig.ProviderConfig) (provider.Provider
 		return openai.NewOpenAIProvider(openai.OpenAIConfig{
 			Name:          name,
 			BaseURL:       cfg.BaseURL,
-			APIKey:        apiKey,
+			APIKey:        cfg.APIKey,
+			APIKeyEnv:     cfg.APIKeyEnv,
 			Model:         cfg.Model,
 			ContextLength: cfg.ContextLength,
 		})
