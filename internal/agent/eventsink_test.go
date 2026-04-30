@@ -44,6 +44,58 @@ func TestChannelSinkEmitCloseAndDropAreNonBlocking(t *testing.T) {
 	}
 }
 
+func TestChannelSinkEvictsDroppableEventForControlEvent(t *testing.T) {
+	sink := NewChannelSink(1)
+	sink.Emit(TokenEvent{Token: "streaming", Time: time.Unix(1700000300, 0).UTC()})
+
+	sink.Emit(TurnCompleteEvent{TurnNumber: 1, IterationCount: 1, Time: time.Unix(1700000301, 0).UTC()})
+
+	event := readEvent(t, sink.Events())
+	complete, ok := event.(TurnCompleteEvent)
+	if !ok {
+		t.Fatalf("event type = %T, want TurnCompleteEvent", event)
+	}
+	if complete.TurnNumber != 1 {
+		t.Fatalf("TurnNumber = %d, want 1", complete.TurnNumber)
+	}
+	select {
+	case extra := <-sink.Events():
+		t.Fatalf("unexpected extra event after control-event eviction: %#v", extra)
+	default:
+	}
+}
+
+func TestChannelSinkKeepsQueuedControlEventOverLaterDroppableEvent(t *testing.T) {
+	sink := NewChannelSink(1)
+	sink.Emit(ErrorEvent{ErrorCode: "terminal", Message: "failed", Time: time.Unix(1700000300, 0).UTC()})
+
+	done := make(chan struct{})
+	go func() {
+		sink.Emit(TokenEvent{Token: "late", Time: time.Unix(1700000301, 0).UTC()})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Emit blocked with a full control-event channel")
+	}
+
+	event := readEvent(t, sink.Events())
+	errEvent, ok := event.(ErrorEvent)
+	if !ok {
+		t.Fatalf("event type = %T, want ErrorEvent", event)
+	}
+	if errEvent.ErrorCode != "terminal" {
+		t.Fatalf("ErrorCode = %q, want terminal", errEvent.ErrorCode)
+	}
+	select {
+	case extra := <-sink.Events():
+		t.Fatalf("unexpected extra event after droppable-event drop: %#v", extra)
+	default:
+	}
+}
+
 func TestMultiSinkFansOutAndRemove(t *testing.T) {
 	multi := NewMultiSink()
 	a := NewChannelSink(2)

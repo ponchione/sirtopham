@@ -119,22 +119,33 @@ func NewChannelSink(bufferSize int) *ChannelSink {
 	}
 }
 
-// Emit queues an event if buffer space is available; otherwise it drops it.
+// Emit queues an event if buffer space is available. Under backpressure,
+// droppable stream deltas are discarded before lifecycle/control events.
 func (s *ChannelSink) Emit(event Event) {
 	if s == nil || event == nil {
 		return
 	}
 
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.closed {
 		return
 	}
 	select {
 	case s.ch <- event:
+		return
 	default:
-		s.logger.Warn("dropping agent event", "event_type", event.EventType())
 	}
+
+	if !isDroppableAgentEvent(event) && s.evictDroppableEventLocked() {
+		select {
+		case s.ch <- event:
+			return
+		default:
+		}
+	}
+
+	s.logger.Warn("dropping agent event", "event_type", event.EventType())
 }
 
 // Close closes the underlying event channel.
@@ -158,6 +169,45 @@ func (s *ChannelSink) Events() <-chan Event {
 		return nil
 	}
 	return s.ch
+}
+
+func (s *ChannelSink) evictDroppableEventLocked() bool {
+	pending := len(s.ch)
+	if pending == 0 {
+		return false
+	}
+
+	kept := make([]Event, 0, pending)
+	evicted := false
+	for i := 0; i < pending; i++ {
+		select {
+		case queued := <-s.ch:
+			if !evicted && isDroppableAgentEvent(queued) {
+				evicted = true
+				s.logger.Warn("dropping buffered agent event", "event_type", queued.EventType())
+				continue
+			}
+			kept = append(kept, queued)
+		default:
+			i = pending
+		}
+	}
+	for _, queued := range kept {
+		s.ch <- queued
+	}
+	return evicted
+}
+
+func isDroppableAgentEvent(event Event) bool {
+	if event == nil {
+		return true
+	}
+	switch event.EventType() {
+	case eventTypeToken, eventTypeThinkingDelta, eventTypeToolCallOutput, eventTypeContextDebug:
+		return true
+	default:
+		return false
+	}
 }
 
 func sameSink(a EventSink, b EventSink) bool {
