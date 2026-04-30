@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -30,8 +29,8 @@ type AgentService interface {
 type WebSocketHandler struct {
 	agent     AgentService
 	convSvc   ConversationService
+	cfg       *config.Config
 	projectID string
-	providers map[string]config.ProviderConfig
 	defaults  *RuntimeDefaults
 	devMode   bool
 	logger    *slog.Logger
@@ -47,8 +46,8 @@ func NewWebSocketHandler(s *Server, agentSvc AgentService, convSvc ConversationS
 	h := &WebSocketHandler{
 		agent:     agentSvc,
 		convSvc:   convSvc,
+		cfg:       cfg,
 		projectID: cfg.ProjectRoot,
-		providers: cfg.Providers,
 		defaults:  defaults,
 		devMode:   cfg.Server.DevMode,
 		logger:    logger,
@@ -234,27 +233,6 @@ func (h *WebSocketHandler) nextTurnNumber(ctx context.Context, conversationID st
 	return h.convSvc.NextTurnNumber(ctx, conversationID)
 }
 
-func (h *WebSocketHandler) resolveModelContextLimit(providerName string) (int, error) {
-	if providerName == "" {
-		return 0, fmt.Errorf("provider name is required")
-	}
-	cfg, ok := h.providers[providerName]
-	if !ok {
-		return 0, fmt.Errorf("unknown provider: %s", providerName)
-	}
-	if cfg.ContextLength > 0 {
-		return cfg.ContextLength, nil
-	}
-	switch cfg.Type {
-	case "anthropic", "codex":
-		return 200000, nil
-	case "openai-compatible":
-		return 32768, nil
-	default:
-		return 0, fmt.Errorf("provider %s has no positive context_length configured", providerName)
-	}
-}
-
 func (h *WebSocketHandler) handleMessage(ctx context.Context, conn *websocket.Conn, sink *agent.ChannelSink, msg ClientMessage) {
 	// Subscribe sink to receive events for this turn.
 	h.agent.Subscribe(sink)
@@ -314,7 +292,7 @@ func (h *WebSocketHandler) handleMessage(ctx context.Context, conn *websocket.Co
 		h.writeErrorMessage(ctx, conn, "failed to compute next turn number", false, "turn_number_failed")
 		return
 	}
-	modelContextLimit, limitErr := h.resolveModelContextLimit(prov)
+	modelContextLimit, limitErr := config.ResolveModelContextLimit(h.cfg, prov)
 	if limitErr != nil {
 		h.logger.Error("resolve model context limit", "error", limitErr, "provider", prov, "conversation_id", convID)
 		h.writeErrorMessage(ctx, conn, "failed to resolve model context limit", false, "model_context_limit_failed")
