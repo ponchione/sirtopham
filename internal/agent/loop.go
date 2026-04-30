@@ -407,12 +407,12 @@ func (l *AgentLoop) tryPreflightCompression(ctx stdctx.Context, conversationID s
 // the API response exceeds the compression threshold. If so, compresses before
 // the next iteration. This is fire-and-forget — compression failure here is
 // logged but non-fatal.
-func (l *AgentLoop) tryPostResponseCompression(ctx stdctx.Context, conversationID string, promptTokens int, modelContextLimit int) {
+func (l *AgentLoop) tryPostResponseCompression(ctx stdctx.Context, conversationID string, promptTokens int, modelContextLimit int) bool {
 	if l.compressionEngine == nil {
-		return
+		return false
 	}
 	if !contextpkg.NeedsCompressionPostResponse(promptTokens, modelContextLimit, l.contextCfg) {
-		return
+		return false
 	}
 
 	l.logger.Info("post-response compression triggered",
@@ -434,7 +434,7 @@ func (l *AgentLoop) tryPostResponseCompression(ctx stdctx.Context, conversationI
 			Recoverable: true,
 			Time:        l.now(),
 		})
-		return
+		return false
 	}
 
 	l.logger.Info("post-response compression completed",
@@ -442,6 +442,7 @@ func (l *AgentLoop) tryPostResponseCompression(ctx stdctx.Context, conversationI
 		"compressed", result.Compressed,
 		"compressed_messages", result.CompressedMessages,
 	)
+	return result.Compressed
 }
 
 // isContextOverflowError checks if an error from streamWithRetry is classified
@@ -460,9 +461,7 @@ func (l *AgentLoop) isContextOverflowError(err error) bool {
 // available.
 func (l *AgentLoop) tryEmergencyCompression(
 	ctx stdctx.Context,
-	req RunTurnRequest,
-	turnCtx *TurnStartResult,
-	currentTurnMessages []provider.Message,
+	turnExec *turnExecution,
 	iteration int,
 	disableTools bool,
 ) (*streamResult, error) {
@@ -471,13 +470,13 @@ func (l *AgentLoop) tryEmergencyCompression(
 	}
 
 	l.logger.Warn("emergency compression triggered by context overflow",
-		"conversation_id", req.ConversationID,
-		"turn", req.TurnNumber,
+		"conversation_id", turnExec.req.ConversationID,
+		"turn", turnExec.req.TurnNumber,
 		"iteration", iteration,
 	)
 	l.emit(StatusEvent{State: StateCompressing, Time: l.now()})
 
-	compResult, compErr := l.compressionEngine.Compress(ctx, req.ConversationID, l.contextCfg)
+	compResult, compErr := l.compressionEngine.Compress(ctx, turnExec.req.ConversationID, l.contextCfg)
 	if compErr != nil {
 		l.emit(ErrorEvent{
 			ErrorCode:   "compression_failed",
@@ -499,33 +498,33 @@ func (l *AgentLoop) tryEmergencyCompression(
 	}
 
 	l.logger.Info("emergency compression completed, retrying LLM call",
-		"conversation_id", req.ConversationID,
+		"conversation_id", turnExec.req.ConversationID,
 		"compressed_messages", compResult.CompressedMessages,
 	)
 
 	// Rebuild prompt with compressed history.
-	history, err := l.conversationManager.ReconstructHistory(ctx, req.ConversationID)
+	history, err := l.refreshTurnHistory(ctx, turnExec)
 	if err != nil {
 		return nil, fmt.Errorf("agent loop: reconstruct history after emergency compression in iteration %d: %w", iteration, err)
 	}
 
 	// Resolve per-turn overrides for emergency compression path.
 	emerModel := l.cfg.ModelName
-	if req.Model != "" {
-		emerModel = req.Model
+	if turnExec.req.Model != "" {
+		emerModel = turnExec.req.Model
 	}
 	emerProvider := l.cfg.ProviderName
-	if req.Provider != "" {
-		emerProvider = req.Provider
+	if turnExec.req.Provider != "" {
+		emerProvider = turnExec.req.Provider
 	}
 
-	promptReq, err := l.promptBuilder.BuildPrompt(l.buildPromptConfig(turnCtx.ContextPackage, history, currentTurnMessages, emerProvider, emerModel, req.ModelContextLimit, disableTools, req.ConversationID, req.TurnNumber, iteration))
+	promptReq, err := l.promptBuilder.BuildPrompt(l.buildPromptConfig(turnExec.turnCtx.ContextPackage, history, turnExec.currentTurnMessages, emerProvider, emerModel, turnExec.req.ModelContextLimit, disableTools, turnExec.req.ConversationID, turnExec.req.TurnNumber, iteration))
 	if err != nil {
 		return nil, fmt.Errorf("agent loop: rebuild prompt after emergency compression in iteration %d: %w", iteration, err)
 	}
 
 	l.emit(StatusEvent{State: StateWaitingForLLM, Time: l.now()})
-	result, err := l.streamWithRetry(ctx, promptReq, iteration, req.ConversationID)
+	result, err := l.streamWithRetry(ctx, promptReq, iteration, turnExec.req.ConversationID)
 	if err != nil {
 		return nil, fmt.Errorf("agent loop: stream after emergency compression in iteration %d: %w", iteration, err)
 	}

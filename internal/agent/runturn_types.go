@@ -4,6 +4,7 @@ import (
 	stdctx "context"
 	"time"
 
+	"github.com/ponchione/sodoryard/internal/db"
 	"github.com/ponchione/sodoryard/internal/provider"
 )
 
@@ -13,6 +14,8 @@ type turnExecution struct {
 	turnCtx             *TurnStartResult
 	effectiveProvider   string
 	effectiveModel      string
+	persistedHistory    []db.Message
+	historyNeedsRefresh bool
 	currentTurnMessages []provider.Message
 	completedIterations int
 	totalUsage          provider.Usage
@@ -45,12 +48,17 @@ func (l *AgentLoop) resolveTurnOverrides(req RunTurnRequest) (providerName, mode
 
 func (l *AgentLoop) newTurnExecution(req RunTurnRequest, turnCtx *TurnStartResult, turnStart time.Time) *turnExecution {
 	effectiveProvider, effectiveModel := l.resolveTurnOverrides(req)
+	var history []db.Message
+	if turnCtx != nil {
+		history = turnCtx.History
+	}
 	return &turnExecution{
 		req:                 req,
 		turnStart:           turnStart,
 		turnCtx:             turnCtx,
 		effectiveProvider:   effectiveProvider,
 		effectiveModel:      effectiveModel,
+		persistedHistory:    append([]db.Message(nil), history...),
 		currentTurnMessages: []provider.Message{provider.NewUserMessage(req.Message)},
 		detector:            newLoopDetector(l.cfg.LoopDetectionThreshold),
 	}

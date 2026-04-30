@@ -15,8 +15,25 @@ type iterationExecution struct {
 	promptReq    *provider.Request
 }
 
-func (l *AgentLoop) prepareIteration(ctx stdctx.Context, turnExec *turnExecution, iteration int) (*iterationExecution, error) {
+func (l *AgentLoop) historyForIteration(ctx stdctx.Context, turnExec *turnExecution) ([]db.Message, error) {
+	if turnExec.historyNeedsRefresh {
+		return l.refreshTurnHistory(ctx, turnExec)
+	}
+	return turnExec.persistedHistory, nil
+}
+
+func (l *AgentLoop) refreshTurnHistory(ctx stdctx.Context, turnExec *turnExecution) ([]db.Message, error) {
 	history, err := l.conversationManager.ReconstructHistory(ctx, turnExec.req.ConversationID)
+	if err != nil {
+		return nil, err
+	}
+	turnExec.persistedHistory = append([]db.Message(nil), history...)
+	turnExec.historyNeedsRefresh = false
+	return turnExec.persistedHistory, nil
+}
+
+func (l *AgentLoop) prepareIteration(ctx stdctx.Context, turnExec *turnExecution, iteration int) (*iterationExecution, error) {
+	history, err := l.historyForIteration(ctx, turnExec)
 	if err != nil {
 		return nil, fmt.Errorf("agent loop: reconstruct history for iteration %d: %w", iteration, err)
 	}
@@ -69,7 +86,7 @@ func (l *AgentLoop) buildIterationRequest(ctx stdctx.Context, turnExec *turnExec
 		return promptReq, nil
 	}
 
-	history, err := l.conversationManager.ReconstructHistory(ctx, turnExec.req.ConversationID)
+	history, err := l.refreshTurnHistory(ctx, turnExec)
 	if err != nil {
 		return nil, fmt.Errorf("agent loop: reconstruct history after compression in iteration %d: %w", iterExec.number, err)
 	}
@@ -104,7 +121,9 @@ func (l *AgentLoop) runProviderIteration(ctx stdctx.Context, turnExec *turnExecu
 	}
 
 	turnExec.totalUsage = turnExec.totalUsage.Add(result.Usage)
-	l.tryPostResponseCompression(ctx, turnExec.req.ConversationID, result.Usage.InputTokens, turnExec.req.ModelContextLimit)
+	if l.tryPostResponseCompression(ctx, turnExec.req.ConversationID, result.Usage.InputTokens, turnExec.req.ModelContextLimit) {
+		turnExec.historyNeedsRefresh = true
+	}
 	return result, nil
 }
 
@@ -121,9 +140,7 @@ func (l *AgentLoop) normalizeOverflowRecovery(
 
 	retryResult, retryErr := l.tryEmergencyCompression(
 		ctx,
-		turnExec.req,
-		turnExec.turnCtx,
-		turnExec.currentTurnMessages,
+		turnExec,
 		iterExec.number,
 		iterExec.disableTools,
 	)

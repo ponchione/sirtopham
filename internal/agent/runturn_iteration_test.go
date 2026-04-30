@@ -67,6 +67,43 @@ func TestNormalizeOverflowRecoveryUsesEmergencyCompressionRetryResult(t *testing
 	}
 }
 
+func TestPrepareIterationUsesCachedTurnHistory(t *testing.T) {
+	cachedHistory := []db.Message{{Role: "user", Content: nullStr("cached history")}}
+	conversations := &loopConversationManagerStub{
+		reconstructFn: func(ctx stdctx.Context, conversationID string) ([]db.Message, error) {
+			t.Fatalf("ReconstructHistory should not be called for cached iteration history")
+			return nil, nil
+		},
+	}
+	loop := NewAgentLoop(AgentLoopDeps{
+		ConversationManager: conversations,
+		ProviderRouter:      &providerRouterStub{},
+		ToolExecutor:        &toolExecutorStub{},
+		PromptBuilder:       NewPromptBuilder(nil),
+	})
+
+	turnExec := loop.newTurnExecution(RunTurnRequest{
+		ConversationID:    "conv-cached-history",
+		TurnNumber:        1,
+		Message:           "help",
+		ModelContextLimit: 200000,
+	}, &TurnStartResult{
+		History:        cachedHistory,
+		ContextPackage: &contextpkg.FullContextPackage{Content: "ctx", Frozen: true},
+	}, time.Unix(1700001000, 0).UTC())
+
+	iterExec, err := loop.prepareIteration(stdctx.Background(), turnExec, 1)
+	if err != nil {
+		t.Fatalf("prepareIteration error: %v", err)
+	}
+	if len(iterExec.history) != 1 || iterExec.history[0].Content.String != "cached history" {
+		t.Fatalf("iteration history = %#v, want cached history", iterExec.history)
+	}
+	if len(conversations.reconstructCalls) != 0 {
+		t.Fatalf("ReconstructHistory calls = %#v, want none", conversations.reconstructCalls)
+	}
+}
+
 func TestNormalizeOverflowRecoveryLeavesNonOverflowErrorUntouched(t *testing.T) {
 	loop := NewAgentLoop(AgentLoopDeps{
 		ToolExecutor:  &toolExecutorStub{},
@@ -99,7 +136,7 @@ func TestNormalizeIterationSetupErrorReturnsCancellationCleanup(t *testing.T) {
 	loop.now = func() time.Time { return time.Unix(1700001100, 0).UTC() }
 
 	turnExec := &turnExecution{
-		req: RunTurnRequest{ConversationID: "conv-setup-cancel", TurnNumber: 3},
+		req:                 RunTurnRequest{ConversationID: "conv-setup-cancel", TurnNumber: 3},
 		completedIterations: 1,
 	}
 

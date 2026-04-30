@@ -847,12 +847,11 @@ func TestRunTurnCancelsBeforeIterationExecution(t *testing.T) {
 		history: []db.Message{},
 		seen:    loopSeenFilesStub{},
 	}
-	conversations.reconstructFn = func(callCtx stdctx.Context, conversationID string) ([]db.Message, error) {
-		if len(conversations.reconstructCalls) == 2 {
+	assembler := &loopContextAssemblerStub{
+		assembleFn: func(callCtx stdctx.Context, message string, history []db.Message, scope contextpkg.AssemblyScope, modelContextLimit int, historyTokenCount int) (*contextpkg.FullContextPackage, bool, error) {
 			cancel()
-			return nil, callCtx.Err()
-		}
-		return nil, nil
+			return &contextpkg.FullContextPackage{Content: "context", Frozen: true}, false, nil
+		},
 	}
 	router := &providerRouterStub{
 		streamFn: func(callCtx stdctx.Context, req *provider.Request) (<-chan provider.StreamEvent, error) {
@@ -862,7 +861,7 @@ func TestRunTurnCancelsBeforeIterationExecution(t *testing.T) {
 	}
 
 	loop := NewAgentLoop(AgentLoopDeps{
-		ContextAssembler:    &loopContextAssemblerStub{pkg: &contextpkg.FullContextPackage{Content: "context", Frozen: true}},
+		ContextAssembler:    assembler,
 		ConversationManager: conversations,
 		ProviderRouter:      router,
 		ToolExecutor:        &toolExecutorStub{},
@@ -1046,11 +1045,12 @@ func TestRunTurnCallOrder(t *testing.T) {
 		t.Fatalf("RunTurn error: %v", err)
 	}
 
-	// Expected call order: persist user message → reconstruct (context assembly) →
-	// reconstruct (iteration 1) → persist_iteration
+	// Expected call order: persist user message → reconstruct (context assembly)
+	// → persist_iteration. Iteration prompt building reuses the turn-start
+	// history unless compression refreshes it.
 	got := strings.Join(conversations.callOrder, ",")
-	if got != "persist,reconstruct,reconstruct,persist_iteration" {
-		t.Fatalf("call order = %q, want persist,reconstruct,reconstruct,persist_iteration", got)
+	if got != "persist,reconstruct,persist_iteration" {
+		t.Fatalf("call order = %q, want persist,reconstruct,persist_iteration", got)
 	}
 }
 
@@ -1757,23 +1757,18 @@ func TestRunTurnCancelBeforeToolDispatchPersistsCancelledToolTombstone(t *testin
 
 func TestRunTurnCancellationDuringIterationSetupSkipsIterationCleanup(t *testing.T) {
 	sink := NewChannelSink(32)
+	ctx, cancel := stdctx.WithCancel(stdctx.Background())
+	defer cancel()
+
 	assembler := &loopContextAssemblerStub{
-		pkg: &contextpkg.FullContextPackage{Content: "context", Frozen: true},
+		assembleFn: func(callCtx stdctx.Context, message string, history []db.Message, scope contextpkg.AssemblyScope, modelContextLimit int, historyTokenCount int) (*contextpkg.FullContextPackage, bool, error) {
+			cancel()
+			return &contextpkg.FullContextPackage{Content: "context", Frozen: true}, false, nil
+		},
 	}
-	secondReconstructStarted := make(chan struct{})
 	conversations := &loopConversationManagerStub{
 		history: []db.Message{},
 		seen:    loopSeenFilesStub{},
-	}
-	callCount := 0
-	conversations.reconstructFn = func(ctx stdctx.Context, conversationID string) ([]db.Message, error) {
-		callCount++
-		if callCount == 1 {
-			return append([]db.Message(nil), conversations.history...), nil
-		}
-		close(secondReconstructStarted)
-		<-ctx.Done()
-		return nil, ctx.Err()
 	}
 
 	loop := NewAgentLoop(AgentLoopDeps{
@@ -1788,22 +1783,12 @@ func TestRunTurnCancellationDuringIterationSetupSkipsIterationCleanup(t *testing
 	})
 	loop.now = func() time.Time { return time.Unix(1700000600, 0).UTC() }
 
-	ctx, cancel := stdctx.WithCancel(stdctx.Background())
-	errCh := make(chan error, 1)
-	go func() {
-		_, err := loop.RunTurn(ctx, RunTurnRequest{
-			ConversationID:    "conv-setup-cancel",
-			TurnNumber:        1,
-			Message:           "hello",
-			ModelContextLimit: 200000,
-		})
-		errCh <- err
-	}()
-
-	<-secondReconstructStarted
-	cancel()
-
-	err := <-errCh
+	_, err := loop.RunTurn(ctx, RunTurnRequest{
+		ConversationID:    "conv-setup-cancel",
+		TurnNumber:        1,
+		Message:           "hello",
+		ModelContextLimit: 200000,
+	})
 	if err == nil {
 		t.Fatal("RunTurn error = nil, want cancellation error")
 	}
