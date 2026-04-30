@@ -1,13 +1,14 @@
 package tool
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/ponchione/sodoryard/internal/outputcap"
 )
 
 const sqlcTimeout = 60 * time.Second
@@ -120,9 +121,10 @@ func (DbSqlc) Execute(ctx context.Context, projectRoot string, input json.RawMes
 	cmd := exec.CommandContext(cmdCtx, sqlcPath, action)
 	cmd.Dir = workDir
 
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	stdout := outputcap.NewBuffer(outputcap.DefaultLimit)
+	stderr := outputcap.NewBuffer(outputcap.DefaultLimit)
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 
 	runErr := cmd.Run()
 

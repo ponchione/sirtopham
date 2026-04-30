@@ -9,6 +9,8 @@ import (
 	"time"
 )
 
+const maxLineEmitterPendingBytes = 64 * 1024
+
 type RunCommandInput struct {
 	Name                 string
 	Args                 []string
@@ -100,6 +102,12 @@ func (w *lineEmitter) Write(p []byte) (int, error) {
 			w.onLine(line)
 		}
 		remaining = remaining[idx+1:]
+	}
+	if len(remaining) > maxLineEmitterPendingBytes {
+		if w.onLine != nil {
+			w.onLine(string(remaining[:maxLineEmitterPendingBytes]) + " [line truncated]")
+		}
+		remaining = remaining[:0]
 	}
 	w.pending = append(w.pending[:0], remaining...)
 	return len(p), nil

@@ -1,13 +1,14 @@
 package tool
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
+
+	"github.com/ponchione/sodoryard/internal/outputcap"
 )
 
 // SearchText implements the search_text tool — ripgrep-based text search
@@ -132,8 +133,8 @@ func (SearchText) Execute(ctx context.Context, projectRoot string, input json.Ra
 		}, nil
 	}
 
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
+	stderr := outputcap.NewBuffer(outputcap.DefaultLimit)
+	cmd.Stderr = stderr
 
 	if err := cmd.Start(); err != nil {
 		return &ToolResult{

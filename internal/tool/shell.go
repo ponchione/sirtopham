@@ -1,7 +1,6 @@
 package tool
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -11,6 +10,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/ponchione/sodoryard/internal/outputcap"
 	"github.com/ponchione/sodoryard/internal/provider"
 )
 
@@ -180,9 +180,10 @@ func runShellProcess(ctx context.Context, command, workDir string, timeout time.
 	cmd.Dir = workDir
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	stdout := outputcap.NewBuffer(outputcap.DefaultLimit)
+	stderr := outputcap.NewBuffer(outputcap.DefaultLimit)
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 
 	if err := cmd.Start(); err != nil {
 		return shellRunResult{}, failureResult(fmt.Sprintf("Failed to start command: %v", err), err.Error())

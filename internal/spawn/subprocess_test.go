@@ -91,3 +91,28 @@ func TestRunCommandEmitsStdoutAndStderrLines(t *testing.T) {
 		t.Fatalf("stderr lines = %q, want %q", got, want)
 	}
 }
+
+func TestLineEmitterCapsPendingLineWithoutNewline(t *testing.T) {
+	var lines []string
+	emitter := &lineEmitter{onLine: func(line string) {
+		lines = append(lines, line)
+	}}
+
+	payload := strings.Repeat("x", maxLineEmitterPendingBytes+10)
+	n, err := emitter.Write([]byte(payload))
+	if err != nil {
+		t.Fatalf("Write returned error: %v", err)
+	}
+	if n != len(payload) {
+		t.Fatalf("Write count = %d, want %d", n, len(payload))
+	}
+	if len(emitter.pending) != 0 {
+		t.Fatalf("pending bytes = %d, want 0", len(emitter.pending))
+	}
+	if len(lines) != 1 {
+		t.Fatalf("emitted lines = %d, want 1", len(lines))
+	}
+	if !strings.Contains(lines[0], "line truncated") {
+		t.Fatalf("emitted line = %q, want truncation marker", lines[0])
+	}
+}

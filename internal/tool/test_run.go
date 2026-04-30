@@ -1,7 +1,6 @@
 package tool
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -10,6 +9,8 @@ import (
 	"time"
 
 	"os/exec"
+
+	"github.com/ponchione/sodoryard/internal/outputcap"
 )
 
 // TestRun implements the test_run tool — auto-detects the test ecosystem and
@@ -184,9 +185,10 @@ func runPythonTests(ctx context.Context, projectRoot string, params testRunInput
 
 	cmd := exec.CommandContext(cmdCtx, pytestPath, args...)
 	cmd.Dir = projectRoot
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	stdout := outputcap.NewBuffer(outputcap.DefaultLimit)
+	stderr := outputcap.NewBuffer(outputcap.DefaultLimit)
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 	cmd.Run() //nolint:errcheck
 
 	var result testRunResult
@@ -240,9 +242,10 @@ func runTypeScriptTests(ctx context.Context, projectRoot string, params testRunI
 
 	cmd := exec.CommandContext(cmdCtx, npxPath, args...)
 	cmd.Dir = projectRoot
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	stdout := outputcap.NewBuffer(outputcap.DefaultLimit)
+	stderr := outputcap.NewBuffer(outputcap.DefaultLimit)
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 	cmd.Run() //nolint:errcheck
 
 	result := parseJestJSON(stdout.String())
@@ -310,9 +313,10 @@ func (TestRun) runGoTests(ctx context.Context, projectRoot, targetDir, pathParam
 	cmd := exec.CommandContext(cmdCtx, goPath, args...)
 	cmd.Dir = targetDir
 
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	stdout := outputcap.NewBuffer(outputcap.DefaultLimit)
+	stderr := outputcap.NewBuffer(outputcap.DefaultLimit)
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 
 	// Ignore the error — go test exits non-zero on failure, which is expected.
 	cmd.Run() //nolint:errcheck

@@ -1,12 +1,13 @@
 package tool
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os/exec"
 	"strings"
+
+	"github.com/ponchione/sodoryard/internal/outputcap"
 )
 
 // GitStatus implements the git_status tool — returns a structured snapshot
@@ -129,9 +130,10 @@ func runGitCommand(ctx context.Context, gitPath, workDir string, args ...string)
 	cmd := exec.CommandContext(ctx, gitPath, args...)
 	cmd.Dir = workDir
 
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	stdout := outputcap.NewBuffer(outputcap.DefaultLimit)
+	stderr := outputcap.NewBuffer(outputcap.DefaultLimit)
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 
 	if err := cmd.Run(); err != nil {
 		errOutput := stderr.String()

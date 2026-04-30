@@ -1,7 +1,6 @@
 package spawn
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -13,6 +12,7 @@ import (
 	"github.com/ponchione/sodoryard/internal/brain"
 	"github.com/ponchione/sodoryard/internal/chain"
 	appconfig "github.com/ponchione/sodoryard/internal/config"
+	"github.com/ponchione/sodoryard/internal/outputcap"
 	"github.com/ponchione/sodoryard/internal/receipt"
 	"github.com/ponchione/sodoryard/internal/tool"
 )
@@ -165,14 +165,15 @@ func (t *SpawnAgentTool) prepareStep(ctx context.Context, in spawnAgentInput) (s
 
 func (t *SpawnAgentTool) runEngineStep(ctx context.Context, step spawnStep) engineRunOutcome {
 	start := t.now()
-	var stdout, stderr bytes.Buffer
+	stdout := outputcap.NewBuffer(outputcap.DefaultLimit)
+	stderr := outputcap.NewBuffer(outputcap.DefaultLimit)
 	var enginePID int
 	agentTimeout := resolveAgentRunTimeout(step.roleCfg)
 	res := t.runCommand(ctx, RunCommandInput{
 		Name:   t.EngineBinary,
 		Args:   []string{"run", "--config", appconfig.ConfigFilename, "--role", step.input.Role, "--task", step.task, "--chain-id", t.ChainID, "--receipt-path", step.receiptPath, "--timeout", agentTimeout.String()},
-		Stdout: &stdout,
-		Stderr: &stderr,
+		Stdout: stdout,
+		Stderr: stderr,
 		OnStdoutLine: func(line string) {
 			t.logStepOutput(ctx, step.stepID, "stdout", line)
 		},
