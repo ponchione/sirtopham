@@ -200,6 +200,35 @@ func TestAcquireProjectLockRejectsOverlap(t *testing.T) {
 	}
 }
 
+func TestScanProjectFilesPrunesExcludedDirectories(t *testing.T) {
+	projectRoot := t.TempDir()
+	writeTestFile(t, projectRoot, "main.go", "package main\n\nfunc main() {}\n")
+	writeTestFile(t, projectRoot, ".yard/lancedb/code/ignored.go", "package ignored\n")
+	writeTestFile(t, projectRoot, "web/node_modules/pkg/ignored.go", "package ignored\n")
+
+	cfg := config.Default()
+	cfg.ProjectRoot = projectRoot
+	cfg.Index.Include = []string{"**/*.go"}
+	cfg.Index.Exclude = []string{"**/.yard/**", "**/node_modules/**"}
+
+	files, filesSeen, skipped, err := scanProjectFiles(cfg)
+	if err != nil {
+		t.Fatalf("scanProjectFiles: %v", err)
+	}
+	if filesSeen != 1 {
+		t.Fatalf("filesSeen = %d, want 1 visited file outside excluded directories", filesSeen)
+	}
+	if len(files) != 1 {
+		t.Fatalf("files = %v, want only main.go", files)
+	}
+	if _, ok := files["main.go"]; !ok {
+		t.Fatalf("files = %v, want main.go", files)
+	}
+	if len(skipped) != 0 {
+		t.Fatalf("skipped = %v, want none", skipped)
+	}
+}
+
 func writeTestFile(t *testing.T, root, relPath, content string) {
 	t.Helper()
 	path := filepath.Join(root, relPath)

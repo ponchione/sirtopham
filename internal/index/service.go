@@ -264,15 +264,20 @@ func scanProjectFiles(cfg *config.Config) (map[string]string, int, []string, err
 		if walkErr != nil {
 			return walkErr
 		}
-		if d.IsDir() {
-			return nil
-		}
 
 		relPath, err := filepath.Rel(cfg.ProjectRoot, path)
 		if err != nil {
 			return err
 		}
 		relPath = filepath.ToSlash(relPath)
+
+		if d.IsDir() {
+			if shouldSkipIndexDir(cfg.Index.Exclude, relPath) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
 		filesSeen++
 
 		if len(cfg.Index.Include) > 0 && !indexerMatchesAny(cfg.Index.Include, relPath) {
@@ -339,6 +344,16 @@ func diffIndexState(currentFiles map[string]string, existing map[string]fileStat
 
 func indexerMatchesAny(patterns []string, relPath string) bool {
 	return pathglob.MatchAny(patterns, relPath)
+}
+
+func shouldSkipIndexDir(patterns []string, relPath string) bool {
+	if relPath == "" || relPath == "." {
+		return false
+	}
+	if indexerMatchesAny(patterns, relPath) {
+		return true
+	}
+	return indexerMatchesAny(patterns, relPath+"/.index-dir-probe")
 }
 
 func acquireProjectLock(projectRoot string) error {
