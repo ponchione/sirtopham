@@ -76,6 +76,40 @@ type retrievalConventionSourceStub struct {
 	calls int
 }
 
+func TestReadFileBoundedLimitsBeforeFullRead(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "large.txt")
+	if err := os.WriteFile(path, []byte("0123456789"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	content, truncated, err := readFileBounded(stdctx.Background(), path, 4)
+	if err != nil {
+		t.Fatalf("readFileBounded returned error: %v", err)
+	}
+	if string(content) != "0123" {
+		t.Fatalf("content = %q, want 0123", string(content))
+	}
+	if !truncated {
+		t.Fatal("truncated = false, want true")
+	}
+}
+
+func TestReadFileBoundedHonorsCancelledContext(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "file.txt")
+	if err := os.WriteFile(path, []byte("content"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	ctx, cancel := stdctx.WithCancel(stdctx.Background())
+	cancel()
+
+	_, _, err := readFileBounded(ctx, path, 64)
+	if !errors.Is(err, stdctx.Canceled) {
+		t.Fatalf("error = %v, want context.Canceled", err)
+	}
+}
+
 func (s *retrievalConventionSourceStub) Load(ctx stdctx.Context) (string, error) {
 	s.calls++
 	if s.delay > 0 {

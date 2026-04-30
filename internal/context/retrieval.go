@@ -1,8 +1,10 @@
 package context
 
 import (
+	"bytes"
 	stdctx "context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -94,7 +96,7 @@ const brainKeywordMinFallbackWords = 4
 // too many unrelated notes.
 const brainKeywordMinFallbackWordLen = 5
 
-type fileReaderFunc func(path string) ([]byte, error)
+type fileReaderFunc func(ctx stdctx.Context, path string, maxBytes int) ([]byte, bool, error)
 type gitRunnerFunc func(ctx stdctx.Context, workdir string, depth int) (string, error)
 
 // RetrievalOrchestrator executes the v0.1 retrieval paths for assembled context.
@@ -128,7 +130,7 @@ func NewRetrievalOrchestrator(searcher codeintel.Searcher, graph codeintel.Graph
 		conventions:          conventions,
 		brain:                brain,
 		projectRoot:          projectRoot,
-		fileReader:           os.ReadFile,
+		fileReader:           readFileBounded,
 		gitRunner:            defaultGitRunner,
 		timeout:              defaultRetrievalTimeout,
 		maxExplicitFileBytes: defaultMaxExplicitFileBytes,
@@ -470,7 +472,9 @@ func firstNonEmpty(values ...string) string {
 }
 
 func (o *RetrievalOrchestrator) retrieveExplicitFiles(ctx stdctx.Context, explicitFiles []string, cfg config.ContextConfig) ([]FileResult, error) {
-	_ = ctx
+	if ctx == nil {
+		ctx = stdctx.Background()
+	}
 	limit := cfg.MaxExplicitFiles
 	if limit <= 0 {
 		limit = defaultMaxExplicitFiles
@@ -485,20 +489,21 @@ func (o *RetrievalOrchestrator) retrieveExplicitFiles(ctx stdctx.Context, explic
 		if i >= limit {
 			break
 		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		resolved, relative, ok := resolveProjectPath(o.projectRoot, file)
 		if !ok {
 			slog.Warn("context retrieval skipped path outside project root", "path", file)
 			continue
 		}
-		content, err := o.fileReader(resolved)
+		content, truncated, err := o.fileReader(ctx, resolved, maxBytes)
 		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, ctxErr
+			}
 			slog.Warn("context retrieval file read failed", "path", file, "error", err)
 			continue
-		}
-		truncated := false
-		if len(content) > maxBytes {
-			content = content[:maxBytes]
-			truncated = true
 		}
 		results = append(results, FileResult{
 			FilePath:   relative,
@@ -508,6 +513,48 @@ func (o *RetrievalOrchestrator) retrieveExplicitFiles(ctx stdctx.Context, explic
 		})
 	}
 	return results, nil
+}
+
+func readFileBounded(ctx stdctx.Context, path string, maxBytes int) ([]byte, bool, error) {
+	if ctx == nil {
+		ctx = stdctx.Background()
+	}
+	if maxBytes <= 0 {
+		maxBytes = defaultMaxExplicitFileBytes
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
+
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, false, err
+	}
+	defer file.Close()
+
+	var out bytes.Buffer
+	buf := make([]byte, 32*1024)
+	limit := int64(maxBytes) + 1
+	reader := io.LimitReader(file, limit)
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, false, err
+		}
+		n, readErr := reader.Read(buf)
+		if n > 0 {
+			out.Write(buf[:n])
+			if out.Len() > maxBytes {
+				content := out.Bytes()
+				return append([]byte(nil), content[:maxBytes]...), true, nil
+			}
+		}
+		if readErr == io.EOF {
+			return out.Bytes(), false, nil
+		}
+		if readErr != nil {
+			return nil, false, readErr
+		}
+	}
 }
 
 func (o *RetrievalOrchestrator) retrieveStructuralGraph(ctx stdctx.Context, symbols []string, cfg config.ContextConfig) ([]GraphHit, error) {
