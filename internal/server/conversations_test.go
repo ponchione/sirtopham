@@ -29,6 +29,7 @@ type mockConversationService struct {
 	lastCreateOpts    []conversation.CreateOption
 	lastGetID         string
 	lastDeleteID      string
+	lastSearchProject string
 	lastSearchQuery   string
 	lastSetID         string
 	lastSetProvider   *string
@@ -144,7 +145,8 @@ func (m *mockConversationService) GetMessagePage(_ context.Context, conversation
 	return m.messages, nil
 }
 
-func (m *mockConversationService) Search(_ context.Context, query string) ([]conversation.SearchResult, error) {
+func (m *mockConversationService) Search(_ context.Context, projectID string, query string) ([]conversation.SearchResult, error) {
+	m.lastSearchProject = projectID
 	m.lastSearchQuery = query
 	if m.searchErr != nil {
 		return nil, m.searchErr
@@ -421,6 +423,9 @@ func TestSearchConversations(t *testing.T) {
 	}
 	if mock.lastSearchQuery != "Go" {
 		t.Fatalf("expected search query 'Go', got %q", mock.lastSearchQuery)
+	}
+	if mock.lastSearchProject != "test-project" {
+		t.Fatalf("expected search project 'test-project', got %q", mock.lastSearchProject)
 	}
 }
 

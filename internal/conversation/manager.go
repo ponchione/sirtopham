@@ -396,15 +396,17 @@ var (
 	assistantToolNamePattern = regexp.MustCompile(`"name":"([^"]+)"`)
 )
 
-// Search performs full-text search across conversation messages using FTS5.
-func (m *Manager) Search(ctx context.Context, query string) ([]SearchResult, error) {
+// Search performs project-scoped full-text search across conversation messages using FTS5.
+func (m *Manager) Search(ctx context.Context, projectID string, query string) ([]SearchResult, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 
-	rows, err := m.queries.SearchConversations(ctx, query)
+	params := db.SearchConversationsParams{ProjectID: projectID, Content: query}
+	rows, err := m.queries.SearchConversations(ctx, params)
 	if err != nil && shouldRetryLiteralSearch(err, query) {
-		rows, err = m.queries.SearchConversations(ctx, buildLiteralFTSQuery(query))
+		params.Content = buildLiteralFTSQuery(query)
+		rows, err = m.queries.SearchConversations(ctx, params)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("conversation manager: search: %w", err)

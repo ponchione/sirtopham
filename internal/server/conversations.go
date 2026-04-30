@@ -27,7 +27,7 @@ type ConversationService interface {
 	NextTurnNumber(ctx context.Context, conversationID string) (int, error)
 	GetMessages(ctx context.Context, conversationID string) ([]conversation.MessageView, error)
 	GetMessagePage(ctx context.Context, conversationID string, limit, offset int) ([]conversation.MessageView, error)
-	Search(ctx context.Context, query string) ([]conversation.SearchResult, error)
+	Search(ctx context.Context, projectID string, query string) ([]conversation.SearchResult, error)
 }
 
 // ConversationHandler handles conversation REST endpoints.
@@ -157,7 +157,7 @@ func (h *ConversationHandler) handleSearch(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusBadRequest, "query parameter 'q' is required")
 		return
 	}
-	results, err := h.service.Search(r.Context(), q)
+	results, err := h.service.Search(r.Context(), h.projectID, q)
 	if err != nil {
 		h.logger.Error("search conversations", "error", err, "query", q)
 		writeError(w, http.StatusInternalServerError, "search failed")

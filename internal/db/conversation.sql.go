@@ -579,7 +579,8 @@ SELECT c.id, c.title, c.updated_at, m.role, snippet(messages_fts, 0, '<b>', '</b
 FROM messages_fts
 JOIN messages m ON m.id = messages_fts.rowid
 JOIN conversations c ON c.id = m.conversation_id
-WHERE messages_fts.content MATCH ?
+WHERE c.project_id = ?
+  AND messages_fts.content MATCH ?
 ORDER BY rank
 LIMIT 20
 `
@@ -592,8 +593,13 @@ type SearchConversationsRow struct {
 	Snippet   string         `json:"snippet"`
 }
 
-func (q *Queries) SearchConversations(ctx context.Context, content string) ([]SearchConversationsRow, error) {
-	rows, err := q.db.QueryContext(ctx, searchConversations, content)
+type SearchConversationsParams struct {
+	ProjectID string `json:"project_id"`
+	Content   string `json:"content"`
+}
+
+func (q *Queries) SearchConversations(ctx context.Context, arg SearchConversationsParams) ([]SearchConversationsRow, error) {
+	rows, err := q.db.QueryContext(ctx, searchConversations, arg.ProjectID, arg.Content)
 	if err != nil {
 		return nil, err
 	}

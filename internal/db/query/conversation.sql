@@ -108,7 +108,8 @@ SELECT c.id, c.title, c.updated_at, m.role, snippet(messages_fts, 0, '<b>', '</b
 FROM messages_fts
 JOIN messages m ON m.id = messages_fts.rowid
 JOIN conversations c ON c.id = m.conversation_id
-WHERE messages_fts.content MATCH ?
+WHERE c.project_id = ?
+  AND messages_fts.content MATCH ?
 ORDER BY rank
 LIMIT 20;
 

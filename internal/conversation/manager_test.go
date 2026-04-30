@@ -29,7 +29,7 @@ func seedProject(t *testing.T, database *sql.DB) string {
 	projectID := sid.New()
 	createdAt := time.Unix(1700000000, 0).UTC().Format(time.RFC3339)
 	mustExec(t, database, `INSERT INTO projects(id, name, root_path, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?)`, projectID, "test-project", "/tmp/test", createdAt, createdAt)
+		VALUES (?, ?, ?, ?, ?)`, projectID, "test-project", "/tmp/test/"+projectID, createdAt, createdAt)
 	return projectID
 }
 
@@ -798,7 +798,7 @@ func TestManagerSearchSanitizesNormalAssistantToolJSONSnippets(t *testing.T) {
 		t.Fatalf("PersistIteration error: %v", err)
 	}
 
-	results, err := mgr.Search(ctx, "search_text")
+	results, err := mgr.Search(ctx, projectID, "search_text")
 	if err != nil {
 		t.Fatalf("Search error: %v", err)
 	}
@@ -813,6 +813,48 @@ func TestManagerSearchSanitizesNormalAssistantToolJSONSnippets(t *testing.T) {
 	}
 	if results[0].Snippet != "I'll inspect search_text." {
 		t.Fatalf("Search snippet = %q, want assistant text only without FTS highlight tags", results[0].Snippet)
+	}
+}
+
+func TestManagerSearchScopesResultsByProject(t *testing.T) {
+	ctx := context.Background()
+	database := newTestDB(t)
+	projectA := seedProject(t, database)
+	projectB := seedProject(t, database)
+	mgr := newTestManager(t, database)
+	mgr.HistoryManager.now = func() time.Time { return time.Unix(1700001000, 0).UTC() }
+
+	token := "runtime-token-project-scoped-search"
+	convA, err := mgr.Create(ctx, projectA, WithTitle("Project A"))
+	if err != nil {
+		t.Fatalf("Create project A conversation: %v", err)
+	}
+	if err := mgr.PersistUserMessage(ctx, convA.ID, 1, token+" belongs to project A"); err != nil {
+		t.Fatalf("PersistUserMessage project A: %v", err)
+	}
+
+	convB, err := mgr.Create(ctx, projectB, WithTitle("Project B"))
+	if err != nil {
+		t.Fatalf("Create project B conversation: %v", err)
+	}
+	if err := mgr.PersistUserMessage(ctx, convB.ID, 1, token+" belongs to project B"); err != nil {
+		t.Fatalf("PersistUserMessage project B: %v", err)
+	}
+
+	resultsA, err := mgr.Search(ctx, projectA, token)
+	if err != nil {
+		t.Fatalf("Search project A: %v", err)
+	}
+	if len(resultsA) != 1 || resultsA[0].ID != convA.ID {
+		t.Fatalf("project A results = %+v, want only %s", resultsA, convA.ID)
+	}
+
+	resultsB, err := mgr.Search(ctx, projectB, token)
+	if err != nil {
+		t.Fatalf("Search project B: %v", err)
+	}
+	if len(resultsB) != 1 || resultsB[0].ID != convB.ID {
+		t.Fatalf("project B results = %+v, want only %s", resultsB, convB.ID)
 	}
 }
 
@@ -837,7 +879,7 @@ func TestManagerSearchSanitizesTombstoneSnippets(t *testing.T) {
 		t.Fatalf("PersistIteration error: %v", err)
 	}
 
-	results, err := mgr.Search(ctx, "working")
+	results, err := mgr.Search(ctx, projectID, "working")
 	if err != nil {
 		t.Fatalf("Search error: %v", err)
 	}
@@ -873,7 +915,7 @@ func TestManagerSearchFindsInterruptedToolTombstones(t *testing.T) {
 		t.Fatalf("PersistIteration error: %v", err)
 	}
 
-	results, err := mgr.Search(ctx, "interrupted")
+	results, err := mgr.Search(ctx, projectID, "interrupted")
 	if err != nil {
 		t.Fatalf("Search error: %v", err)
 	}
@@ -900,7 +942,7 @@ func TestManagerSearchHandlesUnquotedHyphenatedQueries(t *testing.T) {
 		t.Fatalf("PersistUserMessage error: %v", err)
 	}
 
-	results, err := mgr.Search(ctx, "runtime-token-1775380560910306008")
+	results, err := mgr.Search(ctx, projectID, "runtime-token-1775380560910306008")
 	if err != nil {
 		t.Fatalf("Search error: %v", err)
 	}
@@ -934,7 +976,7 @@ func TestManagerSearchDeduplicatesConversationResults(t *testing.T) {
 		t.Fatalf("PersistIteration error: %v", err)
 	}
 
-	results, err := mgr.Search(ctx, token)
+	results, err := mgr.Search(ctx, projectID, token)
 	if err != nil {
 		t.Fatalf("Search error: %v", err)
 	}
@@ -969,7 +1011,7 @@ func TestManagerSearchPrefersNaturalLanguageSnippetOverToolOutput(t *testing.T) 
 		t.Fatalf("PersistIteration error: %v", err)
 	}
 
-	results, err := mgr.Search(ctx, token)
+	results, err := mgr.Search(ctx, projectID, token)
 	if err != nil {
 		t.Fatalf("Search error: %v", err)
 	}
@@ -1009,7 +1051,7 @@ func TestManagerSearchPrefersNaturalLanguageAssistantSnippetOverBrainToolDocumen
 		t.Fatalf("PersistIteration error: %v", err)
 	}
 
-	results, err := mgr.Search(ctx, token)
+	results, err := mgr.Search(ctx, projectID, token)
 	if err != nil {
 		t.Fatalf("Search error: %v", err)
 	}
