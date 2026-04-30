@@ -13,9 +13,9 @@ export interface UseWebSocketReturn {
   /** Current connection status. */
   status: ConnectionStatus;
   /**
-   * Ref-backed append-only queue of every server event received, in arrival
-   * order. Consumers should drain the queue (track their own index) whenever
-   * `eventTick` changes. Using a ref + tick pattern instead of a single
+   * Ref-backed queue of server events received in arrival order. Consumers
+   * should drain and clear the queue whenever `eventTick` changes. Using a
+   * ref + tick pattern instead of a single
    * `lastEvent` state avoids losing events when React 18's automatic batching
    * coalesces rapid-fire WebSocket frames into a single render — the prior
    * design silently dropped all but the last frame in a batch (B1 fix).
@@ -44,8 +44,9 @@ export function useWebSocket(): UseWebSocketReturn {
 
   const [status, setStatus] = useState<ConnectionStatus>("disconnected");
   // Ref-backed queue: ref writes are synchronous and never batched, so every
-  // WebSocket frame is preserved in arrival order. `eventTick` is a cheap
-  // counter that nudges React to re-render and fire consumer effects.
+  // WebSocket frame is preserved in arrival order until the consumer drains
+  // it. `eventTick` is a cheap counter that nudges React to re-render and fire
+  // consumer effects.
   const eventQueue = useRef<ServerEvent[]>([]);
   const [eventTick, setEventTick] = useState(0);
 

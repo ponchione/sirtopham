@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useReducer, useRef } from "react";
+import { useCallback, useEffect, useReducer } from "react";
 import { useWebSocket } from "@/hooks/use-websocket";
 import type {
   ServerMessage,
@@ -69,7 +69,7 @@ export interface TurnUsage {
 export interface ConversationState {
   conversationId: string | null;
   messages: ChatMessage[];
-  /** Text being streamed for the current assistant text block. */
+  /** Non-empty once visible text has streamed for the current turn. */
   streamingText: string;
   /** Is a turn currently in progress? */
   isStreaming: boolean;
@@ -205,9 +205,9 @@ function reducer(state: ConversationState, action: Action): ConversationState {
         } else {
           blocks.push({ kind: "text", text: action.token });
         }
-        return { ...msg, blocks, content: flattenText(blocks) };
+        return { ...msg, blocks, content: msg.content + action.token };
       });
-      return { ...state, messages: updated, streamingText: state.streamingText + action.token };
+      return { ...state, messages: updated, streamingText: state.streamingText || "1" };
     }
 
     case "thinking_start": {
@@ -368,11 +368,6 @@ export function useConversation(conversationId?: string) {
   const [state, dispatch] = useReducer(reducer, initialState);
   const { status, eventQueue, eventTick, sendMessage: wsSend, cancel: wsCancel } = useWebSocket();
 
-  // Cursor into the append-only WebSocket event queue. Lets us drain every
-  // frame even when React 18 batching coalesces multiple arrivals into a
-  // single re-render (B1 fix).
-  const processedEventsRef = useRef(0);
-
   // Set conversation ID from route param.
   useEffect(() => {
     if (conversationId) {
@@ -380,34 +375,44 @@ export function useConversation(conversationId?: string) {
     }
   }, [conversationId]);
 
-  // Drain every queued WebSocket event in arrival order. Previously this used
-  // `lastEvent` state which silently dropped frames under rapid-fire batching.
+  // Drain every queued WebSocket event in arrival order. `splice(0)` releases
+  // processed event objects so long sessions do not retain the full stream.
   useEffect(() => {
-    const queue = eventQueue.current;
-    while (processedEventsRef.current < queue.length) {
-      const msg = queue[processedEventsRef.current] as ServerMessage<ServerEventData>;
-      processedEventsRef.current += 1;
+    const queue = eventQueue.current.splice(0) as ServerMessage<ServerEventData>[];
+    let tokenBuffer = "";
+    const flushTokens = () => {
+      if (!tokenBuffer) {
+        return;
+      }
+      dispatch({ type: "token", token: tokenBuffer });
+      tokenBuffer = "";
+    };
 
+    for (const msg of queue) {
       switch (msg.type) {
       case "token": {
         const data = msg.data as TokenEvent;
-        dispatch({ type: "token", token: data.token });
+        tokenBuffer += data.token;
         break;
       }
       case "thinking_start": {
+        flushTokens();
         dispatch({ type: "thinking_start" });
         break;
       }
       case "thinking_delta": {
+        flushTokens();
         const data = msg.data as ThinkingDeltaEvent;
         dispatch({ type: "thinking_delta", delta: data.delta });
         break;
       }
       case "thinking_end": {
+        flushTokens();
         dispatch({ type: "thinking_end" });
         break;
       }
       case "tool_call_start": {
+        flushTokens();
         const data = msg.data as ToolCallStartEvent;
         dispatch({
           type: "tool_call_start",
@@ -418,6 +423,7 @@ export function useConversation(conversationId?: string) {
         break;
       }
       case "tool_call_output": {
+        flushTokens();
         const data = msg.data as ToolCallOutputEvent;
         dispatch({
           type: "tool_call_output",
@@ -427,6 +433,7 @@ export function useConversation(conversationId?: string) {
         break;
       }
       case "tool_call_end": {
+        flushTokens();
         const data = msg.data as ToolCallEndEvent;
         dispatch({
           type: "tool_call_end",
@@ -439,11 +446,13 @@ export function useConversation(conversationId?: string) {
         break;
       }
       case "status": {
+        flushTokens();
         const data = msg.data as StatusEvent;
         dispatch({ type: "status", state: data.state });
         break;
       }
       case "turn_complete": {
+        flushTokens();
         const data = msg.data as TurnCompleteEvent;
         dispatch({
           type: "turn_complete",
@@ -458,20 +467,24 @@ export function useConversation(conversationId?: string) {
         break;
       }
       case "turn_cancelled": {
+        flushTokens();
         dispatch({ type: "turn_cancelled" });
         break;
       }
       case "error": {
+        flushTokens();
         const data = msg.data as ErrorEvent;
         dispatch({ type: "error", message: data.message ?? "Unknown error" });
         break;
       }
       case "conversation_created": {
+        flushTokens();
         const data = msg.data as ConversationCreatedEvent;
         dispatch({ type: "conversation_created", conversationId: data.conversation_id });
         break;
       }
       case "context_debug": {
+        flushTokens();
         const data = msg.data as ContextDebugEvent;
         if (data.report) {
           dispatch({ type: "context_debug", report: data.report as Record<string, unknown> });
@@ -480,6 +493,7 @@ export function useConversation(conversationId?: string) {
       }
       }
     }
+    flushTokens();
   }, [eventTick, eventQueue]);
 
   const sendMessage = useCallback(
