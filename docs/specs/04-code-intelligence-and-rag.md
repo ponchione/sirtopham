@@ -267,7 +267,7 @@ index:
   max_tree_lines: 200
   auto_reindex: false   # Reserved for future runtime auto-indexing; current indexing is explicit via `yard index`
   max_file_size_bytes: 51200        # 50KB per file
-  max_total_file_size_bytes: 524288  # 512KB total context
+  max_total_file_size_bytes: 0       # Optional total indexed file bytes; 0 disables the cap
 ```
 
 ---

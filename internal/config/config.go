@@ -275,7 +275,7 @@ func Default() *Config {
 			MaxTreeLines:          200,
 			AutoReindex:           false,
 			MaxFileSizeBytes:      51200,
-			MaxTotalFileSizeBytes: 524288,
+			MaxTotalFileSizeBytes: 0,
 		},
 		Embedding: Embedding{
 			BaseURL:        defaultNomicEmbedBaseURL,

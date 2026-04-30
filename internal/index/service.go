@@ -259,6 +259,8 @@ func scanProjectFiles(cfg *config.Config) (map[string]string, int, []string, err
 	skipped := make([]string, 0)
 	filesSeen := 0
 	maxFileSize := cfg.Index.MaxFileSizeBytes
+	maxTotalFileSize := int64(cfg.Index.MaxTotalFileSizeBytes)
+	var totalFileSize int64
 
 	err := filepath.WalkDir(cfg.ProjectRoot, func(path string, d os.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -287,12 +289,18 @@ func scanProjectFiles(cfg *config.Config) (map[string]string, int, []string, err
 			return nil
 		}
 
-		if maxFileSize > 0 {
+		var fileSize int64
+		if maxFileSize > 0 || maxTotalFileSize > 0 {
 			info, err := d.Info()
 			if err != nil {
 				return err
 			}
-			if info.Size() > int64(maxFileSize) {
+			fileSize = info.Size()
+			if maxFileSize > 0 && fileSize > int64(maxFileSize) {
+				skipped = append(skipped, relPath)
+				return nil
+			}
+			if maxTotalFileSize > 0 && totalFileSize+fileSize > maxTotalFileSize {
 				skipped = append(skipped, relPath)
 				return nil
 			}
@@ -306,6 +314,7 @@ func scanProjectFiles(cfg *config.Config) (map[string]string, int, []string, err
 			skipped = append(skipped, relPath)
 			return nil
 		}
+		totalFileSize += fileSize
 		currentFiles[relPath] = codeintel.ContentHash(string(content))
 		return nil
 	})

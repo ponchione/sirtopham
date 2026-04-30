@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -226,6 +227,38 @@ func TestScanProjectFilesPrunesExcludedDirectories(t *testing.T) {
 	}
 	if len(skipped) != 0 {
 		t.Fatalf("skipped = %v, want none", skipped)
+	}
+}
+
+func TestScanProjectFilesEnforcesTotalFileSizeBudget(t *testing.T) {
+	projectRoot := t.TempDir()
+	writeTestFile(t, projectRoot, "a.go", "1234567890")
+	writeTestFile(t, projectRoot, "b.go", "abcdefghij")
+	writeTestFile(t, projectRoot, "c.go", "klmnopqrst")
+
+	cfg := config.Default()
+	cfg.ProjectRoot = projectRoot
+	cfg.Index.Include = []string{"**/*.go"}
+	cfg.Index.Exclude = nil
+	cfg.Index.MaxFileSizeBytes = 100
+	cfg.Index.MaxTotalFileSizeBytes = 15
+
+	files, filesSeen, skipped, err := scanProjectFiles(cfg)
+	if err != nil {
+		t.Fatalf("scanProjectFiles: %v", err)
+	}
+	if filesSeen != 3 {
+		t.Fatalf("filesSeen = %d, want 3", filesSeen)
+	}
+	if len(files) != 1 {
+		t.Fatalf("files = %v, want one file within total budget", files)
+	}
+	if _, ok := files["a.go"]; !ok {
+		t.Fatalf("files = %v, want a.go", files)
+	}
+	wantSkipped := []string{"b.go", "c.go"}
+	if !slices.Equal(skipped, wantSkipped) {
+		t.Fatalf("skipped = %v, want %v", skipped, wantSkipped)
 	}
 }
 
