@@ -49,6 +49,17 @@ describe("useContextReport", () => {
     expect(apiGetMock).not.toHaveBeenCalled();
   });
 
+  it("returns the same controller object across unchanged rerenders", () => {
+    const { result, rerender } = renderHook(({ pending, enabled }) => useContextReport("conv-1", pending, enabled), {
+      initialProps: { pending: false, enabled: true },
+    });
+
+    const first = result.current;
+    rerender({ pending: false, enabled: true });
+
+    expect(result.current).toBe(first);
+  });
+
   it("does not eagerly fetch the latest turn report before the defer window elapses", () => {
     const { result } = renderHook(({ pending, enabled }) => useContextReport("conv-1", pending, enabled), {
       initialProps: { pending: false, enabled: true },

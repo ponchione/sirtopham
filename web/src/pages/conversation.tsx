@@ -61,6 +61,7 @@ export function ConversationPage() {
     historyLatestTurnPending || isStreaming || agentState !== "idle",
     inspectorOpen,
   );
+  const { setHistoryTurns, setLiveReport } = ctxReport;
   // Derived: prefer the live state value over hydrated, so ongoing turns
   // override stale page-load data.
   const displayLastTurnUsage: TurnUsage | null = lastTurnUsage ?? hydratedLastTurn;
@@ -69,9 +70,9 @@ export function ConversationPage() {
   useEffect(() => {
     if (lastContextDebug) {
       setHistoryLatestTurnPending(false);
-      ctxReport.setLiveReport(lastContextDebug as unknown as ContextReport);
+      setLiveReport(lastContextDebug as unknown as ContextReport);
     }
-  }, [lastContextDebug]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [lastContextDebug, setLiveReport]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -147,13 +148,13 @@ export function ConversationPage() {
             (view) => view.turn_number === maxTurn && view.role === "assistant",
           );
           setHistoryLatestTurnPending(maxTurn > 0 && !latestTurnHasAssistant);
-          ctxReport.setHistoryTurns(maxTurn);
+          setHistoryTurns(maxTurn);
         })
         .catch((err) => {
           console.error("Failed to load conversation history:", err);
         });
     }
-  }, [convId, loadHistory, ctxReport]);
+  }, [convId, loadHistory, setHistoryTurns]);
 
   // Send initial message once when navigating from home with text.
   useEffect(() => {

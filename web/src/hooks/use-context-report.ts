@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, ApiError } from "@/lib/api";
 import type { ContextReport, ContextSignalStreamResponse } from "@/types/metrics";
 
@@ -169,7 +169,7 @@ export function useContextReport(
     }
   }, [isFollowingLatest]);
 
-  return {
+  return useMemo(() => ({
     report,
     loading,
     error,
@@ -182,5 +182,18 @@ export function useContextReport(
     jumpToLatest,
     setHistoryTurns,
     setLiveReport,
-  };
+  }), [
+    report,
+    loading,
+    error,
+    currentTurn,
+    totalTurns,
+    isFollowingLatest,
+    goToTurn,
+    nextTurn,
+    prevTurn,
+    jumpToLatest,
+    setHistoryTurns,
+    setLiveReport,
+  ]);
 }
