@@ -115,7 +115,7 @@ The orchestrator agent's primary tool. Spawns a chain-step engine session and bl
     "properties": {
       "role": {
         "type": "string",
-        "description": "Engine role name from config (e.g., 'thomas', 'percy', 'gordon')"
+        "description": "Engine role config key from agent_roles (e.g., 'coder', 'correctness-auditor', 'planner')"
       },
       "task": {
         "type": "string",
@@ -187,7 +187,7 @@ Signals the orchestrator agent that the chain is finished.
 **Implementation:**
 
 1. Write chain completion receipt to brain at `receipts/orchestrator/{chain-id}.md`.
-2. Update chain record in SQLite (status: completed/partial/failed).
+2. Update chain record in SQLite (status: completed/partial/failed, `receipt_path` set to the completion receipt).
 3. Log final chain metrics.
 4. Signal the orchestrator's agent loop to stop (return a special tool result that the headless driver recognizes as a termination signal).
 
@@ -214,6 +214,7 @@ CREATE TABLE IF NOT EXISTS chains (
                                         -- cancel_requested, completed, partial,
                                         -- failed, cancelled
     summary             TEXT,
+    receipt_path        TEXT,           -- brain-relative chain-level receipt path
     total_steps         INTEGER NOT NULL DEFAULT 0,
     total_tokens        INTEGER NOT NULL DEFAULT 0,
     total_duration_secs INTEGER NOT NULL DEFAULT 0,
@@ -226,10 +227,10 @@ CREATE TABLE IF NOT EXISTS chains (
     token_budget        INTEGER NOT NULL DEFAULT 5000000,
 
     -- Timing
-    started_at          TEXT NOT NULL DEFAULT (datetime('now')),
+    started_at          TEXT NOT NULL,
     completed_at        TEXT,
-    created_at          TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at          TEXT NOT NULL,
+    updated_at          TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_chains_launch ON chains(launch_id);
@@ -243,7 +244,8 @@ CREATE TABLE IF NOT EXISTS steps (
     id                  TEXT PRIMARY KEY,
     chain_id            TEXT NOT NULL REFERENCES chains(id),
     sequence_num        INTEGER NOT NULL,
-    role                TEXT NOT NULL,       -- engine role (e.g., 'thomas', 'percy')
+    role                TEXT NOT NULL,       -- normalized engine role config key (e.g., 'coder')
+    persona             TEXT,                -- display persona resolved at step start, when known
     task                TEXT NOT NULL,       -- task given to the engine
     task_context        TEXT,                -- optional resolver-loop grouping key
     status              TEXT NOT NULL DEFAULT 'pending',
@@ -253,13 +255,16 @@ CREATE TABLE IF NOT EXISTS steps (
     tokens_used         INTEGER DEFAULT 0,
     turns_used          INTEGER DEFAULT 0,
     duration_secs       INTEGER DEFAULT 0,
+    provider            TEXT,                -- provider resolved for this step, when known
+    model               TEXT,                -- model resolved for this step, when known
+    selection_reason    TEXT,                -- why this role was selected, when known
     exit_code           INTEGER,
     error_message       TEXT,
 
     -- Timing
     started_at          TEXT,
     completed_at        TEXT,
-    created_at          TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at          TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_steps_chain ON steps(chain_id);
@@ -275,12 +280,14 @@ CREATE TABLE IF NOT EXISTS events (
     step_id             TEXT REFERENCES steps(id),
     event_type          TEXT NOT NULL,
     event_data          TEXT,               -- JSON blob
-    created_at          TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at          TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_events_chain ON events(chain_id);
 CREATE INDEX IF NOT EXISTS idx_events_created ON events(created_at);
 ```
+
+All chain, step, and event timestamps are application-written RFC3339 UTC strings, matching [[08-data-model]]. Role values persisted in chain/step state are normalized `yard.yaml.agent_roles` config keys; persona names and aliases are accepted only at operator/UI input boundaries.
 
 ### Event Types
 
@@ -328,10 +335,10 @@ yard chain start --specs specs/auth.md
     ├─ Start headless engine session (orchestrator role)
     │   └─ Agent loop runs:
     │       ├─ Orchestrator reads brain docs (specs, existing epics/tasks)
-    │       ├─ Calls spawn_agent(role="edward", task="decompose specs/auth.md into epics")
+    │       ├─ Calls spawn_agent(role="epic-decomposer", task="decompose specs/auth.md into epics")
     │       │   └─ spawn_agent impl: execs tidmouth run, waits, returns receipt
     │       ├─ Reads receipt, decides next action
-    │       ├─ Calls spawn_agent(role="emily", task="decompose epics/auth/epic.md into tasks")
+    │       ├─ Calls spawn_agent(role="task-decomposer", task="decompose epics/auth/epic.md into tasks")
     │       ├─ ... continues dispatching engines based on brain state ...
     │       ├─ Calls chain_complete(summary="...", status="success")
     │       └─ Agent loop terminates
@@ -358,7 +365,7 @@ The orchestrator agent does NOT enforce limits — it doesn't even know about th
 ### Limit Check Flow
 
 ```
-Orchestrator agent calls spawn_agent(role="thomas", task="...")
+Orchestrator agent calls spawn_agent(role="coder", task="...")
     │
     spawn_agent implementation:
     ├─ Check chain.total_steps < chain.max_steps
@@ -438,15 +445,15 @@ The prompt should NOT hardcode the chain flow as a rigid sequence. The orchestra
 
 ```
 [chain] Started chain auth-2026-04-11 from specs/auth.md
-[chain] Step 1: Spawning edward (Epic Decomposer) 
-[chain] Step 1: edward completed — verdict: completed (14 turns, 22k tokens, 45s)
-[chain] Step 2: Spawning emily (Task Decomposer)
-[chain] Step 2: emily completed — verdict: completed (8 turns, 15k tokens, 30s)
+[chain] Step 1: Spawning epic-decomposer (Edward)
+[chain] Step 1: epic-decomposer completed — verdict: completed (14 turns, 22k tokens, 45s)
+[chain] Step 2: Spawning task-decomposer (Emily)
+[chain] Step 2: task-decomposer completed — verdict: completed (8 turns, 15k tokens, 30s)
 [chain] Reindexing before planner...
-[chain] Step 3: Spawning gordon (Planner) for tasks/auth/01-jwt-middleware.md
+[chain] Step 3: Spawning planner (Gordon) for tasks/auth/01-jwt-middleware.md
 ...
 [chain] Step 12: All auditors passed for task 01-jwt-middleware
-[chain] Step 13: Spawning rosie (Test Writer)
+[chain] Step 13: Spawning test-writer (Rosie)
 ...
 [chain] Chain completed — 18 steps, 340k tokens, 12m 30s
 ```

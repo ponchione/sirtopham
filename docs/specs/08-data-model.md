@@ -24,7 +24,7 @@ All timestamp columns use `TEXT` with ISO8601 strings (`2026-03-28T14:30:00Z`). 
 
 IDs use the type that best fits each table's access pattern:
 
-- **UUIDv7 (TEXT):** For externally-referenced entities — `projects` and `conversations`. These IDs appear in REST URLs, WebSocket connections, and the web UI's URL bar. UUIDv7 is time-ordered, so chronological listing doesn't require a separate timestamp sort.
+- **UUIDv7 or deterministic external TEXT IDs:** For externally-referenced entities — `projects`, `conversations`, chains, launches, custom launch presets, and background operations. These IDs appear in REST URLs, WebSocket connections, event streams, and the web UI's URL bar. UUIDv7 is preferred where no human-readable chain ID is required because it is time-ordered.
 - **INTEGER AUTOINCREMENT:** For high-frequency internal tables — `messages`, `sub_calls`, `tool_executions`, `context_reports`, `brain_documents`, `brain_links`, `index_state`. These are never exposed in URLs. Autoincrement is fast, compact, and provides natural insertion ordering.
 
 ### Migration Strategy
@@ -34,6 +34,7 @@ During active development, the canonical schema still lives in a single `schema.
 - rebuild `messages_fts` triggers so `role='tool'` messages are indexed
 - add `context_reports.token_budget_json` when missing
 - ensure the chain orchestrator tables and indexes exist
+- ensure command-center tables and indexes exist (`launches`, `launch_presets`, `background_operations`)
 
 This is not a general migration framework. It is a narrow bridge for dev-era databases whose data is useful enough to preserve. Once the schema stabilizes (v0.5+), migrate to versioned migration files — either golang-migrate or hand-written `.sql` files with a version table. The schema is simple enough that manual migrations are viable for a personal tool.
 

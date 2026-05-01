@@ -69,20 +69,20 @@ The command center uses the existing SPA, but the app shell changes from "conver
 
 Minimum supported viewport: **1440 x 900 desktop**. Layouts may assume a pointer, keyboard, persistent left navigation, dense tables, resizable split panes, and multi-column views. No UI requirement should be shaped around mobile constraints.
 
-| Route | Purpose |
-|---|---|
-| `/` | Observatory: readiness, active work, recent work, warnings, quick launch |
-| `/launch` | Opens the active launch draft or creates a new one |
-| `/launch/:id` | Launch workbench: drop docs, define task, choose agents or Sir Topham, start work |
-| `/docs` | Document intake and read-only brain/spec/receipt browser |
-| `/agents` | Agent roster, role definitions, selectable launch profiles, recent agent activity |
-| `/c/new` | Start a new conversation from chat input or launch context |
-| `/c/:id` | Existing conversation view with metrics and context inspector |
-| `/chains` | Chain list, filters, and start-chain entry point |
-| `/chains/:id` | Chain detail: status, steps, event log, controls, receipts |
-| `/project` | Project browser: tree, file preview, index/brain status |
-| `/metrics` | Cross-conversation and chain/runtime metrics |
-| `/settings` | Existing provider/model/project settings, expanded as needed |
+| Route | Purpose | First-pass status |
+|---|---|---|
+| `/` | Observatory: readiness, active work, recent work, warnings, quick launch | Phase A |
+| `/launch` | Opens the active launch draft or creates a new one | Phase B |
+| `/launch/:id` | Launch workbench: drop docs, define task, choose agents or Sir Topham, start work | Phase B-D |
+| `/docs` | Document intake plus read-only brain/spec/receipt browser | Phase B minimum; expanded later |
+| `/agents` | Agent roster, role definitions, selectable launch profiles, recent agent activity | Phase B |
+| `/c/new` | Start a new conversation from chat input or launch context | Existing, preserved in Phase A |
+| `/c/:id` | Existing conversation view with metrics and context inspector | Existing, preserved in Phase A |
+| `/chains` | Chain list, filters, and start-chain entry point | Phase C-D |
+| `/chains/:id` | Chain detail: status, steps, event log, controls, receipts | Phase C-D |
+| `/project` | Read-only project tree/file observability and explicit-file attach | Phase A-B minimum; expanded later |
+| `/metrics` | Read-only conversation/chain/runtime metric tables | Phase A minimum; expanded later |
+| `/settings` | Existing provider/model/project settings, expanded as needed | Existing, preserved in Phase A |
 
 The left navigation should expose these as stable top-level areas:
 - Observatory
@@ -96,6 +96,8 @@ The left navigation should expose these as stable top-level areas:
 - Settings
 
 The conversation list can remain as a panel inside Chat or Observatory, but it is no longer the app's primary navigation model.
+
+First-pass routes may ship with minimum useful observability rather than their final target surface. Minimum `/project` means the existing tree/file preview endpoints are reachable in Phase A and files can be attached to a launch once Phase B attachment endpoints exist. Minimum `/metrics` means existing conversation metrics plus chain-level totals where available. Minimum `/docs` means intake, saved-doc listing/detail, receipt viewing, and launch attachment; saved-doc editing remains out of scope.
 
 ### App Shell
 
@@ -119,7 +121,7 @@ The top status strip shows the same fields everywhere:
 | Code index | `/api/project` or `/api/runtime/status` | Rebuild action when stale/error |
 | Brain index | `/api/project` or `/api/runtime/status` | Rebuild action when stale/error |
 | Active chains | chain list/readiness response | Opens `/chains` filtered to active |
-| Operations | `/api/operations/:id` for known operations | Opens operations popover |
+| Operations | `/api/operations` and `/api/operations/:id` | Opens operations popover |
 
 Status strip severity rules:
 - `blocking`: auth unusable, selected provider/model unavailable, project config invalid, or selected role invalid
@@ -134,7 +136,7 @@ The shell must not hide the route when a readiness check fails. It should make t
 The command center keeps a single active launch draft pointer in browser local storage as `active_launch_id`. The server remains the source of truth for launch contents.
 
 Rules:
-- `/launch` opens `active_launch_id` when it points to an existing non-terminal draft.
+- `/launch` opens `active_launch_id` when it points to an existing draft.
 - If there is no valid active draft, `/launch` creates a new draft with `POST /api/launches`, stores its ID as `active_launch_id`, and routes to `/launch/:id`.
 - `/launch/:id` loads that launch and sets `active_launch_id` when its status is `draft`.
 - "New launch" always creates a fresh draft and routes to `/launch/:id`.
@@ -477,6 +479,7 @@ Attach behavior:
 - attaching creates an active launch draft first when needed
 - attach actions save the target launch draft immediately
 - removing a queued intake row never deletes the saved brain file
+- attach and detach API calls are draft-only launch mutations; terminal launches must be duplicated before their attachments can change
 
 ### Docs Browser
 
@@ -641,7 +644,7 @@ First-pass chain detail layout:
 - **Step timeline:** primary supervision surface, one row per step with role/persona, task summary, status, verdict, tokens, duration, and receipt link; current step is highlighted
 - **Live agent stream:** visible-by-default stream for the running step, showing status transitions, tool calls, model waits, meaningful agent output, and current receipt/progress hints
 - **Event log:** normal/debug verbosity toggle matching CLI semantics, event-type and step filters, and follow/live polling toggle
-- **Receipt panel:** orchestrator receipt and selected step receipt rendered as markdown, with raw toggle
+- **Receipt panel:** chain-level receipt and selected step receipt rendered as markdown, with raw toggle
 - **Agent activity panel:** current role, model/provider, process/execution metadata; raw subprocess stdout/stderr remains debug-only, but meaningful agent activity is visible in the live stream
 - **Manual roster handoff panel:** compiled work packet, prior receipt paths, and prior verdict summaries when the chain came from `manual_roster`
 
@@ -752,6 +755,7 @@ Role validation rules:
 - every custom tool must be available in the execution environment where the role can run
 - max turns, token limits, and timeout must be positive when set
 - provider/model overrides must reference configured providers/models; unavailable auth is a readiness warning but still appears in role problems when it would block launch
+- API path parameters and saved launch/preset/chain fields use role config keys. Persona aliases may be accepted in chat inference and role-picking inputs, but responses always return normalized config keys.
 
 Role categories are response metadata, not frontend hard-coding. The server derives categories from built-in metadata where available and may infer broad categories from role key suffixes such as `-auditor`. Custom roles with no recognized category still appear under `custom` and remain selectable.
 
@@ -930,10 +934,13 @@ Chain endpoint response rules:
 - `GET /api/chains/:id` returns `ChainDetail`.
 - `GET /api/chains/:id/steps` returns `{ steps: ChainStepSummary[] }` ordered by `sequence_num`.
 - `GET /api/chains/:id/events` returns `{ chain_id, after_id, next_after_id, events: ChainEvent[] }`.
-- `GET /api/chains/:id/receipt` returns the orchestrator receipt for the chain.
+- `GET /api/chains/:id/receipt` returns the chain-level receipt path recorded on the chain. For orchestrator-managed chains this is normally the orchestrator receipt; for direct-step modes it is the direct chain completion receipt. If the chain has not produced a chain-level receipt yet, return `404`.
 - `GET /api/chains/:id/steps/:step_id/receipt` returns the receipt for a concrete step ID, not a role name or sequence number.
-- `POST /api/chains/:id/pause`, `resume`, and `cancel` return `{ chain: ChainDetail, event?: ChainEvent }` after the requested state transition is durable.
+- `POST /api/chains/:id/pause` returns `200` with `{ chain: ChainDetail, event?: ChainEvent }` after `pause_requested` or `paused` is durable.
+- `POST /api/chains/:id/resume` returns `202` with `{ chain: ChainDetail, event?: ChainEvent }` after the chain is durable as `running`, `chain_resumed` is logged, and a fresh active execution has been launched or queued under a server-owned background context.
+- `POST /api/chains/:id/cancel` returns `200` with `{ chain: ChainDetail, event?: ChainEvent }` after `cancel_requested` or `cancelled` is durable and process signalling has been attempted for known active processes.
 - Invalid chain state transitions return `409` with `code: "invalid_state"`; missing chains, steps, or receipts return `404`.
+- Resume setup failures before a new active execution is launched return `500` or `503` with `operation_failed` or the dependency-specific code. If the chain status was already changed to `running`, the handler must record a failure event and finalize the chain consistently rather than leaving an invisible half-resume.
 
 ### Launch APIs
 
@@ -949,6 +956,8 @@ GET    /api/launches/:id
 PUT    /api/launches/:id
 DELETE /api/launches/:id
 POST   /api/launches/:id/duplicate
+POST   /api/launches/:id/attachments
+DELETE /api/launches/:id/attachments?kind=<kind>&path=<path>
 POST   /api/launches/:id/preflight
 POST   /api/launches/:id/start
 ```
@@ -964,14 +973,31 @@ Endpoint behavior:
 | `PUT /api/launches/:id` | Update a `draft` launch. Returns `409` for non-draft launches. |
 | `DELETE /api/launches/:id` | Delete a `draft` launch. Returns `409` for non-draft launches. |
 | `POST /api/launches/:id/duplicate` | Create a new `draft` from any existing launch, copying normalized packet, plan, policy, and preset reference. |
+| `POST /api/launches/:id/attachments` | Attach a saved brain doc or project file to a `draft` launch, applying de-dupe and move rules. |
+| `DELETE /api/launches/:id/attachments` | Remove a saved brain doc or project file attachment from a `draft` launch. |
 | `POST /api/launches/:id/preflight` | Run preflight for the saved draft and update `preflight_json`. Does not start work. |
 | `POST /api/launches/:id/start` | Run preflight, create the chain, and update launch status. |
+
+Launch endpoint response rules:
+- `GET /api/launches` returns `200` with `{ launches: LaunchRecord[] }`; `limit` defaults to 50 and is capped at 200.
+- `POST /api/launches` accepts an optional partial `LaunchDraftRequest` and returns `201` with `LaunchRecord`.
+- `POST /api/launches/infer` accepts `LaunchInferRequest` and returns `200` with `LaunchInferResponse`; it never starts work.
+- `GET /api/launches/:id` returns `200` with `LaunchRecord`; missing launches return `404`.
+- `PUT /api/launches/:id` accepts `LaunchDraftRequest` as a full replacement of the editable draft fields after normalization and returns `200` with `LaunchRecord`. Omitted optional fields are cleared or defaulted according to the type rules; callers that want merge behavior must GET, merge locally, then PUT.
+- `DELETE /api/launches/:id` returns `204` with no body after deleting a draft launch.
+- `POST /api/launches/:id/duplicate` returns `201` with the new draft `LaunchRecord`.
+- `POST /api/launches/:id/attachments` accepts `LaunchAttachmentRequest` as JSON. `DELETE /api/launches/:id/attachments` accepts the same `kind` and `path` values as query parameters.
+- Attachment endpoints return `200` with the updated `LaunchRecord`; non-draft launches return `409`, missing source paths return `404`, invalid path syntax returns `400`, and semantic attach validation returns `422`.
+- `POST /api/launches/:id/preflight` returns `200` with `LaunchPreflight`.
+- `POST /api/launches/:id/start` returns `202` with `LaunchStartResponse` after a durable chain ID exists and execution has been launched or queued.
 
 `POST /api/launches/:id/preflight` returns `409` for non-draft launches. Any draft edit makes the previous preflight stale. The response uses the same `LaunchPreflight` shape as start.
 
 `POST /api/launches/:id/start` returns as soon as the chain record exists and execution has been launched or queued by the server process. It must not keep the HTTP request open for the full chain duration. The current `internal/chainrun.Start` call is foreground/blocking, but it invokes `Options.OnChainID` immediately after the chain record is created; the HTTP handler should run `Start` in a server-owned goroutine and return after receiving that callback or a setup error.
 
-Start success and failure are separate response paths. A successful start returns only after a durable `chain_id` exists. Preflight failures, validation failures, provider/auth failures, and setup failures before chain creation return `APIErrorResponse` with the appropriate `4xx`/`5xx` status and no `LaunchStartResponse`. If execution fails after the chain ID was returned, the launch and chain are updated asynchronously and the UI discovers that state through polling.
+Start success and failure are separate response paths. A successful start returns only after a durable `chain_id` exists. Preflight and validation failures return `APIErrorResponse` with the appropriate `4xx` status, keep the launch editable as `draft`, and write `preflight_json` when a preflight result exists. Provider/auth/setup failures before chain creation return `APIErrorResponse` with the appropriate `4xx`/`5xx` status and no `LaunchStartResponse`; setup failures after the launch entered `starting` update the launch to `failed` with `error_message`. If execution fails after the chain ID was returned, the launch and chain are updated asynchronously and the UI discovers that state through polling.
+
+Double-start behavior is deterministic: starting any launch that is not `draft` returns `409` with `code: "invalid_state"` and the current launch record in `details` when available. A retry after a network failure should first reload the launch; if `chain_id` is already present, the UI opens the linked chain instead of issuing another start.
 
 ### Launch Inference
 
@@ -1071,6 +1097,7 @@ type LaunchPresetApplyRequest = {
 };
 
 type LaunchPresetApplyResponse = {
+  created: boolean;
   launch: LaunchRecord;
 };
 ```
@@ -1085,6 +1112,28 @@ Preset validation response rules:
 - built-ins are validated against the current config on every response
 - custom presets are stored even when invalid so they can be repaired in the UI
 
+Preset endpoint response rules:
+- `GET /api/launch-presets` returns `200` with `{ presets: LaunchPreset[] }`.
+- `POST /api/launch-presets` accepts `LaunchPresetWriteRequest` and returns `201` with `LaunchPreset`.
+- `GET /api/launch-presets/:id` returns `200` with `LaunchPreset`.
+- `PUT /api/launch-presets/:id` accepts `LaunchPresetWriteRequest` as a full replacement of editable custom-preset fields and returns `200` with `LaunchPreset`; built-ins return `409`.
+- `DELETE /api/launch-presets/:id` returns `204` for custom presets; built-ins return `409`.
+- `POST /api/launch-presets/:id/duplicate` returns `201` with the copied custom `LaunchPreset`.
+- `POST /api/launch-presets/:id/apply` returns `200` with `LaunchPresetApplyResponse`; `created` is true when the server created a new draft because no `launch_id` was supplied.
+
+```typescript
+type LaunchPresetWriteRequest = {
+  name: string;
+  description?: string;
+  enabled?: boolean;
+  mode: LaunchMode;
+  agent_plan_template: AgentPlan;
+  work_packet_defaults?: Partial<WorkPacket>;
+  execution_policy_defaults?: LaunchExecutionPolicy;
+  parameters?: LaunchPresetParameter[];
+};
+```
+
 ### Launch Record
 
 ```typescript
@@ -1093,6 +1142,7 @@ type LaunchStatus =
   | "starting"
   | "running"
   | "completed"
+  | "partial"
   | "failed"
   | "cancelled";
 
@@ -1108,6 +1158,7 @@ type LaunchRecord = {
   preflight?: LaunchPreflight;
   preflight_stale: boolean;
   chain_id?: string;
+  linked_chain?: ChainSummary;
   created_at: string;
   updated_at: string;
   started_at?: string;
@@ -1120,8 +1171,9 @@ Launch status rules:
 - `draft`: editable; no chain exists.
 - `starting`: start request accepted, preflight passed, chain creation in progress.
 - `running`: chain exists and is non-terminal.
-- `completed`: chain reached a terminal successful or partial state.
-- `failed`: preflight failed, chain creation failed, or chain failed.
+- `completed`: linked chain reached terminal `completed`.
+- `partial`: linked chain reached terminal `partial`; human review or follow-up may be needed.
+- `failed`: chain creation failed after start was attempted, execution setup failed before a chain ID existed, or the linked chain reached terminal `failed`.
 - `cancelled`: linked chain was cancelled.
 
 Launch status is derived from the chain when a chain exists, but the launch keeps its own status column so the observatory can show launch failures that occur before a chain ID exists.
@@ -1168,6 +1220,20 @@ type AgentPlan = {
 type LaunchExecutionPolicy = {
   continue_on_non_success?: boolean;
   reindex_policy?: "on_code_change" | "never" | "between_steps";
+};
+```
+
+All persisted role fields in `AgentPlan`, `LaunchPreset`, chain rows, and step rows use normalized `yard.yaml.agent_roles` config keys. The UI and launch inference may accept persona names or aliases as input, but the server resolves them before saving. If an alias is ambiguous, validation returns `422` with `code: "role_unavailable"` and a field error for the relevant role field.
+
+```typescript
+type LaunchAttachmentKind =
+  | "primary_spec"
+  | "supporting_brain_doc"
+  | "explicit_file";
+
+type LaunchAttachmentRequest = {
+  kind: LaunchAttachmentKind;
+  path: string;
 };
 ```
 
@@ -1262,8 +1328,8 @@ CREATE TABLE IF NOT EXISTS launches (
     preset_id           TEXT,
 
     error_message       TEXT,
-    created_at          TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at          TEXT NOT NULL DEFAULT (datetime('now')),
+    created_at          TEXT NOT NULL,
+    updated_at          TEXT NOT NULL,
     started_at          TEXT,
     completed_at        TEXT
 );
@@ -1276,6 +1342,7 @@ CREATE INDEX IF NOT EXISTS idx_launches_chain ON launches(chain_id);
 Rules:
 - `mode` must be one of the `LaunchMode` values.
 - `status` must be one of the `LaunchStatus` values.
+- all timestamps are application-written RFC3339 UTC strings, matching [[08-data-model]].
 - `work_packet_json` and `agent_plan_json` are stored exactly as accepted after validation and normalization.
 - `execution_policy_json` stores normalized launch execution policy with defaults applied.
 - `compiled_packet_md` is null while the launch is a draft and is written at start after preflight succeeds.
@@ -1285,7 +1352,7 @@ Rules:
 - `preset_id` records the preset that populated the launch when applicable; editing the draft does not mutate the preset.
 - updating a draft replaces the JSON blobs and refreshes `updated_at`.
 - starting a launch writes `compiled_packet_md`, `preflight_json`, `started_at`, `chain_id`, and status.
-- terminal chain completion writes `completed_at` and maps the chain state to launch status.
+- terminal chain completion writes `completed_at` and maps chain `completed`, `partial`, `failed`, and `cancelled` to the same launch statuses.
 
 Optional later normalization may split document attachments into a separate `launch_documents` table, but the first implementation keeps document paths in `work_packet_json` because launches are personal/local and queried mostly as whole records.
 
@@ -1303,8 +1370,8 @@ CREATE TABLE IF NOT EXISTS launch_presets (
     work_packet_defaults_json TEXT NOT NULL DEFAULT '{}',
     execution_policy_json    TEXT NOT NULL DEFAULT '{}',
     enabled                  INTEGER NOT NULL DEFAULT 1,
-    created_at               TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at               TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at               TEXT NOT NULL,
+    updated_at               TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_launch_presets_enabled ON launch_presets(enabled);
@@ -1313,6 +1380,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_launch_presets_name ON launch_presets(name
 
 Preset validation:
 - `mode` must be one of the `LaunchMode` values.
+- all timestamps are application-written RFC3339 UTC strings, matching [[08-data-model]].
 - referenced roles may be missing at rest, but the API response must surface validation problems against current role config.
 - disabled presets remain stored but are hidden from normal launch-preset pickers unless "show disabled" is enabled.
 - deleting a custom preset does not affect existing launches that were created from it.
@@ -1413,6 +1481,8 @@ The concrete Go type can differ, but the semantics are fixed:
 3. `OnChainID` is called exactly once after the chain row and first event are durable. If chain creation fails, it is not called.
 4. All launch modes write normal chain, step, event, receipt, metric, and final status records. The UI never has to branch into a run-specific read model.
 5. `Start` may block until terminal completion for CLI use. Server handlers wrap it in a background execution and return after `OnChainID`.
+6. Role references are normalized to config keys before records are written. Persona names and aliases are accepted only at input boundaries.
+7. Each step records the resolved provider/model, persona display name when known, and selection reason when known before the step starts.
 
 Mode execution:
 
@@ -1436,6 +1506,7 @@ Direct-step runner semantics:
 4. Persist meaningful step output as chain events so `/api/chains/:id/agent-stream` can render live progress.
 5. Parse the receipt frontmatter and store verdict, token usage, turn count, duration, and receipt path on the step.
 6. Apply pause/cancel requests between steps. Cancelling an active step requests termination through the same process-control path as CLI chain cancellation.
+7. On direct-step chain finalization, write a chain-level completion receipt and store its brain-relative path on the chain.
 
 Verdict mapping for direct-step modes:
 
@@ -1495,6 +1566,7 @@ type ChainSummary = {
   source_task?: string;
   source_specs?: string[];
   summary?: string;
+  receipt_path?: string;
   roles?: string[];
   total_steps: number;
   total_tokens: number;
@@ -1530,11 +1602,15 @@ type ChainStepSummary = {
   id: string;
   sequence_num: number;
   role: string;
+  persona?: string;
   task: string;
   task_context?: string;
   status: "pending" | "running" | "completed" | "failed";
   verdict?: string;
   receipt_path?: string;
+  provider?: string;
+  model?: string;
+  selection_reason?: string;
   tokens_used?: number;
   turns_used?: number;
   duration_secs?: number;
@@ -1542,6 +1618,8 @@ type ChainStepSummary = {
   completed_at?: string;
 };
 ```
+
+`role` is the normalized config key persisted on the step. `persona`, `provider`, `model`, and `selection_reason` should be stored at step creation/start when available so historical chain detail does not change if `yard.yaml` is edited later. When a CLI-started historical chain lacks these fields, the API may omit them and the UI falls back to the current role metadata with a subtle "current config" indicator.
 
 ### Chain Event Response
 
@@ -1785,12 +1863,13 @@ Observatory and project screens can initially compose existing endpoints. Once q
 GET  /api/runtime/status
 POST /api/index/code
 POST /api/index/brain
+GET  /api/operations?status=<csv>&limit=<n>
 GET  /api/operations/:id
 ```
 
 `GET /api/runtime/status` should aggregate the readiness facts the observatory needs: project, configured provider/model, provider/auth health, code index state, brain index state, local-service status when configured, configured agent-role validity, active chains, and recent failed operations.
 
-Index rebuild endpoints should launch background operations and return an operation ID. `GET /api/operations/:id` reports `pending`, `running`, `completed`, or `failed`, plus timestamps and an optional error message. These operations should call internal runtime/indexing packages directly; they should not execute the `yard` CLI.
+Index rebuild endpoints should launch background operations and return an operation ID. `GET /api/operations/:id` reports `pending`, `running`, `completed`, or `failed`, plus timestamps and an optional error message. `GET /api/operations` lists recent operations for observatory reloads; `limit` defaults to 50 and is capped at 200. These operations should call internal runtime/indexing packages directly; they should not execute the `yard` CLI.
 
 Runtime operation output is intentionally summarized. The command center should show operation state, timestamps, final summary, and failure details, but it should not expose an arbitrary terminal stream for indexing/local-service operations. Live streaming is required for agent/chain work, not for maintenance operations.
 
@@ -1798,6 +1877,10 @@ Runtime operation output is intentionally summarized. The command center should 
 type OperationStartResponse = {
   operation_id: string;
   operation: OperationRecord;
+};
+
+type OperationListResponse = {
+  operations: OperationRecord[];
 };
 
 type OperationRecord = {
@@ -1814,6 +1897,8 @@ type OperationRecord = {
 
 `POST /api/index/code` and `POST /api/index/brain` return `202` with `OperationStartResponse` after the operation record is durable. If the operation cannot be created because config is invalid or a required service is unavailable, the endpoint returns `APIErrorResponse` with `422` or `503`. Operations are persisted in SQLite so the observatory can still show recent failures after route navigation or reload.
 
+`GET /api/operations` returns `200` with `OperationListResponse`. `GET /api/operations/:id` returns `200` with `OperationRecord`, or `404` with `not_found`.
+
 Initial operation persistence:
 
 ```sql
@@ -1823,7 +1908,7 @@ CREATE TABLE IF NOT EXISTS background_operations (
     status        TEXT NOT NULL DEFAULT 'pending',
     summary       TEXT,
     error_message TEXT,
-    created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+    created_at    TEXT NOT NULL,
     started_at    TEXT,
     completed_at  TEXT
 );
@@ -1831,6 +1916,8 @@ CREATE TABLE IF NOT EXISTS background_operations (
 CREATE INDEX IF NOT EXISTS idx_background_operations_status ON background_operations(status);
 CREATE INDEX IF NOT EXISTS idx_background_operations_created ON background_operations(created_at);
 ```
+
+All operation timestamps are application-written RFC3339 UTC strings, matching [[08-data-model]].
 
 ### Metrics APIs
 
@@ -1853,7 +1940,7 @@ Aggregate metrics responses should include stable IDs for linking back to source
 - Chain HTTP handlers live in `internal/server`, not `cmd/yard`.
 - Launch HTTP handlers live in `internal/server`, not `cmd/yard`.
 - `sir_topham_decides` and `constrained_orchestration` delegate to `internal/chainrun.Start`.
-- Because `chainrun.Start` runs the chain to completion, the HTTP launch/resume handler needs a small async wrapper around it. The wrapper should bridge `Options.OnChainID` back to the request and record/log any later execution error after the response has returned.
+- Because `chainrun.Start` and resume execution run chains to completion, HTTP launch and resume handlers need a small async wrapper around them. Launch bridges `Options.OnChainID` back to the request; resume returns after the new active execution is durable, launched, or queued. Both handlers record/log any later execution error after the response has returned.
 - `manual_roster` needs a new deterministic chain runner that reuses the same runtime primitives as orchestrated chains but does not run the orchestrator agent. It must create normal chain/step/event records so the chain detail UI works unchanged.
 - `one_step_chain` creates a one-step chain using the same step execution machinery as manual roster. There is no separate browser run target.
 - Chain read/control delegates to `internal/chain.Store` and the same transition validation used by CLI commands.
@@ -1908,19 +1995,23 @@ Aggregate metrics responses should include stable IDs for linking back to source
 - Populate readiness cards from existing project/config/provider endpoints.
 - Implement active-chain and runtime-readiness polling cadences.
 - Keep new chat creation reachable from the observatory and Chat route.
+- Add minimum `/project` and `/metrics` routes using existing read-only data: project tree/file preview for project observability, and existing conversation metrics plus chain totals where available.
 
 ### Phase B - Document Intake and Agent Roster
 
 - Add document write/read/list endpoints.
 - Add `/docs` route with drag/drop intake, target path editing, save status, and brain index stale state.
+- Add the minimum saved-doc browser in `/docs`: saved-doc list/detail, receipt viewing, and attach actions. Do not add saved-doc editing.
 - Ensure completed spec files can be saved as `specs/<slug>.md` and selected as primary launch specs.
 - Add `/agents` route backed by real role config validation.
 - Add `/agents` roster filters, role detail, and launch actions.
 - Add built-in launch presets, custom preset CRUD, duplicate/apply behavior, and preset validation.
 - Add launch persistence endpoints for creating/updating/deleting drafts.
+- Add launch attachment endpoints for primary specs, supporting brain docs, and explicit project files.
 - Add active launch draft behavior using `active_launch_id`.
 - Add launch duplicate and draft preflight endpoints.
 - Add launch workbench skeleton with preset picker, work packet, agent-plan, and preflight panels.
+- Add background operation persistence plus `POST /api/index/brain`, `POST /api/index/code`, `GET /api/operations`, and `GET /api/operations/:id` so save-and-index and status-strip rebuild actions have a deterministic backend contract.
 
 ### Phase C - Chain Read Model
 
@@ -1957,29 +2048,29 @@ Aggregate metrics responses should include stable IDs for linking back to source
 
 ### Phase F - Project Browser
 
-- Add `/project` route backed by existing project tree/file endpoints.
+- Expand the Phase A `/project` route beyond the minimum tree/file preview.
 - Link tool calls, context reports, and receipts to file previews where possible.
-- Keep source files read-only and support attaching file paths to launch drafts.
+- Keep source files read-only and preserve explicit-file launch attachment.
 
 ### Phase F2 - Docs Browser
 
-- Add read-only saved-doc browser for brain docs, specs, tasks, plans, notes, conventions, and receipts.
+- Expand the Phase B read-only saved-doc browser for brain docs, specs, tasks, plans, notes, conventions, and receipts.
 - Link context inspector brain hits and source specs to `/docs`.
-- Support attaching saved docs to launch drafts as primary specs or supporting brain docs.
+- Preserve attaching saved docs to launch drafts as primary specs or supporting brain docs.
 - Do not add saved-doc editing in this pass.
 
 ### Phase G - Metrics Expansion
 
-- Add `/metrics` route.
+- Expand the Phase A `/metrics` route.
 - Start with dense read-only tables, not charts.
 - Start with conversation-level metrics and add chain/global aggregations as backend endpoints land.
 - Link metric rows back to source chains, launches, conversations, turns, receipts, or context reports.
 
 ### Phase H - Runtime Operations
 
-- Add runtime readiness aggregation if frontend composition becomes noisy.
-- Add code-index and brain-index rebuild actions as background operations.
-- Surface operation status in observatory/project panels.
+- Expand runtime readiness aggregation if frontend composition becomes noisy.
+- Add richer operation history/filtering and optional operation detail panels.
+- Surface additional local-service operations if they become useful. Do not expose arbitrary terminal streams for maintenance operations.
 
 ---
 
@@ -1992,32 +2083,34 @@ Aggregate metrics responses should include stable IDs for linking back to source
 3. `/docs` accepts dropped `.md` and `.txt` files, rejects unsupported/oversized/path-invalid documents with structured errors, saves valid docs into the brain vault, and marks the brain index stale.
 4. Newly saved brain docs are visible and attachable immediately before brain indexing runs.
 5. Completed spec files can be dropped, saved as primary specs, and used to launch decomposition agents without requiring separate task text.
-6. `/agents` shows configured roles from real config validation, role categories, prompt/tool readiness, and launch actions.
-7. The UI reads roles dynamically from `yard.yaml`; it does not hard-code the initial 13 as the valid universe.
-8. Built-in presets are visible and disabled with validation problems when referenced roles are missing.
-9. Custom launch presets can be created, edited, duplicated, disabled, deleted, validated, and applied from the UI without mutating `yard.yaml`.
-10. `/launch` opens or creates an active draft, `/launch/:id` renders that draft, and cross-route attach actions target `active_launch_id`.
-11. Draft launches can be saved, duplicated, deleted, preflighted, and started with explicit dirty/saving/save_failed states; Start performs save-before-start when the draft is dirty.
-12. Starting a launch compiles deterministic work packet markdown and stores it on the launch record before runtime start.
-13. `/launch/:id` can start `sir_topham_decides`, `constrained_orchestration`, `manual_roster`, and `one_step_chain` launches from task text, saved specs, or both.
-14. Constrained orchestration rejects disallowed spawned roles and verifies required roles before successful finalization.
-15. One-step browser launches create one-step chains; there is no separate browser run record or run detail model.
-16. Chat remains normal chat by default, but launch-intent phrases can create reviewed launch suggestions for one-step chain or decomposition work.
-17. Chain list and detail routes show normal chain, step, event, receipt, status, role/persona, task, token, and duration records for CLI-started and UI-started chains.
-18. Chain detail includes a visible live agent stream for active steps using persisted events, with raw process output available only in debug mode.
-19. Pause, resume, and cancel from the UI follow the same state-transition rules as the CLI and return structured chain-control responses.
-20. Chain receipts are readable from the UI through brain-relative receipt paths derived from chain/step records.
-21. Runtime maintenance operations show summarized status/output; agent and chain work exposes live activity streams.
-22. The command center does not introduce a separate binary, service, container, deployment model, mobile layout, multi-user behavior, public `yard run`, or separate browser run target.
-23. `make test` and `make build` remain the final validation gates for backend-integrated slices; frontend slices also run the relevant `web/` test/build commands.
+6. Minimum `/project` shows the project tree, read-only file preview, index state, and can attach explicit project files to the active launch.
+7. Minimum `/metrics` shows existing conversation metrics and chain totals where available, with rows linking back to conversations or chains when IDs exist.
+8. `/agents` shows configured roles from real config validation, role categories, prompt/tool readiness, and launch actions.
+9. The UI reads roles dynamically from `yard.yaml`; it does not hard-code the initial 13 as the valid universe.
+10. Built-in presets are visible and disabled with validation problems when referenced roles are missing.
+11. Custom launch presets can be created, edited, duplicated, disabled, deleted, validated, and applied from the UI without mutating `yard.yaml`.
+12. `/launch` opens or creates an active draft, `/launch/:id` renders that draft, and cross-route attach actions target `active_launch_id`.
+13. Draft launches can be saved, duplicated, deleted, preflighted, attached/detached, and started with explicit dirty/saving/save_failed states; Start performs save-before-start when the draft is dirty.
+14. Starting a launch compiles deterministic work packet markdown and stores it on the launch record before runtime start.
+15. `/launch/:id` can start `sir_topham_decides`, `constrained_orchestration`, `manual_roster`, and `one_step_chain` launches from task text, saved specs, or both.
+16. Constrained orchestration rejects disallowed spawned roles and verifies required roles before successful finalization.
+17. One-step browser launches create one-step chains; there is no separate browser run record or run detail model.
+18. Chat remains normal chat by default, but launch-intent phrases can create reviewed launch suggestions for one-step chain or decomposition work.
+19. Chain list and detail routes show normal chain, step, event, receipt, status, role/persona, provider/model, task, token, and duration records for CLI-started and UI-started chains.
+20. Chain detail includes a visible live agent stream for active steps using persisted events, with raw process output available only in debug mode.
+21. Pause, resume, and cancel from the UI follow the same state-transition rules as the CLI and return structured chain-control responses, with resume returning after a background execution has been launched or queued.
+22. Chain receipts are readable from the UI through brain-relative receipt paths derived from chain/step records.
+23. Runtime maintenance operations show summarized status/output through persisted operation records; agent and chain work exposes live activity streams.
+24. The command center does not introduce a separate binary, service, container, deployment model, mobile layout, multi-user behavior, public `yard run`, or separate browser run target.
+25. `make test` and `make build` remain the final validation gates for backend-integrated slices; frontend slices also run the relevant `web/` test/build commands.
 
 ### Deferred Target Acceptance
 
-1. Project tree and file preview are available from `/project`, remain read-only, and support attaching explicit file paths to launch drafts.
-2. `/docs` expands into the full read-only saved-doc browser for brain docs, specs, tasks, plans, notes, conventions, and receipts.
-3. `/metrics` is read-only and links aggregate rows back to source chains, launches, conversations, turns, receipts, or context reports where possible.
+1. `/project` expands beyond the Phase A minimum with richer file metadata, context/report highlights, and deeper receipt/tool-call cross-linking while remaining read-only.
+2. `/docs` expands beyond the Phase B minimum with richer filters, backlinks, outgoing links, and context-inspector deep links.
+3. `/metrics` expands beyond the Phase A minimum with aggregate token/tool/context/duration tables and links aggregate rows back to source chains, launches, conversations, turns, receipts, or context reports where possible.
 4. Agent Builder can create custom role config and prompt files only after explicit confirmation and validation.
-5. Runtime operation APIs support code/brain index rebuilds as summarized background operations.
+5. Runtime operation APIs expand beyond code/brain index rebuilds with richer history and any additional summarized maintenance operations that prove useful.
 
 ---
 
