@@ -177,6 +177,37 @@ func TestRunSessionSupportsTaskFileAndWritesFallbackReceipt(t *testing.T) {
 	}
 }
 
+func TestRunSessionAcceptsPersonaAliasAndUsesCanonicalRole(t *testing.T) {
+	projectRoot := t.TempDir()
+	configPath := writeRunSessionConfig(t, projectRoot, strings.Join([]string{
+		"  coder:",
+		"    system_prompt: builtin:coder",
+		"    tools:",
+		"      - brain",
+		"    brain_write_paths:",
+		"      - receipts/coder/**",
+	}, "\n"))
+	backend := &fakeReceiptBackend{docs: map[string]string{}}
+	deps := stubRunSessionDeps(
+		&rtpkg.EngineRuntime{BrainBackend: backend, Logger: slog.Default(), Cleanup: func() {}},
+		tool.NewRegistry(),
+		appconfig.BrainConfig{Enabled: true, BrainWritePaths: []string{"receipts/coder/**"}},
+		&conversation.Conversation{ID: "conv-1"},
+		&fakeRunSessionLoop{result: &agent.TurnResult{FinalText: "done"}},
+	)
+
+	result, err := RunSession(context.Background(), nil, configPath, RunRequest{Role: "thomas", Task: "work", ChainID: "chain-alias", Timeout: time.Minute}, deps)
+	if err != nil {
+		t.Fatalf("RunSession returned error: %v", err)
+	}
+	if result.ReceiptPath != "receipts/coder/chain-alias.md" {
+		t.Fatalf("receipt path = %q, want canonical coder receipt path", result.ReceiptPath)
+	}
+	if !strings.Contains(backend.docs[result.ReceiptPath], "agent: coder") {
+		t.Fatalf("receipt content = %q, want canonical agent", backend.docs[result.ReceiptPath])
+	}
+}
+
 func TestRunSessionReturnsSafetyLimitExitAndReceiptPath(t *testing.T) {
 	projectRoot := t.TempDir()
 	configPath := writeRunSessionConfig(t, projectRoot, strings.Join([]string{

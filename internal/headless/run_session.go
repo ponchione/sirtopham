@@ -102,10 +102,11 @@ func RunSession(parentCtx context.Context, progressOut io.Writer, configPath str
 		return nil, err
 	}
 
-	taskText, cfg, roleCfg, systemPrompt, chainID, err := prepareRunRequest(configPath, req, deps.NewChainID)
+	taskText, cfg, roleName, roleCfg, systemPrompt, chainID, err := prepareRunRequest(configPath, req, deps.NewChainID)
 	if err != nil {
 		return nil, err
 	}
+	req.Role = roleName
 
 	timeout := resolveRunTimeout(roleCfg, req.Timeout)
 	ctx, cancel := context.WithTimeout(parentContext(parentCtx), timeout)
@@ -185,14 +186,14 @@ func validateRunRequest(req RunRequest) error {
 	return nil
 }
 
-func prepareRunRequest(configPath string, req RunRequest, newChainID func() string) (string, *appconfig.Config, appconfig.AgentRoleConfig, string, string, error) {
+func prepareRunRequest(configPath string, req RunRequest, newChainID func() string) (string, *appconfig.Config, string, appconfig.AgentRoleConfig, string, string, error) {
 	taskText, err := ReadTask(req.Task, req.TaskFile)
 	if err != nil {
-		return "", nil, appconfig.AgentRoleConfig{}, "", "", err
+		return "", nil, "", appconfig.AgentRoleConfig{}, "", "", err
 	}
 	cfg, err := appconfig.Load(configPath)
 	if err != nil {
-		return "", nil, appconfig.AgentRoleConfig{}, "", "", fmt.Errorf("load config: %w", err)
+		return "", nil, "", appconfig.AgentRoleConfig{}, "", "", fmt.Errorf("load config: %w", err)
 	}
 	if strings.TrimSpace(req.ProjectRoot) != "" {
 		cfg.ProjectRoot = strings.TrimSpace(req.ProjectRoot)
@@ -201,24 +202,24 @@ func prepareRunRequest(configPath string, req RunRequest, newChainID func() stri
 		cfg.Brain.VaultPath = strings.TrimSpace(req.Brain)
 	}
 	if err := cfg.Validate(); err != nil {
-		return "", nil, appconfig.AgentRoleConfig{}, "", "", err
+		return "", nil, "", appconfig.AgentRoleConfig{}, "", "", err
 	}
-	roleCfg, ok := cfg.AgentRoles[req.Role]
-	if !ok {
-		return "", nil, appconfig.AgentRoleConfig{}, "", "", fmt.Errorf("agent role %q not found in config", req.Role)
-	}
-	systemPrompt, _, err := rtpkg.LoadRoleSystemPrompt(req.Role, cfg.ProjectRoot, roleCfg.SystemPrompt)
+	roleName, roleCfg, err := cfg.ResolveAgentRole(req.Role)
 	if err != nil {
-		return "", nil, appconfig.AgentRoleConfig{}, "", "", err
+		return "", nil, "", appconfig.AgentRoleConfig{}, "", "", err
+	}
+	systemPrompt, _, err := rtpkg.LoadRoleSystemPrompt(roleName, cfg.ProjectRoot, roleCfg.SystemPrompt)
+	if err != nil {
+		return "", nil, "", appconfig.AgentRoleConfig{}, "", "", err
 	}
 	chainID := strings.TrimSpace(req.ChainID)
 	if chainID == "" {
 		chainID = strings.TrimSpace(newChainID())
 	}
 	if chainID == "" {
-		return "", nil, appconfig.AgentRoleConfig{}, "", "", fmt.Errorf("chain ID generator returned empty ID")
+		return "", nil, "", appconfig.AgentRoleConfig{}, "", "", fmt.Errorf("chain ID generator returned empty ID")
 	}
-	return taskText, cfg, roleCfg, systemPrompt, chainID, nil
+	return taskText, cfg, roleName, roleCfg, systemPrompt, chainID, nil
 }
 
 func executeRunTurn(ctx context.Context, progressOut io.Writer, cfg *appconfig.Config, req RunRequest, taskText string, systemPrompt string, rt *rtpkg.EngineRuntime, registry *tool.Registry, loopMaxTurns int, deps Deps) (*agent.TurnResult, error, error) {

@@ -75,6 +75,9 @@ brain:
 # without any external prompts directory. Replace a marker with a file path
 # only if you want a custom prompt override for that role.
 #
+# Commands that accept roles may use either the config key or the associated
+# persona name, for example `coder` or `thomas`.
+#
 # Roles (engine names from the railway):
 #   orchestrator         — Sir Topham Hatt (sirtophamhatt.md)
 #   planner              — Gordon (gordon.md)

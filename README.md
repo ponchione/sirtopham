@@ -78,7 +78,7 @@ A chain is a multi-agent pipeline. The orchestrator agent reads a task or spec, 
 
 Chains support pause/resume semantics and can be cancelled mid-execution. The `yard chain status` command shows progress; `yard chain receipt` retrieves the structured output from any step.
 
-The shipped role set is intentionally themed around the Railway Series / Thomas universe. The important operator-facing value is the **config key**; use that key in commands such as `yard run --role coder`.
+The shipped role set is intentionally themed around the Railway Series / Thomas universe. Commands that accept an agent role can use either the **config key** or the associated persona name, so `yard run --role coder` and `yard run --role thomas` select the same role.
 
 | Config key | Persona | Purpose |
 |------------|---------|---------|
@@ -259,6 +259,8 @@ yard chain receipt <chain-id>
 
 ```bash
 yard run --role coder --task "fix the null pointer in auth.go"
+# Persona aliases work too:
+yard run --role thomas --task "fix the null pointer in auth.go"
 ```
 
 ### Docker

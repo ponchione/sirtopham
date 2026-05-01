@@ -45,7 +45,7 @@ tidmouth run [flags]  # retained internal equivalent for chain spawning
 
 | Flag | Description |
 |---|---|
-| `--role <name>` | Agent role from config (determines tool set and system prompt) |
+| `--role <name>` | Agent role config key or associated persona name (determines tool set and system prompt) |
 | `--task <string>` | Task description for the agent. Mutually exclusive with `--task-file`. |
 | `--task-file <path>` | Path to a file containing the task description. Mutually exclusive with `--task`. |
 

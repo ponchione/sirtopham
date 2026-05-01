@@ -136,6 +136,56 @@ Done.
 	}
 }
 
+func TestSpawnAgentAcceptsPersonaAliasAndUsesCanonicalRole(t *testing.T) {
+	ctx := context.Background()
+	store := chain.NewStore(newSpawnTestDB(t))
+	chainID, _ := store.StartChain(ctx, chain.ChainSpec{MaxSteps: 10, MaxResolverLoops: 1, MaxDuration: time.Hour, TokenBudget: 100})
+	backend := &fakeBrainBackend{docs: map[string]string{}}
+	tool := NewSpawnAgentTool(SpawnAgentDeps{
+		Store:        store,
+		Backend:      backend,
+		Config:       &appconfig.Config{AgentRoles: map[string]appconfig.AgentRoleConfig{"coder": {SystemPrompt: "builtin:coder"}}},
+		ChainID:      chainID,
+		EngineBinary: "tidmouth",
+		ProjectRoot:  t.TempDir(),
+	})
+	var gotArgs []string
+	tool.runCommand = func(ctx context.Context, in RunCommandInput) RunResult {
+		gotArgs = append([]string(nil), in.Args...)
+		backend.docs["receipts/coder/"+chainID+"-step-001.md"] = `---
+agent: coder
+chain_id: ` + chainID + `
+step: 1
+verdict: completed
+timestamp: 2026-04-11T00:00:00Z
+turns_used: 1
+tokens_used: 1
+duration_seconds: 1
+---
+
+Done.
+`
+		return RunResult{ExitCode: 0}
+	}
+
+	if _, err := tool.Execute(ctx, ".", []byte(`{"role":"thomas","task":"do work"}`)); err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if got := argValue(gotArgs, "--role"); got != "coder" {
+		t.Fatalf("subprocess --role = %q, want canonical coder", got)
+	}
+	if got := argValue(gotArgs, "--receipt-path"); got != "receipts/coder/"+chainID+"-step-001.md" {
+		t.Fatalf("subprocess --receipt-path = %q, want canonical coder receipt path", got)
+	}
+	steps, err := store.ListSteps(ctx, chainID)
+	if err != nil {
+		t.Fatalf("ListSteps returned error: %v", err)
+	}
+	if len(steps) != 1 || steps[0].Role != "coder" {
+		t.Fatalf("steps = %+v, want canonical coder role", steps)
+	}
+}
+
 func TestSpawnAgentTreatsSpecVerdictsAsCompletedStepExecutions(t *testing.T) {
 	for _, verdict := range []string{
 		"completed",

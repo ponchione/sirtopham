@@ -53,6 +53,13 @@ func TestGetUnknownRoleReturnsFalse(t *testing.T) {
 	}
 }
 
+func TestPersonaAliasesIncludePromptPersona(t *testing.T) {
+	aliases := PersonaAliases("coder")
+	if !strings.Contains(strings.Join(aliases, ","), "Thomas") {
+		t.Fatalf("PersonaAliases(coder) = %v, want Thomas", aliases)
+	}
+}
+
 func TestEmbeddedPromptsMatchRepoRootAgents(t *testing.T) {
 	for role, filename := range roleToAsset {
 		embedded, ok := Get(role)

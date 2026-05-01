@@ -817,6 +817,61 @@ func TestLoadParsesAgentRoleTimeout(t *testing.T) {
 	}
 }
 
+func TestResolveAgentRoleAcceptsConfigKeyAndPersonaAlias(t *testing.T) {
+	cfg := &Config{AgentRoles: map[string]AgentRoleConfig{
+		"coder":   {SystemPrompt: "builtin:coder"},
+		"planner": {SystemPrompt: "builtin:planner"},
+	}}
+
+	for _, tc := range []struct {
+		input string
+		want  string
+	}{
+		{input: "coder", want: "coder"},
+		{input: "Thomas", want: "coder"},
+		{input: "thomas", want: "coder"},
+		{input: "gordon", want: "planner"},
+	} {
+		got, _, err := cfg.ResolveAgentRole(tc.input)
+		if err != nil {
+			t.Fatalf("ResolveAgentRole(%q) returned error: %v", tc.input, err)
+		}
+		if got != tc.want {
+			t.Fatalf("ResolveAgentRole(%q) = %q, want %q", tc.input, got, tc.want)
+		}
+	}
+}
+
+func TestResolveAgentRoleUsesExactConfigKeyBeforePersonaAlias(t *testing.T) {
+	cfg := &Config{AgentRoles: map[string]AgentRoleConfig{
+		"coder":  {SystemPrompt: "builtin:coder"},
+		"thomas": {SystemPrompt: "prompts/custom.md"},
+	}}
+
+	got, _, err := cfg.ResolveAgentRole("Thomas")
+	if err != nil {
+		t.Fatalf("ResolveAgentRole returned error: %v", err)
+	}
+	if got != "thomas" {
+		t.Fatalf("ResolveAgentRole(Thomas) = %q, want config key thomas", got)
+	}
+}
+
+func TestResolveAgentRoleReportsAmbiguousPersonaAlias(t *testing.T) {
+	cfg := &Config{AgentRoles: map[string]AgentRoleConfig{
+		"coder":    {SystemPrompt: "builtin:coder"},
+		"reviewer": {SystemPrompt: "builtin:coder"},
+	}}
+
+	_, _, err := cfg.ResolveAgentRole("thomas")
+	if err == nil {
+		t.Fatal("expected ambiguous role error, got nil")
+	}
+	if !strings.Contains(err.Error(), "ambiguous") || !strings.Contains(err.Error(), "coder, reviewer") {
+		t.Fatalf("ResolveAgentRole(thomas) error = %v, want ambiguity with both roles", err)
+	}
+}
+
 func TestResolveAgentRoleSystemPromptPathUsesProjectRoot(t *testing.T) {
 	projectRoot := filepath.Join(string(filepath.Separator), "tmp", "sirtopham-project")
 	cfg := &Config{ProjectRoot: projectRoot}

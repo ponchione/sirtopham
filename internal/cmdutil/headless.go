@@ -53,7 +53,7 @@ func (e HeadlessExitError) Unwrap() error { return e.Err }
 func (e HeadlessExitError) ExitCode() int { return e.Code }
 
 func RegisterHeadlessRunFlags(flags *pflag.FlagSet, values *HeadlessRunFlags) {
-	flags.StringVar(&values.Role, "role", "", "Agent role from config")
+	flags.StringVar(&values.Role, "role", "", "Agent role config key or persona name")
 	flags.StringVar(&values.Task, "task", "", "Task text for the headless run")
 	flags.StringVar(&values.TaskFile, "task-file", "", "Read task text from file")
 	flags.StringVar(&values.ChainID, "chain-id", "", "Chain execution identifier")

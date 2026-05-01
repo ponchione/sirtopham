@@ -53,6 +53,7 @@ type spawnAgentInput struct {
 
 type spawnStep struct {
 	input       spawnAgentInput
+	roleName    string
 	roleCfg     appconfig.AgentRoleConfig
 	sequence    int
 	stepID      string
@@ -92,7 +93,7 @@ func (t *SpawnAgentTool) Description() string {
 }
 func (t *SpawnAgentTool) ToolPurity() tool.Purity { return tool.Mutating }
 func (t *SpawnAgentTool) Schema() json.RawMessage {
-	return json.RawMessage(`{"name":"spawn_agent","description":"Spawn a headless engine agent with the given role and task. Blocks until the engine completes. Returns the engine's receipt content.","input_schema":{"type":"object","properties":{"role":{"type":"string","description":"Engine role name from the config."},"task":{"type":"string","description":"Task description for the engine."},"task_context":{"type":"string","description":"Optional context identifier for resolver-loop tracking."},"reindex_before":{"type":"boolean","description":"Run code/brain reindexing before starting the engine.","default":false}},"required":["role","task"]}}`)
+	return json.RawMessage(`{"name":"spawn_agent","description":"Spawn a headless engine agent with the given role and task. Blocks until the engine completes. Returns the engine's receipt content.","input_schema":{"type":"object","properties":{"role":{"type":"string","description":"Engine role config key or built-in persona name."},"task":{"type":"string","description":"Task description for the engine."},"task_context":{"type":"string","description":"Optional context identifier for resolver-loop tracking."},"reindex_before":{"type":"boolean","description":"Run code/brain reindexing before starting the engine.","default":false}},"required":["role","task"]}}`)
 }
 
 func (t *SpawnAgentTool) Execute(ctx context.Context, projectRoot string, raw json.RawMessage) (*tool.ToolResult, error) {
@@ -114,17 +115,20 @@ func (t *SpawnAgentTool) Execute(ctx context.Context, projectRoot string, raw js
 }
 
 func (t *SpawnAgentTool) prepareStep(ctx context.Context, in spawnAgentInput) (spawnStep, error) {
-	roleCfg, ok := t.Config.AgentRoles[in.Role]
-	if !ok {
-		return spawnStep{}, fmt.Errorf("spawn_agent: role %q not defined in config", in.Role)
+	roleName, roleCfg, err := t.Config.ResolveAgentRole(in.Role)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found in config") {
+			return spawnStep{}, fmt.Errorf("spawn_agent: role %q not defined in config", in.Role)
+		}
+		return spawnStep{}, fmt.Errorf("spawn_agent: %w", err)
 	}
-	if err := t.Store.CheckLimits(ctx, t.ChainID, chain.LimitCheckInput{Role: in.Role, TaskContext: in.TaskContext}); err != nil {
+	if err := t.Store.CheckLimits(ctx, t.ChainID, chain.LimitCheckInput{Role: roleName, TaskContext: in.TaskContext}); err != nil {
 		if errors.Is(err, chain.ErrChainNotRunning) {
 			if stopErr := t.stopIfChainNotRunnable(ctx); stopErr != nil {
 				return spawnStep{}, stopErr
 			}
 		}
-		_ = t.Store.LogEvent(ctx, t.ChainID, "", chain.EventSafetyLimitHit, map[string]any{"role": in.Role, "limit": err.Error()})
+		_ = t.Store.LogEvent(ctx, t.ChainID, "", chain.EventSafetyLimitHit, map[string]any{"role": roleName, "limit": err.Error()})
 		return spawnStep{}, fmt.Errorf("spawn_agent: %w", err)
 	}
 	if stopErr := t.stopIfChainNotRunnable(ctx); stopErr != nil {
@@ -143,18 +147,19 @@ func (t *SpawnAgentTool) prepareStep(ctx context.Context, in spawnAgentInput) (s
 		return spawnStep{}, fmt.Errorf("spawn_agent: list steps: %w", err)
 	}
 	seq := len(steps) + 1
-	receiptPath := receipt.StepPath(in.Role, t.ChainID, seq)
+	receiptPath := receipt.StepPath(roleName, t.ChainID, seq)
 	task := taskWithHarnessContext(in.Task, t.ChainID, seq, receiptPath)
-	stepID, err := t.Store.StartStep(ctx, chain.StepSpec{ChainID: t.ChainID, SequenceNum: seq, Role: in.Role, Task: in.Task, TaskContext: in.TaskContext})
+	stepID, err := t.Store.StartStep(ctx, chain.StepSpec{ChainID: t.ChainID, SequenceNum: seq, Role: roleName, Task: in.Task, TaskContext: in.TaskContext})
 	if err != nil {
 		return spawnStep{}, fmt.Errorf("spawn_agent: create step: %w", err)
 	}
 	if err := t.Store.StepRunning(ctx, stepID); err != nil {
 		return spawnStep{}, fmt.Errorf("spawn_agent: start step: %w", err)
 	}
-	_ = t.Store.LogEvent(ctx, t.ChainID, stepID, chain.EventStepStarted, map[string]any{"role": in.Role, "task": in.Task, "receipt_path": receiptPath})
+	_ = t.Store.LogEvent(ctx, t.ChainID, stepID, chain.EventStepStarted, map[string]any{"role": roleName, "task": in.Task, "receipt_path": receiptPath})
 	return spawnStep{
 		input:       in,
+		roleName:    roleName,
 		roleCfg:     roleCfg,
 		sequence:    seq,
 		stepID:      stepID,
@@ -171,7 +176,7 @@ func (t *SpawnAgentTool) runEngineStep(ctx context.Context, step spawnStep) engi
 	agentTimeout := resolveAgentRunTimeout(step.roleCfg)
 	res := t.runCommand(ctx, RunCommandInput{
 		Name:   t.EngineBinary,
-		Args:   []string{"run", "--config", appconfig.ConfigFilename, "--role", step.input.Role, "--task", step.task, "--chain-id", t.ChainID, "--receipt-path", step.receiptPath, "--timeout", agentTimeout.String()},
+		Args:   []string{"run", "--config", appconfig.ConfigFilename, "--role", step.roleName, "--task", step.task, "--chain-id", t.ChainID, "--receipt-path", step.receiptPath, "--timeout", agentTimeout.String()},
 		Stdout: stdout,
 		Stderr: stderr,
 		OnStdoutLine: func(line string) {
@@ -182,7 +187,7 @@ func (t *SpawnAgentTool) runEngineStep(ctx context.Context, step spawnStep) engi
 		},
 		OnStart: func(pid int) {
 			enginePID = pid
-			t.logStepProcessStarted(ctx, step.stepID, step.input.Role, pid)
+			t.logStepProcessStarted(ctx, step.stepID, step.roleName, pid)
 		},
 		Env:     t.SubprocessEnv,
 		Dir:     t.ProjectRoot,
@@ -205,7 +210,7 @@ func (t *SpawnAgentTool) readStepReceipt(ctx context.Context, step spawnStep, ou
 	receiptContent, readErr := t.Backend.ReadDocument(ctx, step.receiptPath)
 	if readErr != nil {
 		failMsg := fmt.Sprintf("missing receipt %s after exit_code=%d stdout=%q stderr=%q", step.receiptPath, outcome.exitCode, outcome.stdout, outcome.stderr)
-		if writeErr := t.writeSyntheticSafetyReceipt(ctx, step.input.Role, step.sequence, step.receiptPath, failMsg, outcome.durationSecs); writeErr != nil {
+		if writeErr := t.writeSyntheticSafetyReceipt(ctx, step.roleName, step.sequence, step.receiptPath, failMsg, outcome.durationSecs); writeErr != nil {
 			failMsg = fmt.Sprintf("%s; failed to write safety receipt: %v", failMsg, writeErr)
 		}
 		_ = t.Store.FailStep(ctx, chain.CompleteStepParams{StepID: step.stepID, Verdict: string(receipt.VerdictSafetyLimit), ExitCode: intPtr(outcome.exitCode), ErrorMessage: failMsg, DurationSecs: outcome.durationSecs})
@@ -245,7 +250,7 @@ func (t *SpawnAgentTool) recordStepOutcome(ctx context.Context, step spawnStep, 
 		return nil, fmt.Errorf("spawn_agent: load chain: %w", err)
 	}
 	metrics := chain.ChainMetrics{TotalSteps: ch.TotalSteps + 1, TotalTokens: ch.TotalTokens + parsed.TokensUsed, TotalDurationSecs: ch.TotalDurationSecs + outcome.durationSecs, ResolverLoops: ch.ResolverLoops}
-	if step.input.Role == "resolver" {
+	if step.roleName == "resolver" {
 		metrics.ResolverLoops++
 		_ = t.Store.LogEvent(ctx, t.ChainID, step.stepID, chain.EventResolverLoop, map[string]any{"task_context": step.input.TaskContext, "count": metrics.ResolverLoops})
 	}
