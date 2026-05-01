@@ -54,6 +54,25 @@ func TestCheckLimitsRejectsMaxDuration(t *testing.T) {
 	requireLimitError(t, store.CheckLimits(ctx, chainID, LimitCheckInput{}), ErrMaxDurationExceeded)
 }
 
+func TestRemainingDurationUsesChainWallClock(t *testing.T) {
+	ctx := context.Background()
+	db := newChainTestDB(t)
+	clockNow := time.Date(2026, 4, 11, 14, 0, 0, 0, time.UTC)
+	store := StoreWithClock(db, func() time.Time { return clockNow })
+	chainID, _ := store.StartChain(ctx, ChainSpec{MaxSteps: 2, MaxResolverLoops: 1, MaxDuration: time.Minute, TokenBudget: 10})
+	if _, err := db.ExecContext(ctx, `UPDATE chains SET started_at = ? WHERE id = ?`, clockNow.Add(-45*time.Second).Format(time.RFC3339), chainID); err != nil {
+		t.Fatalf("set started_at returned error: %v", err)
+	}
+
+	remaining, err := store.RemainingDuration(ctx, chainID)
+	if err != nil {
+		t.Fatalf("RemainingDuration returned error: %v", err)
+	}
+	if remaining != 15*time.Second {
+		t.Fatalf("remaining = %s, want 15s", remaining)
+	}
+}
+
 func TestCheckLimitsRejectsResolverLoopCap(t *testing.T) {
 	ctx := context.Background()
 	db := newChainTestDB(t)

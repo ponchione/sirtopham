@@ -48,3 +48,19 @@ func (s *Store) CheckLimits(ctx context.Context, chainID string, in LimitCheckIn
 	}
 	return nil
 }
+
+func (s *Store) RemainingDuration(ctx context.Context, chainID string) (time.Duration, error) {
+	ch, err := s.GetChain(ctx, chainID)
+	if err != nil {
+		return 0, fmt.Errorf("limit check: load chain: %w", err)
+	}
+	maxDuration := time.Duration(ch.MaxDurationSecs) * time.Second
+	if ch.StartedAt.IsZero() {
+		return maxDuration, nil
+	}
+	remaining := maxDuration - s.clock().Sub(ch.StartedAt)
+	if remaining < 0 {
+		return 0, nil
+	}
+	return remaining, nil
+}

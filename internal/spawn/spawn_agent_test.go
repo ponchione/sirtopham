@@ -5,6 +5,7 @@ package spawn
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/ponchione/sodoryard/internal/chain"
 	appconfig "github.com/ponchione/sodoryard/internal/config"
 	"github.com/ponchione/sodoryard/internal/receipt"
+	toolpkg "github.com/ponchione/sodoryard/internal/tool"
 )
 
 func TestSpawnAgentRejectsUnknownRole(t *testing.T) {
@@ -247,6 +249,115 @@ Done.
 	}
 	if gotTimeout <= 45*time.Minute {
 		t.Fatalf("subprocess timeout = %s, want parent guard above role timeout", gotTimeout)
+	}
+}
+
+func TestSpawnAgentCapsSubprocessTimeoutToRemainingChainDuration(t *testing.T) {
+	ctx := context.Background()
+	db := newSpawnTestDB(t)
+	clockNow := time.Date(2026, 4, 11, 14, 0, 0, 0, time.UTC)
+	store := chain.StoreWithClock(db, func() time.Time { return clockNow })
+	chainID, _ := store.StartChain(ctx, chain.ChainSpec{MaxSteps: 10, MaxResolverLoops: 1, MaxDuration: time.Minute, TokenBudget: 100})
+	if _, err := db.ExecContext(ctx, `UPDATE chains SET started_at = ? WHERE id = ?`, clockNow.Add(-50*time.Second).Format(time.RFC3339), chainID); err != nil {
+		t.Fatalf("set started_at returned error: %v", err)
+	}
+	backend := &fakeBrainBackend{docs: map[string]string{}}
+	tool := NewSpawnAgentTool(SpawnAgentDeps{
+		Store:        store,
+		Backend:      backend,
+		Config:       &appconfig.Config{AgentRoles: map[string]appconfig.AgentRoleConfig{"coder": {Timeout: appconfig.Duration(45 * time.Minute)}}},
+		ChainID:      chainID,
+		EngineBinary: "tidmouth",
+		ProjectRoot:  t.TempDir(),
+	})
+	var gotArgs []string
+	var gotTimeout time.Duration
+	tool.runCommand = func(ctx context.Context, in RunCommandInput) RunResult {
+		gotArgs = append([]string(nil), in.Args...)
+		gotTimeout = in.Timeout
+		backend.docs["receipts/coder/"+chainID+"-step-001.md"] = `---
+agent: coder
+chain_id: ` + chainID + `
+step: 1
+verdict: completed
+timestamp: 2026-04-11T00:00:00Z
+turns_used: 1
+tokens_used: 1
+duration_seconds: 1
+---
+
+Done.
+`
+		return RunResult{ExitCode: 0}
+	}
+
+	if _, err := tool.Execute(ctx, ".", []byte(`{"role":"coder","task":"do work"}`)); err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if got := argValue(gotArgs, "--timeout"); got != "10s" {
+		t.Fatalf("subprocess --timeout = %q, want 10s (remaining chain duration)", got)
+	}
+	if gotTimeout != 20*time.Second {
+		t.Fatalf("parent timeout = %s, want remaining chain duration plus grace", gotTimeout)
+	}
+}
+
+func TestSpawnAgentFailsChainWhenStepExceedsTokenBudget(t *testing.T) {
+	ctx := context.Background()
+	store := chain.NewStore(newSpawnTestDB(t))
+	chainID, _ := store.StartChain(ctx, chain.ChainSpec{MaxSteps: 10, MaxResolverLoops: 1, MaxDuration: time.Hour, TokenBudget: 10})
+	backend := &fakeBrainBackend{docs: map[string]string{}}
+	tool := NewSpawnAgentTool(SpawnAgentDeps{
+		Store:        store,
+		Backend:      backend,
+		Config:       &appconfig.Config{AgentRoles: map[string]appconfig.AgentRoleConfig{"coder": {}}},
+		ChainID:      chainID,
+		EngineBinary: "tidmouth",
+		ProjectRoot:  t.TempDir(),
+	})
+	tool.runCommand = func(ctx context.Context, in RunCommandInput) RunResult {
+		backend.docs["receipts/coder/"+chainID+"-step-001.md"] = `---
+agent: coder
+chain_id: ` + chainID + `
+step: 1
+verdict: completed
+timestamp: 2026-04-11T00:00:00Z
+turns_used: 1
+tokens_used: 11
+duration_seconds: 1
+---
+
+Done.
+`
+		return RunResult{ExitCode: 0}
+	}
+
+	result, err := tool.Execute(ctx, ".", []byte(`{"role":"coder","task":"do work"}`))
+	if !errors.Is(err, toolpkg.ErrChainComplete) {
+		t.Fatalf("error = %v, want tool.ErrChainComplete after safety limit", err)
+	}
+	if result == nil || result.Success || !strings.Contains(result.Content, "token_budget exceeded") {
+		t.Fatalf("result = %#v, want failed safety-limit result", result)
+	}
+	ch, err := store.GetChain(ctx, chainID)
+	if err != nil {
+		t.Fatalf("GetChain returned error: %v", err)
+	}
+	if ch.Status != "failed" || !strings.Contains(ch.Summary, "token_budget exceeded") || ch.TotalTokens != 11 {
+		t.Fatalf("chain = %+v, want failed status with exceeded token metrics", ch)
+	}
+	events, err := store.ListEvents(ctx, chainID)
+	if err != nil {
+		t.Fatalf("ListEvents returned error: %v", err)
+	}
+	var sawSafetyLimit bool
+	for _, event := range events {
+		if event.EventType == chain.EventSafetyLimitHit && strings.Contains(event.EventData, "token_budget exceeded") {
+			sawSafetyLimit = true
+		}
+	}
+	if !sawSafetyLimit {
+		t.Fatalf("events = %+v, want safety_limit_hit for token budget", events)
 	}
 }
 

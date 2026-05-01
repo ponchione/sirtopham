@@ -52,13 +52,14 @@ type spawnAgentInput struct {
 }
 
 type spawnStep struct {
-	input       spawnAgentInput
-	roleName    string
-	roleCfg     appconfig.AgentRoleConfig
-	sequence    int
-	stepID      string
-	receiptPath string
-	task        string
+	input                 spawnAgentInput
+	roleName              string
+	roleCfg               appconfig.AgentRoleConfig
+	sequence              int
+	stepID                string
+	receiptPath           string
+	task                  string
+	chainRemainingTimeout time.Duration
 }
 
 type engineRunOutcome struct {
@@ -122,14 +123,9 @@ func (t *SpawnAgentTool) prepareStep(ctx context.Context, in spawnAgentInput) (s
 		}
 		return spawnStep{}, fmt.Errorf("spawn_agent: %w", err)
 	}
-	if err := t.Store.CheckLimits(ctx, t.ChainID, chain.LimitCheckInput{Role: roleName, TaskContext: in.TaskContext}); err != nil {
-		if errors.Is(err, chain.ErrChainNotRunning) {
-			if stopErr := t.stopIfChainNotRunnable(ctx); stopErr != nil {
-				return spawnStep{}, stopErr
-			}
-		}
-		_ = t.Store.LogEvent(ctx, t.ChainID, "", chain.EventSafetyLimitHit, map[string]any{"role": roleName, "limit": err.Error()})
-		return spawnStep{}, fmt.Errorf("spawn_agent: %w", err)
+	chainRemainingTimeout, err := t.enforcePreSpawnLimits(ctx, roleName, in.TaskContext)
+	if err != nil {
+		return spawnStep{}, err
 	}
 	if stopErr := t.stopIfChainNotRunnable(ctx); stopErr != nil {
 		return spawnStep{}, stopErr
@@ -137,6 +133,10 @@ func (t *SpawnAgentTool) prepareStep(ctx context.Context, in spawnAgentInput) (s
 	if in.ReindexBefore {
 		if err := t.reindex(ctx); err != nil {
 			return spawnStep{}, fmt.Errorf("spawn_agent: reindex: %w", err)
+		}
+		chainRemainingTimeout, err = t.enforcePreSpawnLimits(ctx, roleName, in.TaskContext)
+		if err != nil {
+			return spawnStep{}, err
 		}
 	}
 	if stopErr := t.stopIfChainNotRunnable(ctx); stopErr != nil {
@@ -158,13 +158,14 @@ func (t *SpawnAgentTool) prepareStep(ctx context.Context, in spawnAgentInput) (s
 	}
 	_ = t.Store.LogEvent(ctx, t.ChainID, stepID, chain.EventStepStarted, map[string]any{"role": roleName, "task": in.Task, "receipt_path": receiptPath})
 	return spawnStep{
-		input:       in,
-		roleName:    roleName,
-		roleCfg:     roleCfg,
-		sequence:    seq,
-		stepID:      stepID,
-		receiptPath: receiptPath,
-		task:        task,
+		input:                 in,
+		roleName:              roleName,
+		roleCfg:               roleCfg,
+		sequence:              seq,
+		stepID:                stepID,
+		receiptPath:           receiptPath,
+		task:                  task,
+		chainRemainingTimeout: chainRemainingTimeout,
 	}, nil
 }
 
@@ -173,7 +174,7 @@ func (t *SpawnAgentTool) runEngineStep(ctx context.Context, step spawnStep) engi
 	stdout := outputcap.NewBuffer(outputcap.DefaultLimit)
 	stderr := outputcap.NewBuffer(outputcap.DefaultLimit)
 	var enginePID int
-	agentTimeout := resolveAgentRunTimeout(step.roleCfg)
+	agentTimeout := resolveStepRunTimeout(step.roleCfg, step.chainRemainingTimeout)
 	res := t.runCommand(ctx, RunCommandInput{
 		Name:   t.EngineBinary,
 		Args:   []string{"run", "--config", appconfig.ConfigFilename, "--role", step.roleName, "--task", step.task, "--chain-id", t.ChainID, "--receipt-path", step.receiptPath, "--timeout", agentTimeout.String()},
@@ -262,7 +263,55 @@ func (t *SpawnAgentTool) recordStepOutcome(ctx context.Context, step spawnStep, 
 		eventType = chain.EventStepFailed
 	}
 	_ = t.Store.LogEvent(ctx, t.ChainID, step.stepID, eventType, map[string]any{"verdict": parsed.Verdict, "tokens_used": parsed.TokensUsed, "turns_used": parsed.TurnsUsed, "duration_secs": outcome.durationSecs, "exit_code": outcome.exitCode})
+	if limitErr := t.postStepLimitError(ch, metrics); limitErr != nil {
+		summary := limitErr.Error()
+		_ = t.Store.LogEvent(ctx, t.ChainID, step.stepID, chain.EventSafetyLimitHit, map[string]any{"role": step.roleName, "limit": summary})
+		if err := chain.ApplyTerminalChainClosure(ctx, t.Store, t.ChainID, chain.TerminalChainClosure{
+			Status:    "failed",
+			EventType: chain.EventChainCompleted,
+			Summary:   &summary,
+			Extra:     map[string]any{"summary": summary, "reason": "safety_limit"},
+		}); err != nil {
+			return nil, fmt.Errorf("spawn_agent: close chain after safety limit: %w", err)
+		}
+		return &tool.ToolResult{Success: false, Content: summary}, fmt.Errorf("%w: %v", tool.ErrChainComplete, limitErr)
+	}
 	return &tool.ToolResult{Success: true, Content: receiptContent}, nil
+}
+
+func (t *SpawnAgentTool) enforcePreSpawnLimits(ctx context.Context, roleName string, taskContext string) (time.Duration, error) {
+	if err := t.Store.CheckLimits(ctx, t.ChainID, chain.LimitCheckInput{Role: roleName, TaskContext: taskContext}); err != nil {
+		if errors.Is(err, chain.ErrChainNotRunning) {
+			if stopErr := t.stopIfChainNotRunnable(ctx); stopErr != nil {
+				return 0, stopErr
+			}
+		}
+		_ = t.Store.LogEvent(ctx, t.ChainID, "", chain.EventSafetyLimitHit, map[string]any{"role": roleName, "limit": err.Error()})
+		return 0, fmt.Errorf("spawn_agent: %w", err)
+	}
+	remainingTimeout, err := t.Store.RemainingDuration(ctx, t.ChainID)
+	if err != nil {
+		return 0, fmt.Errorf("spawn_agent: remaining chain duration: %w", err)
+	}
+	if remainingTimeout <= 0 {
+		limitErr := fmt.Errorf("%w (remaining=%s)", chain.ErrMaxDurationExceeded, remainingTimeout)
+		_ = t.Store.LogEvent(ctx, t.ChainID, "", chain.EventSafetyLimitHit, map[string]any{"role": roleName, "limit": limitErr.Error()})
+		return 0, fmt.Errorf("spawn_agent: %w", limitErr)
+	}
+	return remainingTimeout, nil
+}
+
+func (t *SpawnAgentTool) postStepLimitError(ch *chain.Chain, metrics chain.ChainMetrics) error {
+	if metrics.TotalSteps > ch.MaxSteps {
+		return fmt.Errorf("%w (current=%d max=%d)", chain.ErrMaxStepsExceeded, metrics.TotalSteps, ch.MaxSteps)
+	}
+	if metrics.TotalTokens > ch.TokenBudget {
+		return fmt.Errorf("%w (current=%d budget=%d)", chain.ErrTokenBudgetExceeded, metrics.TotalTokens, ch.TokenBudget)
+	}
+	if metrics.TotalDurationSecs > ch.MaxDurationSecs {
+		return fmt.Errorf("%w (duration=%ds max=%ds)", chain.ErrMaxDurationExceeded, metrics.TotalDurationSecs, ch.MaxDurationSecs)
+	}
+	return nil
 }
 
 func (t *SpawnAgentTool) stopIfChainNotRunnable(ctx context.Context) error {
@@ -373,6 +422,14 @@ func resolveAgentRunTimeout(roleCfg appconfig.AgentRoleConfig) time.Duration {
 	timeout := roleCfg.Timeout.Duration()
 	if timeout <= 0 {
 		return defaultAgentRunTimeout
+	}
+	return timeout
+}
+
+func resolveStepRunTimeout(roleCfg appconfig.AgentRoleConfig, chainRemainingTimeout time.Duration) time.Duration {
+	timeout := resolveAgentRunTimeout(roleCfg)
+	if chainRemainingTimeout > 0 && chainRemainingTimeout < timeout {
+		return chainRemainingTimeout
 	}
 	return timeout
 }
