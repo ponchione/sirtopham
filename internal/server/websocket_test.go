@@ -30,6 +30,23 @@ type mockAgentService struct {
 	subscribed  []agent.EventSink
 }
 
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 func (m *mockAgentService) RunTurn(ctx context.Context, req agent.RunTurnRequest) (*agent.TurnResult, error) {
 	if m.runTurnFn != nil {
 		return m.runTurnFn(ctx, req)
@@ -90,7 +107,7 @@ func setupWSTest(t *testing.T, agentMock *mockAgentService) (string, *mockConver
 }
 
 func TestWebSocketDoesNotLogExpectedCancellationAsRunTurnError(t *testing.T) {
-	testLogBuf := &bytes.Buffer{}
+	testLogBuf := &lockedBuffer{}
 	logger := slog.New(slog.NewTextHandler(testLogBuf, nil))
 	agentMock := &mockAgentService{
 		runTurnFn: func(ctx context.Context, req agent.RunTurnRequest) (*agent.TurnResult, error) {
