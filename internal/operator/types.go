@@ -11,12 +11,24 @@ type RuntimeWarning struct {
 }
 
 type RuntimeStatus struct {
-	ProjectRoot  string
-	ProjectName  string
-	Provider     string
-	Model        string
-	ActiveChains int
-	Warnings     []RuntimeWarning
+	ProjectRoot         string
+	ProjectName         string
+	Provider            string
+	Model               string
+	AuthStatus          string
+	CodeIndex           RuntimeIndexStatus
+	BrainIndex          RuntimeIndexStatus
+	LocalServicesStatus string
+	ActiveChains        int
+	Warnings            []RuntimeWarning
+}
+
+type RuntimeIndexStatus struct {
+	Status            string
+	LastIndexedAt     string
+	LastIndexedCommit string
+	StaleSince        string
+	StaleReason       string
 }
 
 type StepSummary struct {

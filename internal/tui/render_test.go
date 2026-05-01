@@ -11,7 +11,7 @@ func TestDashboardRenderIncludesStableFragments(t *testing.T) {
 	got := updated.(Model)
 
 	view := got.View()
-	for _, want := range []string{"Dashboard", "project: project", "provider: codex", "chain-1"} {
+	for _, want := range []string{"Dashboard", "project: project", "provider: codex", "auth: not checked", "code index: indexed at 2026-05-01T12:00:00Z commit abc123", "brain index: disabled", "local services: disabled", "chain-1"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("dashboard view missing %q:\n%s", want, view)
 		}

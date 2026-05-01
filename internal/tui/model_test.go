@@ -31,11 +31,19 @@ func newFakeOperator() *fakeOperator {
 	started := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
 	return &fakeOperator{
 		status: operator.RuntimeStatus{
-			ProjectRoot:  "/tmp/project",
-			ProjectName:  "project",
-			Provider:     "codex",
-			Model:        "test-model",
-			ActiveChains: 1,
+			ProjectRoot: "/tmp/project",
+			ProjectName: "project",
+			Provider:    "codex",
+			Model:       "test-model",
+			AuthStatus:  "not checked",
+			CodeIndex: operator.RuntimeIndexStatus{
+				Status:            "indexed",
+				LastIndexedAt:     "2026-05-01T12:00:00Z",
+				LastIndexedCommit: "abc123",
+			},
+			BrainIndex:          operator.RuntimeIndexStatus{Status: "disabled"},
+			LocalServicesStatus: "disabled",
+			ActiveChains:        1,
 		},
 		roles: []operator.AgentRoleSummary{{Name: "coder"}, {Name: "orchestrator"}, {Name: "planner"}},
 		chains: []operator.ChainSummary{

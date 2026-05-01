@@ -2,6 +2,7 @@ package operator
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -11,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	brainindexstate "github.com/ponchione/sodoryard/internal/brain/indexstate"
 	"github.com/ponchione/sodoryard/internal/chain"
 	"github.com/ponchione/sodoryard/internal/chainrun"
 	appconfig "github.com/ponchione/sodoryard/internal/config"
@@ -247,14 +249,78 @@ func (s *Service) RuntimeStatus(ctx context.Context) (RuntimeStatus, error) {
 			activeChains++
 		}
 	}
+	warnings := make([]RuntimeWarning, 0, 2)
+	codeIndex, codeWarning := s.codeIndexStatus(ctx, cfg)
+	if codeWarning != nil {
+		warnings = append(warnings, *codeWarning)
+	}
+	brainIndex, brainWarning := brainIndexStatus(cfg)
+	if brainWarning != nil {
+		warnings = append(warnings, *brainWarning)
+	}
 	return RuntimeStatus{
-		ProjectRoot:  cfg.ProjectRoot,
-		ProjectName:  cfg.ProjectName(),
-		Provider:     cfg.Routing.Default.Provider,
-		Model:        cfg.Routing.Default.Model,
-		ActiveChains: activeChains,
-		Warnings:     nil,
+		ProjectRoot:         cfg.ProjectRoot,
+		ProjectName:         cfg.ProjectName(),
+		Provider:            cfg.Routing.Default.Provider,
+		Model:               cfg.Routing.Default.Model,
+		AuthStatus:          "not checked",
+		CodeIndex:           codeIndex,
+		BrainIndex:          brainIndex,
+		LocalServicesStatus: localServicesStatus(cfg),
+		ActiveChains:        activeChains,
+		Warnings:            warnings,
 	}, nil
+}
+
+func (s *Service) codeIndexStatus(ctx context.Context, cfg *appconfig.Config) (RuntimeIndexStatus, *RuntimeWarning) {
+	if s == nil || s.rt == nil || s.rt.Database == nil {
+		return RuntimeIndexStatus{Status: "unavailable"}, nil
+	}
+	var commit sql.NullString
+	var indexedAt sql.NullString
+	err := s.rt.Database.QueryRowContext(ctx, `SELECT last_indexed_commit, last_indexed_at FROM projects WHERE id = ?`, cfg.ProjectRoot).Scan(&commit, &indexedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return RuntimeIndexStatus{Status: "never_indexed"}, nil
+	}
+	if err != nil {
+		return RuntimeIndexStatus{Status: "unknown"}, ptrWarning(warningf("load code index state: %v", err))
+	}
+	status := RuntimeIndexStatus{Status: "never_indexed"}
+	if indexedAt.Valid && strings.TrimSpace(indexedAt.String) != "" {
+		status.Status = "indexed"
+		status.LastIndexedAt = indexedAt.String
+	}
+	if commit.Valid {
+		status.LastIndexedCommit = commit.String
+	}
+	return status, nil
+}
+
+func brainIndexStatus(cfg *appconfig.Config) (RuntimeIndexStatus, *RuntimeWarning) {
+	if cfg == nil || !cfg.Brain.Enabled {
+		return RuntimeIndexStatus{Status: "disabled"}, nil
+	}
+	state, err := brainindexstate.Load(cfg.ProjectRoot)
+	if err != nil {
+		return RuntimeIndexStatus{Status: "unknown"}, ptrWarning(warningf("load brain index state: %v", err))
+	}
+	return RuntimeIndexStatus{
+		Status:        state.Status,
+		LastIndexedAt: state.LastIndexedAt,
+		StaleSince:    state.StaleSince,
+		StaleReason:   state.StaleReason,
+	}, nil
+}
+
+func localServicesStatus(cfg *appconfig.Config) string {
+	if cfg == nil || !cfg.LocalServices.Enabled {
+		return "disabled"
+	}
+	mode := strings.TrimSpace(cfg.LocalServices.Mode)
+	if mode == "" {
+		return "enabled"
+	}
+	return mode
 }
 
 func (s *Service) config() (*appconfig.Config, error) {
@@ -286,4 +352,8 @@ func interruptProcess(pid int) error {
 
 func warningf(format string, args ...any) RuntimeWarning {
 	return RuntimeWarning{Message: fmt.Sprintf(format, args...)}
+}
+
+func ptrWarning(warning RuntimeWarning) *RuntimeWarning {
+	return &warning
 }

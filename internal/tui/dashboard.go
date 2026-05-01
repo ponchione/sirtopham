@@ -3,6 +3,8 @@ package tui
 import (
 	"fmt"
 	"strings"
+
+	"github.com/ponchione/sodoryard/internal/operator"
 )
 
 func (m Model) renderDashboard() string {
@@ -12,6 +14,10 @@ func (m Model) renderDashboard() string {
 		fmt.Sprintf("root: %s", valueOrUnknown(m.status.ProjectRoot)),
 		fmt.Sprintf("provider: %s", valueOrUnknown(m.status.Provider)),
 		fmt.Sprintf("model: %s", valueOrUnknown(m.status.Model)),
+		fmt.Sprintf("auth: %s", valueOrUnknown(m.status.AuthStatus)),
+		fmt.Sprintf("code index: %s", renderIndexStatus(m.status.CodeIndex)),
+		fmt.Sprintf("brain index: %s", renderIndexStatus(m.status.BrainIndex)),
+		fmt.Sprintf("local services: %s", valueOrUnknown(m.status.LocalServicesStatus)),
 		fmt.Sprintf("active chains: %d", m.status.ActiveChains),
 		"",
 		m.styles.title.Render("Recent chains"),
@@ -47,4 +53,21 @@ func valueOrUnknown(value string) string {
 		return "unknown"
 	}
 	return value
+}
+
+func renderIndexStatus(status operator.RuntimeIndexStatus) string {
+	parts := []string{valueOrUnknown(status.Status)}
+	if strings.TrimSpace(status.LastIndexedAt) != "" {
+		parts = append(parts, "at "+status.LastIndexedAt)
+	}
+	if strings.TrimSpace(status.LastIndexedCommit) != "" {
+		parts = append(parts, "commit "+status.LastIndexedCommit)
+	}
+	if strings.TrimSpace(status.StaleSince) != "" {
+		parts = append(parts, "stale since "+status.StaleSince)
+	}
+	if strings.TrimSpace(status.StaleReason) != "" {
+		parts = append(parts, status.StaleReason)
+	}
+	return strings.Join(parts, " ")
 }

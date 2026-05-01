@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/ponchione/sodoryard/internal/brain"
+	brainindexstate "github.com/ponchione/sodoryard/internal/brain/indexstate"
 	"github.com/ponchione/sodoryard/internal/chain"
 	"github.com/ponchione/sodoryard/internal/chainrun"
 	appconfig "github.com/ponchione/sodoryard/internal/config"
@@ -120,6 +121,82 @@ func TestOpenReadOnlySkipsInjectedRuntimeBuilder(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(projectRoot, ".yard")); !os.IsNotExist(err) {
 		t.Fatalf("read-only Open created .yard state: stat err=%v", err)
+	}
+}
+
+func TestRuntimeStatusIncludesReadinessMetadata(t *testing.T) {
+	ctx := context.Background()
+	projectRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(projectRoot, ".brain"), 0o755); err != nil {
+		t.Fatalf("create brain dir: %v", err)
+	}
+	configPath := filepath.Join(t.TempDir(), "yard.yaml")
+	config := fmt.Sprintf(`project_root: %q
+brain:
+  enabled: true
+  vault_path: ".brain"
+local_services:
+  enabled: true
+  mode: manual
+routing:
+  default:
+    provider: codex
+    model: test-model
+providers:
+  codex:
+    type: codex
+    model: test-model
+agent_roles:
+  coder:
+    system_prompt: prompts/coder.md
+  orchestrator:
+    system_prompt: prompts/orchestrator.md
+`, projectRoot)
+	if err := os.WriteFile(configPath, []byte(config), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	db := newOperatorTestDB(t)
+	indexedAt := "2026-05-01T12:00:00Z"
+	if _, err := db.ExecContext(ctx, `INSERT INTO projects(id, name, root_path, last_indexed_commit, last_indexed_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`, projectRoot, filepath.Base(projectRoot), projectRoot, "abc123", indexedAt, indexedAt, indexedAt); err != nil {
+		t.Fatalf("insert project metadata: %v", err)
+	}
+	staleAt := time.Date(2026, 5, 1, 12, 30, 0, 0, time.UTC)
+	if err := brainindexstate.MarkStale(projectRoot, "brain_update", staleAt); err != nil {
+		t.Fatalf("mark brain index stale: %v", err)
+	}
+	store := chain.NewStore(db)
+	svc, err := Open(ctx, Options{
+		ConfigPath: configPath,
+		BuildRuntime: func(ctx context.Context, cfg *appconfig.Config) (*rtpkg.OrchestratorRuntime, error) {
+			return &rtpkg.OrchestratorRuntime{
+				Config:       cfg,
+				Database:     db,
+				ChainStore:   store,
+				BrainBackend: &fakeBrainBackend{},
+				Cleanup:      func() {},
+			}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	t.Cleanup(svc.Close)
+
+	status, err := svc.RuntimeStatus(ctx)
+	if err != nil {
+		t.Fatalf("RuntimeStatus returned error: %v", err)
+	}
+	if status.AuthStatus != "not checked" {
+		t.Fatalf("AuthStatus = %q, want not checked", status.AuthStatus)
+	}
+	if status.CodeIndex.Status != "indexed" || status.CodeIndex.LastIndexedAt != indexedAt || status.CodeIndex.LastIndexedCommit != "abc123" {
+		t.Fatalf("CodeIndex = %+v, want indexed metadata", status.CodeIndex)
+	}
+	if status.BrainIndex.Status != brainindexstate.StatusStale || status.BrainIndex.StaleSince != staleAt.Format(time.RFC3339) || status.BrainIndex.StaleReason != "brain_update" {
+		t.Fatalf("BrainIndex = %+v, want stale brain_update metadata", status.BrainIndex)
+	}
+	if status.LocalServicesStatus != "manual" {
+		t.Fatalf("LocalServicesStatus = %q, want manual", status.LocalServicesStatus)
 	}
 }
 
