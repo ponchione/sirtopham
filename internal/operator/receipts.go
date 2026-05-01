@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 
 	"github.com/ponchione/sodoryard/internal/chain"
 )
@@ -58,6 +59,27 @@ func (s *Service) defaultStepReceiptPath(ctx context.Context, chainID string) (s
 		}
 	}
 	return "", false
+}
+
+func (s *Service) receiptSummaries(ctx context.Context, chainID string, steps []chain.Step) []ReceiptSummary {
+	receipts := make([]ReceiptSummary, 0, len(steps)+1)
+	if backend, err := s.brainBackend(); err == nil {
+		path := fmt.Sprintf("receipts/orchestrator/%s.md", chainID)
+		if _, err := backend.ReadDocument(ctx, path); err == nil {
+			receipts = append(receipts, ReceiptSummary{Label: "orchestrator", Path: path})
+		}
+	}
+	for _, step := range steps {
+		if step.ReceiptPath == "" {
+			continue
+		}
+		receipts = append(receipts, ReceiptSummary{
+			Label: fmt.Sprintf("step %d %s", step.SequenceNum, step.Role),
+			Step:  strconv.Itoa(step.SequenceNum),
+			Path:  step.ReceiptPath,
+		})
+	}
+	return receipts
 }
 
 func receiptPathForStep(chainID string, step string, steps []chain.Step) (string, bool) {

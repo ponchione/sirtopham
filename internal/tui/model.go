@@ -791,11 +791,17 @@ func buildReceiptItems(detail *operator.ChainDetail) []receiptItem {
 	if detail == nil || detail.Chain.ID == "" {
 		return nil
 	}
-	items := []receiptItem{{
-		Label: "orchestrator",
-		Step:  "",
-		Path:  fmt.Sprintf("receipts/orchestrator/%s.md", detail.Chain.ID),
-	}}
+	if len(detail.Receipts) > 0 {
+		items := make([]receiptItem, 0, len(detail.Receipts))
+		for _, receipt := range detail.Receipts {
+			if strings.TrimSpace(receipt.Path) == "" {
+				continue
+			}
+			items = append(items, receiptItem{Label: receipt.Label, Step: receipt.Step, Path: receipt.Path})
+		}
+		return items
+	}
+	items := make([]receiptItem, 0, len(detail.Steps))
 	for _, step := range detail.Steps {
 		if strings.TrimSpace(step.ReceiptPath) == "" {
 			continue

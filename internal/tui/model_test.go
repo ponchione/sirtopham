@@ -44,13 +44,18 @@ func newFakeOperator() *fakeOperator {
 		},
 		details: map[string]operator.ChainDetail{
 			"chain-1": {
-				Chain:        chain.Chain{ID: "chain-1", Status: "running", SourceTask: "first task"},
-				Steps:        []chain.Step{{SequenceNum: 1, Role: "coder", Status: "completed", Verdict: "accepted", ReceiptPath: "receipts/coder/chain-1-step-001.md"}},
+				Chain: chain.Chain{ID: "chain-1", Status: "running", SourceTask: "first task"},
+				Steps: []chain.Step{{SequenceNum: 1, Role: "coder", Status: "completed", Verdict: "accepted", ReceiptPath: "receipts/coder/chain-1-step-001.md"}},
+				Receipts: []operator.ReceiptSummary{
+					{Label: "orchestrator", Path: "receipts/orchestrator/chain-1.md"},
+					{Label: "step 1 coder", Step: "1", Path: "receipts/coder/chain-1-step-001.md"},
+				},
 				RecentEvents: []chain.Event{{ID: 1, EventType: chain.EventStepStarted, EventData: `{"role":"coder"}`, CreatedAt: started}},
 			},
 			"chain-2": {
-				Chain: chain.Chain{ID: "chain-2", Status: "completed", SourceTask: "second task"},
-				Steps: []chain.Step{{SequenceNum: 1, Role: "planner", Status: "completed", ReceiptPath: "receipts/planner/chain-2-step-001.md"}},
+				Chain:    chain.Chain{ID: "chain-2", Status: "completed", SourceTask: "second task"},
+				Steps:    []chain.Step{{SequenceNum: 1, Role: "planner", Status: "completed", ReceiptPath: "receipts/planner/chain-2-step-001.md"}},
+				Receipts: []operator.ReceiptSummary{{Label: "orchestrator", Path: "receipts/orchestrator/chain-2.md"}},
 			},
 		},
 		receipts: map[string]operator.ReceiptView{
@@ -213,6 +218,41 @@ func TestModelLoadsSelectedReceipt(t *testing.T) {
 	got = updated.(Model)
 	if got.receipt == nil || got.receipt.Content != "step receipt" {
 		t.Fatalf("selected receipt = %+v, want step receipt", got.receipt)
+	}
+}
+
+func TestModelReceiptListDoesNotInventOrchestratorReceipt(t *testing.T) {
+	fake := newFakeOperator()
+	fake.chains = []operator.ChainSummary{{ID: "one-step", Status: "completed", SourceTask: "one step"}}
+	fake.details = map[string]operator.ChainDetail{
+		"one-step": {
+			Chain: chain.Chain{ID: "one-step", Status: "completed", SourceTask: "one step"},
+			Steps: []chain.Step{{SequenceNum: 1, Role: "coder", Status: "completed", ReceiptPath: "receipts/coder/one-step-step-001.md"}},
+			Receipts: []operator.ReceiptSummary{
+				{Label: "step 1 coder", Step: "1", Path: "receipts/coder/one-step-step-001.md"},
+			},
+		},
+	}
+	fake.receipts = map[string]operator.ReceiptView{
+		"one-step:1": {ChainID: "one-step", Step: "1", Path: "receipts/coder/one-step-step-001.md", Content: "one-step receipt"},
+	}
+	model := NewModel(fake, Options{RefreshInterval: -1})
+	model.screen = screenReceipts
+
+	loaded, _ := model.Update(model.refreshCmd()())
+	got := loaded.(Model)
+	if len(got.receiptItems) != 1 {
+		t.Fatalf("receipt item count = %d, want one step receipt", len(got.receiptItems))
+	}
+	if got.receiptItems[0].Label != "step 1 coder" || got.receiptItems[0].Step != "1" {
+		t.Fatalf("receipt item = %+v, want step receipt item", got.receiptItems[0])
+	}
+	view := got.View()
+	if strings.Contains(view, "orchestrator") {
+		t.Fatalf("receipt view invented orchestrator receipt:\n%s", view)
+	}
+	if got.receipt == nil || got.receipt.Path != "receipts/coder/one-step-step-001.md" {
+		t.Fatalf("receipt = %+v, want one-step step receipt", got.receipt)
 	}
 }
 

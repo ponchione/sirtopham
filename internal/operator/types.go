@@ -46,7 +46,14 @@ type ChainSummary struct {
 type ChainDetail struct {
 	Chain        chain.Chain
 	Steps        []chain.Step
+	Receipts     []ReceiptSummary
 	RecentEvents []chain.Event
+}
+
+type ReceiptSummary struct {
+	Label string
+	Step  string
+	Path  string
 }
 
 type ReceiptView struct {

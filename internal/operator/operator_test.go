@@ -259,6 +259,18 @@ func TestReadReceiptResolvesOrchestratorAndStepPaths(t *testing.T) {
 	if fallback.Path != "receipts/orchestrator/chain-receipts.md" || fallback.Content != "orchestrator receipt" {
 		t.Fatalf("fallback receipt = %+v, want orchestrator path/content", fallback)
 	}
+	detail, err := svc.GetChainDetail(ctx, chainID)
+	if err != nil {
+		t.Fatalf("GetChainDetail returned error: %v", err)
+	}
+	wantReceipts := []ReceiptSummary{
+		{Label: "orchestrator", Path: "receipts/orchestrator/chain-receipts.md"},
+		{Label: "step 1 planner", Step: "1", Path: "receipts/planner/chain-receipts-step-001.md"},
+		{Label: "step 2 coder", Step: "2", Path: "receipts/coder/chain-receipts-step-002.md"},
+	}
+	if !reflect.DeepEqual(detail.Receipts, wantReceipts) {
+		t.Fatalf("detail receipts = %+v, want %+v", detail.Receipts, wantReceipts)
+	}
 }
 
 func TestReadReceiptFallsBackToStepReceiptWhenOrchestratorReceiptIsMissing(t *testing.T) {
@@ -286,6 +298,14 @@ func TestReadReceiptFallsBackToStepReceiptWhenOrchestratorReceiptIsMissing(t *te
 	}
 	if receipt.Path != "receipts/coder/one-step-receipts-step-001.md" || receipt.Content != "one-step receipt" {
 		t.Fatalf("receipt = %+v, want fallback step receipt", receipt)
+	}
+	detail, err := svc.GetChainDetail(ctx, chainID)
+	if err != nil {
+		t.Fatalf("GetChainDetail returned error: %v", err)
+	}
+	wantReceipts := []ReceiptSummary{{Label: "step 1 coder", Step: "1", Path: "receipts/coder/one-step-receipts-step-001.md"}}
+	if !reflect.DeepEqual(detail.Receipts, wantReceipts) {
+		t.Fatalf("detail receipts = %+v, want %+v", detail.Receipts, wantReceipts)
 	}
 }
 

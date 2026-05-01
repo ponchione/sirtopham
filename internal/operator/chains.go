@@ -46,7 +46,8 @@ func (s *Service) GetChainDetail(ctx context.Context, chainID string) (ChainDeta
 	if err != nil {
 		return ChainDetail{}, err
 	}
-	return ChainDetail{Chain: *ch, Steps: steps, RecentEvents: events}, nil
+	receipts := s.receiptSummaries(ctx, chainID, steps)
+	return ChainDetail{Chain: *ch, Steps: steps, Receipts: receipts, RecentEvents: events}, nil
 }
 
 func (s *Service) ListEvents(ctx context.Context, chainID string) ([]chain.Event, error) {
