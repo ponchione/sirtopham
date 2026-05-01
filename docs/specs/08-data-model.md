@@ -24,7 +24,7 @@ All timestamp columns use `TEXT` with ISO8601 strings (`2026-03-28T14:30:00Z`). 
 
 IDs use the type that best fits each table's access pattern:
 
-- **UUIDv7 (TEXT):** For externally-referenced entities — `projects` and `conversations`. These IDs appear in REST URLs, WebSocket connections, and the web UI's URL bar. UUIDv7 is time-ordered, so chronological listing doesn't require a separate timestamp sort.
+- **UUIDv7 or deterministic external TEXT IDs:** For externally-referenced entities — `projects`, `conversations`, chains, launches, custom launch presets, and background operations. These IDs appear in REST URLs, WebSocket connections, event streams, and the web UI's URL bar. UUIDv7 is preferred where no human-readable chain ID is required because it is time-ordered.
 - **INTEGER AUTOINCREMENT:** For high-frequency internal tables — `messages`, `sub_calls`, `tool_executions`, `context_reports`, `brain_documents`, `brain_links`, `index_state`. These are never exposed in URLs. Autoincrement is fast, compact, and provides natural insertion ordering.
 
 ### Migration Strategy
@@ -34,6 +34,7 @@ During active development, the canonical schema still lives in a single `schema.
 - rebuild `messages_fts` triggers so `role='tool'` messages are indexed
 - add `context_reports.token_budget_json` when missing
 - ensure the chain orchestrator tables and indexes exist
+- ensure command-center tables and indexes exist (`launches`, `launch_presets`, `background_operations`)
 
 This is not a general migration framework. It is a narrow bridge for dev-era databases whose data is useful enough to preserve. Once the schema stabilizes (v0.5+), migrate to versioned migration files — either golang-migrate or hand-written `.sql` files with a version table. The schema is simple enough that manual migrations are viable for a personal tool.
 
@@ -432,6 +433,10 @@ CREATE INDEX idx_brain_links_target ON brain_links(project_id, target_path);
 ### Chain Orchestrator Tables
 
 The chain orchestrator owns additional `chains`, `steps`, and `events` tables in the same `.yard/yard.db` database. Their schema changes more frequently with orchestration behavior and is specified in [[15-chain-orchestrator]], including `steps.task_context`, JSON `events.event_data` payloads for `step_output` and process lifecycle events, and event timestamp indexes.
+
+### Command Center Tables
+
+The command center owns `launches`, `launch_presets`, and `background_operations` tables in the same `.yard/yard.db` database. A launch stores the operator-authored work packet and agent plan before browser-started work becomes a chain. Custom launch presets store reusable UI-managed templates; built-in presets are generated in code. Background operations track UI-started maintenance work such as code-index and brain-index rebuilds. The detailed schemas and lifecycles are specified in [[20-command-center-ui]]. CLI-started chains do not require launch records.
 
 ### index_state
 
