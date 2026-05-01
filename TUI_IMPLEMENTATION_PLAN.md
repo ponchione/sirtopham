@@ -2,7 +2,7 @@
 
 Last updated: 2026-05-01
 
-This is the concrete implementation plan for moving Yard to the new TUI-first operator direction.
+This is the status-aware implementation plan for moving Yard to the new TUI-first operator direction. It records both the slices that have landed and the remaining work.
 
 Primary specs:
 
@@ -15,13 +15,16 @@ Primary specs:
 
 - `yard serve` already serves the React app and API. Keep it. It now maps to the web-inspector role.
 - `yard chain start` already delegates to `internal/chainrun.Start`.
-- Chain status/logs/receipts/control currently live in `cmd/yard/chain_*.go`.
-- `internal/chain.Store` already supports chains, steps, events, status transitions, events-since polling, and receipt path lookup through steps.
-- `internal/spawn.SpawnAgentTool` already knows how to run a headless `tidmouth run` step, write step rows, stream step output events, parse receipts, and update metrics.
-- `yard run` is still registered in `cmd/yard/main.go` and delegates to a direct headless session through `internal/cmdutil`. This conflicts with the target contract that public single-agent work should be represented as a one-step chain.
-- `chainrun.Start` is currently orchestrator-focused. It always loads the `orchestrator` role and runs an orchestrator conversation. It does not yet implement `--role`, `one_step_chain`, or manual rosters.
-- No Bubble Tea/Bubbles/Lip Gloss dependencies are in `go.mod` yet.
-- `yard tui` is not implemented.
+- `internal/operator` is implemented and is the shared service for runtime status, chain summaries/details, event reads, receipt reads, control requests, role listing, and launch preview/start.
+- `cmd/yard/chain_readonly.go` and `cmd/yard/chain_control.go` use `internal/operator` instead of owning runtime behavior directly.
+- `internal/chain.Store` supports chains, steps, events, status transitions, events-since polling, and receipt path lookup through steps.
+- `internal/spawn.SpawnAgentTool` exposes the reusable step runner path used by tool execution and one-step chains.
+- Public single-agent work is represented by `yard chain start --role ...`; `yard run` code remains for the internal headless engine helper path but is no longer registered on the public `yard` command tree.
+- `chainrun.Start` supports orchestrator mode and `one_step_chain` mode. It does not yet implement `manual_roster` or constrained orchestration.
+- Bubble Tea, Bubbles, and Lip Gloss dependencies are present.
+- `yard tui` is implemented. It starts without `yard serve`, reads through `internal/operator`, and includes dashboard, chains, receipts, event follow, pause/cancel, receipt open, launch preview, and launch start flows.
+- TUI resume currently shows the foreground `yard chain resume <chain-id>` command instead of continuing runner execution inside the TUI.
+- Remaining product gaps are manual roster mode, constrained orchestration, search/filter across chains and receipts, open-in-web handoffs, persistent launch drafts, and presets.
 
 ## Non-Negotiables
 
@@ -61,37 +64,44 @@ internal/server
   may call internal/operator for shared chain/runtime views
 ```
 
-## Recommended Order
+## Landed Slices
 
-1. Build the shared operator service/read model.
-2. Move existing CLI chain read/control code onto that service where practical.
-3. Add a read-only `yard tui` skeleton.
-4. Fix the `yard run` / one-step chain mismatch.
-5. Add TUI chain controls.
-6. Add TUI launch wizard.
-7. Add browser inspector chain/detail views only where they add value.
+1. Shared operator service/read model.
+2. CLI chain read/control migration onto `internal/operator`.
+3. Read-only `yard tui` skeleton.
+4. One-step chain contract via `yard chain start --role ...`.
+5. TUI event follow, pause/cancel, receipt summaries, and receipt open handoffs.
+6. Initial TUI launch wizard for one-step and orchestrated chains.
+7. TUI readiness metadata for provider/model, index state, local services mode, active chains, and warnings.
 
-This order gives a useful TUI quickly without forcing the one-step-chain refactor to block all visible progress.
+## Recommended Next Order
 
-## Phase 1: Shared Operator Service
+1. Manual roster mode in `chainrun.Start` using the existing reusable step runner.
+2. TUI search/filter for chains and receipts.
+3. Open-in-web handoffs that do not secretly start `yard serve`.
+4. Constrained orchestration once launch/request shapes can express role constraints cleanly.
+5. Persistent launch drafts and presets after the launch model needs durable cross-session state.
+
+This order keeps new work on the shared runtime path and avoids rebuilding execution behavior inside the TUI.
+
+## Phase 1: Shared Operator Service - Landed
 
 Goal: create the internal API that CLI, TUI, and later web handlers can share.
 
-New package:
+Implemented package:
 
 ```text
 internal/operator/
-  service.go
-  status.go
   chains.go
-  receipts.go
   control.go
-  service_test.go
-  chains_test.go
-  control_test.go
+  launch.go
+  receipts.go
+  service.go
+  types.go
+  operator_test.go
 ```
 
-Suggested public shape:
+Current public shape:
 
 ```go
 type Service struct {
@@ -112,9 +122,10 @@ type RuntimeStatus struct {
     ProjectName string
     Provider string
     Model string
-    AuthSummary string
+    AuthStatus string
     CodeIndex RuntimeIndexStatus
     BrainIndex RuntimeIndexStatus
+    LocalServicesStatus string
     ActiveChains int
     Warnings []RuntimeWarning
 }
@@ -146,6 +157,9 @@ func (s *Service) ReadReceipt(ctx context.Context, chainID string, step string) 
 func (s *Service) PauseChain(ctx context.Context, chainID string) (ControlResult, error)
 func (s *Service) ResumeChain(ctx context.Context, chainID string) (ControlResult, error)
 func (s *Service) CancelChain(ctx context.Context, chainID string) (ControlResult, error)
+func (s *Service) ListAgentRoles(ctx context.Context) ([]AgentRoleSummary, error)
+func (s *Service) ValidateLaunch(ctx context.Context, req LaunchRequest) (LaunchPreview, error)
+func (s *Service) StartChain(ctx context.Context, req LaunchRequest) (StartResult, error)
 ```
 
 Implementation notes:
@@ -169,7 +183,7 @@ Acceptance:
 
 - Existing `yard chain status`, `yard chain logs`, `yard chain receipt`, `yard chain pause`, `yard chain resume`, and `yard chain cancel` behavior remains compatible.
 - `internal/operator` tests cover read-only chain detail, event cursor reads, receipt path resolution, and control-state transitions.
-- No Bubble Tea dependency is introduced in this phase.
+- No Bubble Tea dependency was introduced in this phase.
 
 Verification:
 
@@ -178,7 +192,7 @@ make test
 make build
 ```
 
-## Phase 2: Read-Only TUI Skeleton
+## Phase 2: Read-Only TUI Skeleton - Landed
 
 Goal: add `yard tui` and a working full-screen read-only console.
 
@@ -190,19 +204,22 @@ Dependencies:
   - `github.com/charmbracelet/lipgloss`
 - Pin exact versions selected by `go get` and commit `go.sum`.
 
-New files:
+Implemented files:
 
 ```text
 cmd/yard/tui.go
 internal/tui/app.go
-internal/tui/model.go
-internal/tui/messages.go
+internal/tui/chains.go
+internal/tui/dashboard.go
+internal/tui/event_view.go
+internal/tui/help.go
 internal/tui/keys.go
+internal/tui/launch.go
+internal/tui/messages.go
+internal/tui/model.go
+internal/tui/receipt_open.go
+internal/tui/receipts.go
 internal/tui/styles.go
-internal/tui/screens/dashboard.go
-internal/tui/screens/chains.go
-internal/tui/screens/receipts.go
-internal/tui/screens/help.go
 internal/tui/model_test.go
 internal/tui/render_test.go
 ```
@@ -280,18 +297,18 @@ yard chain status
 yard tui
 ```
 
-## Phase 3: One-Step Chain Contract
+## Phase 3: One-Step Chain Contract - Landed
 
 Goal: make public single-agent work a real one-step chain, then remove or hide the old public `yard run` path.
 
-Current mismatch:
+Original mismatch:
 
-- `cmd/yard/run.go` still exposes `yard run`.
-- `cmd/yard/chain.go` does not expose a role flag.
-- `internal/chainrun.Start` always runs the orchestrator role.
-- `internal/spawn.SpawnAgentTool` has the step execution logic we need, but it is wrapped as a tool with unexported input types.
+- `cmd/yard/run.go` exposed `yard run`.
+- `cmd/yard/chain.go` did not expose a role flag.
+- `internal/chainrun.Start` always ran the orchestrator role.
+- `internal/spawn.SpawnAgentTool` had the step execution logic we needed, but it was wrapped as a tool with unexported input types.
 
-Recommended refactor:
+Implemented shape:
 
 1. Add launch mode and role fields to `chainrun.Options`.
 
@@ -301,21 +318,12 @@ type Mode string
 const (
     ModeOrchestrator Mode = "sir_topham_decides"
     ModeOneStep      Mode = "one_step_chain"
-    ModeManualRoster Mode = "manual_roster"
 )
-
-type StepRequest struct {
-    Role string
-    Task string
-    TaskContext string
-    ReindexBefore bool
-}
 
 type Options struct {
     ChainID string
     Mode Mode
     Role string
-    Roster []StepRequest
     SourceSpecs []string
     SourceTask string
     // existing fields...
@@ -324,7 +332,7 @@ type Options struct {
 
 2. Export a reusable step runner from `internal/spawn`.
 
-Preferred shape:
+Implemented shape:
 
 ```go
 type AgentStepInput struct {
@@ -349,7 +357,7 @@ type AgentStepResult struct {
 func (t *SpawnAgentTool) RunStep(ctx context.Context, in AgentStepInput) (AgentStepResult, string, error)
 ```
 
-Then make `SpawnAgentTool.Execute` call `RunStep` and wrap the result as a tool result. This avoids duplicating subprocess, receipt, event, and metrics behavior.
+`SpawnAgentTool.Execute` calls `RunStep` and wraps the result as a tool result. This avoids duplicating subprocess, receipt, event, and metrics behavior.
 
 3. Branch inside `chainrun.Start`.
 
@@ -364,7 +372,7 @@ one_step_chain mode:
   finalize chain status from receipt verdict / step result
 
 manual_roster mode:
-  not required in this phase
+  still remaining
 ```
 
 4. Add `--role` to `yard chain start`.
@@ -384,11 +392,10 @@ Preferred target:
 - Keep `internal/cmdutil` and `tidmouth run` untouched because spawn still needs `tidmouth run`.
 - Update tests that expected public `yard run`.
 
-Temporary fallback if removal is too disruptive:
+Current result:
 
-- Hide `yard run` from help.
-- Make it print guidance and delegate to one-step chain only if flags can be mapped safely.
-- Document it as compatibility-only and remove in the next slice.
+- `yard run` is not registered on the public `yard` command tree.
+- `tidmouth run` remains available as the internal engine subprocess entrypoint.
 
 Status mapping:
 
@@ -418,18 +425,19 @@ Targeted tests:
 go test -tags sqlite_fts5 ./internal/chainrun ./internal/spawn ./cmd/yard
 ```
 
-## Phase 4: TUI Chain Controls
+## Phase 4: TUI Chain Controls - Mostly Landed
 
 Goal: let the TUI control running chains through `internal/operator`.
 
 Add TUI actions:
 
-- follow selected chain
-- pause selected chain
-- resume selected chain
-- cancel selected chain
-- open receipt in `$PAGER`
-- open receipt/file in `$EDITOR`
+- follow selected chain - landed
+- pause selected chain - landed
+- resume selected chain - command handoff landed; in-TUI resume runner continuation remains deferred
+- cancel selected chain - landed
+- open receipt in `$PAGER` - landed
+- open receipt in `$EDITOR` - landed
+- open project files in `$EDITOR` - remaining
 
 Implementation notes:
 
@@ -466,18 +474,16 @@ yard tui
 yard chain status <chain-id>
 ```
 
-## Phase 5: TUI Launch Wizard
+## Phase 5: TUI Launch Wizard - Partly Landed
 
 Goal: start new work from the TUI.
 
-Prerequisite:
-
-- Phase 3 one-step chain contract should be complete.
+Phase 3 one-step chain contract is complete.
 
 Launch modes to implement first:
 
-1. `one_step_chain`
-2. `sir_topham_decides`
+1. `one_step_chain` - landed
+2. `sir_topham_decides` - landed
 
 Defer:
 
@@ -513,7 +519,7 @@ type LaunchPreview struct {
 }
 
 func (s *Service) ValidateLaunch(ctx context.Context, req LaunchRequest) (LaunchPreview, error)
-func (s *Service) StartChain(ctx context.Context, req LaunchRequest, hooks ChainStartHooks) (StartResult, error)
+func (s *Service) StartChain(ctx context.Context, req LaunchRequest) (StartResult, error)
 ```
 
 TUI flow:
@@ -542,13 +548,11 @@ make test
 make build
 ```
 
-## Phase 6: Manual Roster Mode
+## Phase 6: Manual Roster Mode - Remaining
 
 Goal: support an explicit ordered set of roles without an orchestrator.
 
-Prerequisite:
-
-- Reusable step runner from Phase 3.
+The reusable step runner from Phase 3 is available. This should be the next large runtime feature if the goal is explicit multi-role execution without an orchestrator.
 
 Implementation:
 
@@ -724,9 +728,9 @@ Avoid:
 
 ## Database Considerations
 
-Current `chains` schema does not include `launch_id` or `launch_mode`, even though newer specs mention those concepts. Do not block Phase 1 or Phase 2 on this.
+Current `chains` schema does not include `launch_id` or `launch_mode`, even though newer specs mention those concepts. Do not add those fields until a durable launch/draft feature actually needs them.
 
-When Phase 3 or later needs durable mode:
+When a later feature needs durable launch mode:
 
 - Add `launch_mode TEXT NOT NULL DEFAULT 'sir_topham_decides'` to `chains`.
 - Add compatibility upgrade for existing dev DBs.
@@ -763,29 +767,26 @@ go test -tags sqlite_fts5 ./cmd/yard
 go test -tags sqlite_fts5 ./internal/tui
 ```
 
-## First Slice Checklist
+## Completed First Slice Record
 
-Start here.
+The original first slice is complete:
 
-1. Create `internal/operator`.
-2. Implement:
-   - `Open`
-   - `Close`
-   - `RuntimeStatus` minimum
-   - `ListChains`
-   - `GetChainDetail`
-   - `ListEventsSince`
-   - `ReadReceipt`
-3. Add tests for those methods.
-4. Do not add Bubble Tea yet.
-5. Do not touch `yard run` yet.
-6. Run `make test`.
+1. `internal/operator` exists.
+2. `Open`, `Close`, `RuntimeStatus`, `ListChains`, `GetChainDetail`, `ListEventsSince`, and `ReadReceipt` are implemented.
+3. CLI read/control behavior is routed through `internal/operator`.
+4. The TUI lists chains and reads events/receipts without importing `cmd/yard`.
 
-Definition of done for first slice:
+## Next Slice Checklist
 
-- A follow-on TUI can list chains and read events/receipts using `internal/operator` without importing `cmd/yard`.
-- Existing CLI behavior is unchanged.
-- Tests pass.
+Choose one narrow remaining slice:
+
+1. Manual roster mode in `chainrun.Start`.
+2. Search/filter for chains and receipts in `internal/tui`.
+3. Open-in-web handoffs that only display or use an already-running `yard serve`.
+4. Constrained orchestration once launch constraints are modeled.
+5. Persistent launch drafts and presets after durable launch records are justified.
+
+For any slice, keep core operations routed through `internal/operator`, avoid Cobra shell-outs from the TUI, and run `make test` plus `make build`.
 
 ## Risks
 

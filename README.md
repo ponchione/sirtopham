@@ -44,6 +44,7 @@ Both paths share `internal/runtime/` for provider construction, database setup, 
 yard [--config yard.yaml]
  |-- init                          Project bootstrap
  |-- serve                         Web UI + API server
+ |-- tui                           Terminal operator console
  |-- index                         Code index build/rebuild
  |-- auth
  |   |-- login codex                Provider login
@@ -62,10 +63,10 @@ yard [--config yard.yaml]
  |   |-- index                     Rebuild brain metadata from vault
  |   +-- serve --vault <path>      Standalone brain MCP server (stdio)
  |-- llm
-     |-- status                    Local LLM service health
-     |-- up                        Start local LLM services
-     |-- down                      Stop local LLM services
-     +-- logs                      Show service logs
+ |   |-- status                    Local LLM service health
+ |   |-- up                        Start local LLM services
+ |   |-- down                      Stop local LLM services
+ |   +-- logs                      Show service logs
  +-- completion                    Shell completion scripts
 ```
 
@@ -235,6 +236,14 @@ make dev-backend
 make dev-frontend
 ```
 
+### Run the terminal operator console
+
+```bash
+yard tui
+```
+
+The TUI uses the shared operator runtime directly. It shows readiness metadata, recent chains, chain details, receipt content, live event following, pause/cancel controls, receipt handoff to `$PAGER` or `$EDITOR`, and launch preview/start flows for one-step and orchestrated chains.
+
 ### Run a chain
 
 ```bash
@@ -297,7 +306,7 @@ For `yard index` or `yard brain index` inside the container, make sure the mount
 | Database | SQLite with FTS5 full-text search |
 | Vector store | LanceDB |
 | Code parsing | tree-sitter (Go, Python, TypeScript) |
-| Target TUI (planned) | Bubble Tea, Bubbles, Lip Gloss |
+| TUI | Bubble Tea, Bubbles, Lip Gloss |
 | Web inspector | React, Vite, TypeScript, Tailwind CSS |
 | Brain interface | Model Context Protocol (MCP) |
 | Container | Debian Trixie, multi-stage Docker build |
@@ -310,7 +319,9 @@ Current repo state:
 - The unified `yard` CLI is the real operator-facing surface.
 - `tidmouth` remains only as the internal engine binary required by the current spawn contract.
 - Live packaging/install surfaces no longer ship unsupported `sodoryard` or placeholder `knapford` binaries.
-- The active UI direction is now terminal-first: `yard tui` is the target daily-driver operator console, while `yard serve` remains the browser/API surface for rich inspection. This direction is specified in `docs/specs/20-operator-console-tui.md` and `docs/specs/21-web-inspector.md`; `yard tui` is not implemented yet.
+- The active UI direction is terminal-first: `yard tui` is now implemented as the initial daily-driver operator console, while `yard serve` remains the browser/API surface for rich inspection. This direction is specified in `docs/specs/20-operator-console-tui.md` and `docs/specs/21-web-inspector.md`.
+- Implemented TUI/operator work includes readiness metadata, recent chain and detail views, receipt summaries/content, event following, pause/cancel controls, receipt opening through `$PAGER`/`$EDITOR`, and launch preview/start for one-step and orchestrated chains.
+- Remaining TUI-first work includes manual roster mode, constrained orchestration, search/filter across chains and receipts, open-in-web handoffs, persistent launch drafts, and presets.
 - The remaining active docs are the README, current specs, `NEXT_SESSION_HANDOFF.md`, and `TUI_IMPLEMENTATION_PLAN.md`; stale migration/implementation-plan markdown is being removed rather than treated as archival guidance.
 
 If you are resuming work cold, read in this order:
@@ -329,6 +340,7 @@ First thing to address next session:
 - keep `tidmouth` limited to the internal engine contract (`run`, `index`) unless you explicitly redesign the spawn contract too
 - keep operator-facing docs aligned with the actual `yard` / container / runtime surface
 - keep TUI-first docs clear about target behavior versus already-implemented commands
+- choose the next implementation slice from manual roster mode, constrained orchestration, search/filter, open-in-web handoffs, persistent launch drafts, or presets
 - rerun `make test` and `make build` after each narrow slice
 
 Useful commands:
@@ -339,6 +351,7 @@ make install-user-bin
 yard index
 yard brain index
 yard serve
+yard tui
 yard chain start --task "<real task>"
 yard chain status
 yard chain logs <chain-id>

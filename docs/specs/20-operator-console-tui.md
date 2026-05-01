@@ -8,7 +8,7 @@
 
 ## Overview
 
-The operator console is the target daily-driver interface for Yard. This spec describes target behavior; `yard tui` is not implemented yet. The intended launch command is:
+The operator console is the target daily-driver interface for Yard. This spec describes target behavior. The initial `yard tui` implementation is available, and the intended launch command is:
 
 ```bash
 yard tui
@@ -23,6 +23,12 @@ The browser app remains available through `yard serve`, but its target role is t
 - **CLI:** scripts, automation, one-shot commands, and fallback operation.
 
 All three surfaces should converge on shared internal runtime services. The TUI must not shell out to `yard chain start`, `yard index`, or other Cobra commands for core behavior. Cobra commands, the TUI, and HTTP handlers should call the same internal packages.
+
+Implementation status as of 2026-05-01:
+
+- Landed: `yard tui`, shared `internal/operator` reads and controls, dashboard readiness metadata, chain/detail views, receipt summaries/content, live event follow, pause/cancel, receipt open through `$PAGER`/`$EDITOR`, and launch preview/start for `one_step_chain` and `sir_topham_decides`.
+- Remaining: `manual_roster`, constrained orchestration, search/filter across chains and receipts, open-in-web handoffs, persistent launch drafts, and presets.
+- Resume is currently a foreground command handoff: the TUI shows `yard chain resume <chain-id>` rather than continuing runner execution inside the TUI.
 
 ---
 
@@ -176,7 +182,7 @@ Fields:
 
 MVP behavior:
 
-- A launch draft can live in memory until started.
+- The current launch draft lives in memory until started.
 - Starting compiles a deterministic work packet and calls the same internal chain start path used by `yard chain start`.
 - Persistent launch records are optional until durable drafts, custom presets, or cross-surface resume become necessary.
 
@@ -377,7 +383,7 @@ The first implementation should keep this simple and avoid hidden long-running s
 - Show chains list/detail from existing stores.
 - Show receipts list/detail.
 - Support refresh and basic navigation.
-- No chain start/control yet.
+- Status: landed.
 
 ### Phase B - Chain Control
 
@@ -385,6 +391,7 @@ The first implementation should keep this simple and avoid hidden long-running s
 - Pause/resume/cancel active chains.
 - Show step status and latest event.
 - Open receipts/files in `$EDITOR` or `$PAGER`.
+- Status: mostly landed. Follow, pause, cancel, step/event display, and receipt open are present; in-TUI resume and project-file open remain deferred.
 
 ### Phase C - Launch Wizard
 
@@ -393,6 +400,7 @@ The first implementation should keep this simple and avoid hidden long-running s
 - Add manual roster mode when the runner supports it.
 - Validate preflight warnings before start.
 - Preview compiled work packet.
+- Status: partly landed. One-step and orchestrated launch preview/start are present; manual roster and constrained orchestration remain deferred.
 
 ### Phase D - Operator Polish
 
@@ -402,6 +410,7 @@ The first implementation should keep this simple and avoid hidden long-running s
 - Role roster actions.
 - Open-in-web handoffs.
 - Focused rendering tests for key screens.
+- Status: remaining, except focused TUI model/render tests already cover the current screens and controls.
 
 ---
 
