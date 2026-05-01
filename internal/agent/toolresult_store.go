@@ -29,13 +29,22 @@ func (s *FileToolResultStore) PersistToolResult(_ context.Context, toolUseID, to
 	if s == nil {
 		return "", fmt.Errorf("tool result store is nil")
 	}
-	if err := os.MkdirAll(s.rootDir, 0o755); err != nil {
+	if err := os.MkdirAll(s.rootDir, 0o700); err != nil {
 		return "", fmt.Errorf("create tool result store dir: %w", err)
+	}
+	if err := os.Chmod(s.rootDir, 0o700); err != nil {
+		return "", fmt.Errorf("secure tool result store dir: %w", err)
 	}
 	fileName := fmt.Sprintf("%s-%s.txt", sanitizeToolResultFilePart(toolName), sanitizeToolResultFilePart(toolUseID))
 	fullPath := filepath.Join(s.rootDir, fileName)
-	if err := os.WriteFile(fullPath, []byte(content), 0o644); err != nil {
+	if info, err := os.Lstat(fullPath); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		return "", fmt.Errorf("write persisted tool result: refusing to write symlink %s", fullPath)
+	}
+	if err := os.WriteFile(fullPath, []byte(content), 0o600); err != nil {
 		return "", fmt.Errorf("write persisted tool result: %w", err)
+	}
+	if err := os.Chmod(fullPath, 0o600); err != nil {
+		return "", fmt.Errorf("secure persisted tool result: %w", err)
 	}
 	return fullPath, nil
 }
