@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 )
 
@@ -109,20 +108,11 @@ func (f FileEdit) Execute(ctx context.Context, projectRoot string, input json.Ra
 	// Perform the replacement.
 	newContent := strings.Replace(oldContent, params.OldStr, params.NewStr, 1)
 
-	// Write the file.
-	perm := os.FileMode(0o644)
-	if info != nil {
-		perm = info.Mode()
+	beforeRename := func() *ToolResult {
+		return verifyMutableFileSnapshotFresh(ctx, store, projectRoot, state, params.Path, "file_edit")
 	}
-	if result := verifyMutableFileSnapshotFresh(ctx, store, projectRoot, state, params.Path, "file_edit"); result != nil {
+	if result := writeStringAtomically(absPath, newContent, info != nil, beforeRename); result != nil {
 		return result, nil
-	}
-	if err := os.WriteFile(absPath, []byte(newContent), perm); err != nil {
-		return &ToolResult{
-			Success: false,
-			Content: fmt.Sprintf("Failed to write file: %v", err),
-			Error:   err.Error(),
-		}, nil
 	}
 	clearMutableFileSnapshot(ctx, store, state.scopeKey, state.absPath)
 
