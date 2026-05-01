@@ -6,6 +6,7 @@ package operator
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -116,6 +117,9 @@ func TestOpenReadOnlySkipsInjectedRuntimeBuilder(t *testing.T) {
 	}
 	if status.ProjectRoot != projectRoot || status.Provider != "codex" || status.Model != "test-model" {
 		t.Fatalf("RuntimeStatus = %+v, want config-derived status", status)
+	}
+	if _, err := os.Stat(filepath.Join(projectRoot, ".yard")); !os.IsNotExist(err) {
+		t.Fatalf("read-only Open created .yard state: stat err=%v", err)
 	}
 }
 
@@ -257,6 +261,34 @@ func TestReadReceiptResolvesOrchestratorAndStepPaths(t *testing.T) {
 	}
 }
 
+func TestReadReceiptFallsBackToStepReceiptWhenOrchestratorReceiptIsMissing(t *testing.T) {
+	ctx := context.Background()
+	store := chain.NewStore(newOperatorTestDB(t))
+	chainID, err := store.StartChain(ctx, chain.ChainSpec{ChainID: "one-step-receipts", SourceTask: "receipts"})
+	if err != nil {
+		t.Fatalf("StartChain returned error: %v", err)
+	}
+	stepID, err := store.StartStep(ctx, chain.StepSpec{ChainID: chainID, SequenceNum: 1, Role: "coder", Task: "code"})
+	if err != nil {
+		t.Fatalf("StartStep returned error: %v", err)
+	}
+	if err := store.CompleteStep(ctx, chain.CompleteStepParams{StepID: stepID, Status: "completed", ReceiptPath: "receipts/coder/one-step-receipts-step-001.md"}); err != nil {
+		t.Fatalf("CompleteStep returned error: %v", err)
+	}
+	backend := &fakeBrainBackend{docs: map[string]string{
+		"receipts/coder/one-step-receipts-step-001.md": "one-step receipt",
+	}}
+	svc := openOperatorTestService(t, t.TempDir(), store, backend, nil)
+
+	receipt, err := svc.ReadReceipt(ctx, chainID, "")
+	if err != nil {
+		t.Fatalf("ReadReceipt returned error: %v", err)
+	}
+	if receipt.Path != "receipts/coder/one-step-receipts-step-001.md" || receipt.Content != "one-step receipt" {
+		t.Fatalf("receipt = %+v, want fallback step receipt", receipt)
+	}
+}
+
 func TestListAgentRolesAndValidateLaunch(t *testing.T) {
 	ctx := context.Background()
 	svc := openOperatorTestService(t, t.TempDir(), chain.NewStore(newOperatorTestDB(t)), &fakeBrainBackend{}, nil)
@@ -345,9 +377,114 @@ func TestStartChainMapsLaunchRequestToChainrun(t *testing.T) {
 	if gotOpts.MaxSteps != 100 || gotOpts.MaxResolverLoops != 3 || gotOpts.MaxDuration != 4*time.Hour || gotOpts.TokenBudget != 5_000_000 {
 		t.Fatalf("chainrun defaults = steps %d loops %d duration %s budget %d", gotOpts.MaxSteps, gotOpts.MaxResolverLoops, gotOpts.MaxDuration, gotOpts.TokenBudget)
 	}
-	if gotDeps.ProcessID == nil || gotDeps.ProcessID() != 1234 {
-		t.Fatalf("ProcessID dependency not propagated")
+	if gotDeps.ProcessID == nil || gotDeps.ProcessID() != 0 {
+		t.Fatalf("ProcessID dependency returned nonzero, want embedded starts to register without a signalable PID")
 	}
+}
+
+func TestStartChainCancelsRunnerWhenCallerContextEndsBeforeChainID(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	projectRoot := t.TempDir()
+	configPath := writeOperatorTestConfig(t, projectRoot)
+	started := make(chan struct{})
+	cancelled := make(chan struct{})
+	svc, err := Open(context.Background(), Options{
+		ConfigPath: configPath,
+		ReadOnly:   true,
+		ChainStarter: func(ctx context.Context, cfg *appconfig.Config, opts chainrun.Options, deps chainrun.Deps) (*chainrun.Result, error) {
+			close(started)
+			<-ctx.Done()
+			close(cancelled)
+			return nil, ctx.Err()
+		},
+	})
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	t.Cleanup(svc.Close)
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := svc.StartChain(ctx, LaunchRequest{Mode: LaunchModeOneStep, Role: "coder", SourceTask: "ship it"})
+		errCh <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for chain starter")
+	}
+	cancel()
+	select {
+	case err := <-errCh:
+		if err == nil || !errors.Is(err, context.Canceled) {
+			t.Fatalf("StartChain error = %v, want context canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("StartChain did not return after caller cancellation")
+	}
+	select {
+	case <-cancelled:
+	case <-time.After(time.Second):
+		t.Fatal("runner context was not cancelled")
+	}
+}
+
+func TestCancelChainCancelsInProcessRunnerWithoutSignalingOwnPID(t *testing.T) {
+	ctx := context.Background()
+	store := chain.NewStore(newOperatorTestDB(t))
+	projectRoot := t.TempDir()
+	configPath := writeOperatorTestConfig(t, projectRoot)
+	cancelled := make(chan struct{})
+	var signaled []int
+	svc, err := Open(ctx, Options{
+		ConfigPath: configPath,
+		BuildRuntime: func(ctx context.Context, cfg *appconfig.Config) (*rtpkg.OrchestratorRuntime, error) {
+			return &rtpkg.OrchestratorRuntime{Config: cfg, ChainStore: store, BrainBackend: &fakeBrainBackend{}, Cleanup: func() {}}, nil
+		},
+		ChainStarter: func(ctx context.Context, cfg *appconfig.Config, opts chainrun.Options, deps chainrun.Deps) (*chainrun.Result, error) {
+			chainID, err := store.StartChain(context.Background(), chain.ChainSpec{ChainID: "embedded-chain", SourceTask: opts.SourceTask})
+			if err != nil {
+				return nil, err
+			}
+			if err := store.LogEvent(context.Background(), chainID, "", chain.EventChainStarted, map[string]any{"orchestrator_pid": deps.ProcessID(), "execution_id": "exec-embedded", "active_execution": true}); err != nil {
+				return nil, err
+			}
+			opts.OnChainID(chainID)
+			<-ctx.Done()
+			close(cancelled)
+			return &chainrun.Result{ChainID: chainID, Status: "cancelled"}, ctx.Err()
+		},
+		ProcessID: func() int { return 1234 },
+		ProcessSignaler: func(pid int) error {
+			signaled = append(signaled, pid)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	t.Cleanup(svc.Close)
+
+	started, err := svc.StartChain(ctx, LaunchRequest{Mode: LaunchModeOneStep, Role: "coder", SourceTask: "ship it"})
+	if err != nil {
+		t.Fatalf("StartChain returned error: %v", err)
+	}
+	if started.ChainID != "embedded-chain" {
+		t.Fatalf("ChainID = %q, want embedded-chain", started.ChainID)
+	}
+	result, err := svc.CancelChain(ctx, started.ChainID)
+	if err != nil {
+		t.Fatalf("CancelChain returned error: %v", err)
+	}
+	select {
+	case <-cancelled:
+	case <-time.After(time.Second):
+		t.Fatal("in-process runner context was not cancelled")
+	}
+	if len(signaled) != 0 || len(result.SignaledPIDs) != 0 {
+		t.Fatalf("signaled = %v result=%+v, want no OS signal for embedded runner", signaled, result)
+	}
+	requireChainStatus(t, ctx, store, started.ChainID, "cancel_requested")
 }
 
 func TestPauseResumeCancelStateTransitions(t *testing.T) {

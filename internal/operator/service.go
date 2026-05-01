@@ -7,7 +7,9 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"sync"
 	"syscall"
+	"time"
 
 	"github.com/ponchione/sodoryard/internal/chain"
 	"github.com/ponchione/sodoryard/internal/chainrun"
@@ -17,6 +19,7 @@ import (
 )
 
 const activeChainScanLimit = 10000
+const activeStartShutdownTimeout = 5 * time.Second
 
 var ErrProcessNotRunning = errors.New("operator process not running")
 
@@ -38,6 +41,13 @@ type Service struct {
 	chainStarter    ChainStarter
 	processSignaler func(pid int) error
 	processID       func() int
+	activeMu        sync.Mutex
+	activeStarts    map[string]*activeStart
+}
+
+type activeStart struct {
+	cancel context.CancelFunc
+	done   <-chan startChainDone
 }
 
 func Open(ctx context.Context, opts Options) (*Service, error) {
@@ -54,6 +64,9 @@ func Open(ctx context.Context, opts Options) (*Service, error) {
 		buildRuntime = rtpkg.BuildOrchestratorRuntime
 	}
 	rt, err := openRuntime(ctx, cfg, opts, buildRuntime)
+	if err != nil {
+		return nil, err
+	}
 	if rt == nil {
 		return nil, errors.New("operator: build runtime returned nil")
 	}
@@ -72,7 +85,7 @@ func Open(ctx context.Context, opts Options) (*Service, error) {
 	if processID == nil {
 		processID = os.Getpid
 	}
-	return &Service{cfg: cfg, rt: rt, buildRuntime: buildRuntime, chainStarter: starter, processSignaler: signaler, processID: processID}, nil
+	return &Service{cfg: cfg, rt: rt, buildRuntime: buildRuntime, chainStarter: starter, processSignaler: signaler, processID: processID, activeStarts: make(map[string]*activeStart)}, nil
 }
 
 func openRuntime(ctx context.Context, cfg *appconfig.Config, opts Options, buildRuntime func(context.Context, *appconfig.Config) (*rtpkg.OrchestratorRuntime, error)) (*rtpkg.OrchestratorRuntime, error) {
@@ -83,24 +96,47 @@ func openRuntime(ctx context.Context, cfg *appconfig.Config, opts Options, build
 }
 
 func buildReadOnlyRuntime(ctx context.Context, cfg *appconfig.Config) (*rtpkg.OrchestratorRuntime, error) {
-	database, err := appdb.OpenDB(ctx, cfg.DatabasePath())
+	dbPath := cfg.DatabasePath()
+	removeDBOnCleanup := false
+	if _, err := os.Stat(dbPath); err != nil {
+		if !os.IsNotExist(err) {
+			return nil, fmt.Errorf("stat database %q: %w", dbPath, err)
+		}
+		tmp, err := os.CreateTemp("", "yard-readonly-*.db")
+		if err != nil {
+			return nil, fmt.Errorf("create temporary read-only database: %w", err)
+		}
+		dbPath = tmp.Name()
+		if err := tmp.Close(); err != nil {
+			_ = os.Remove(dbPath)
+			return nil, fmt.Errorf("close temporary read-only database: %w", err)
+		}
+		removeDBOnCleanup = true
+	}
+	database, err := appdb.OpenDB(ctx, dbPath)
 	if err != nil {
+		if removeDBOnCleanup {
+			_ = os.Remove(dbPath)
+		}
 		return nil, err
 	}
 	cleanup := func() {
 		_ = database.Close()
+		if removeDBOnCleanup {
+			_ = os.Remove(dbPath)
+			_ = os.Remove(dbPath + "-wal")
+			_ = os.Remove(dbPath + "-shm")
+		}
 	}
-	if _, err := appdb.InitIfNeeded(ctx, database); err != nil {
-		cleanup()
-		return nil, fmt.Errorf("init database schema: %w", err)
-	}
-	if err := appdb.EnsureChainSchema(ctx, database); err != nil {
-		cleanup()
-		return nil, fmt.Errorf("ensure chain schema: %w", err)
-	}
-	if err := rtpkg.EnsureProjectRecord(ctx, database, cfg); err != nil {
-		cleanup()
-		return nil, fmt.Errorf("ensure project record: %w", err)
+	if removeDBOnCleanup {
+		if _, err := appdb.InitIfNeeded(ctx, database); err != nil {
+			cleanup()
+			return nil, fmt.Errorf("init database schema: %w", err)
+		}
+		if err := appdb.EnsureChainSchema(ctx, database); err != nil {
+			cleanup()
+			return nil, fmt.Errorf("ensure chain schema: %w", err)
+		}
 	}
 	brainBackend, closeBrain, err := rtpkg.BuildBrainBackend(ctx, cfg.Brain, slog.New(slog.DiscardHandler))
 	if err != nil {
@@ -122,10 +158,77 @@ func (s *Service) Close() {
 	if s == nil || s.rt == nil {
 		return
 	}
+	s.stopActiveStarts(activeStartShutdownTimeout)
 	cleanup := s.rt.Cleanup
 	s.rt = nil
 	if cleanup != nil {
 		cleanup()
+	}
+}
+
+func (s *Service) registerActiveStart(chainID string, cancel context.CancelFunc, done <-chan startChainDone) {
+	if s == nil || strings.TrimSpace(chainID) == "" || cancel == nil || done == nil {
+		return
+	}
+	s.activeMu.Lock()
+	defer s.activeMu.Unlock()
+	if s.activeStarts == nil {
+		s.activeStarts = make(map[string]*activeStart)
+	}
+	s.activeStarts[chainID] = &activeStart{cancel: cancel, done: done}
+}
+
+func (s *Service) unregisterActiveStart(chainID string) {
+	if s == nil || strings.TrimSpace(chainID) == "" {
+		return
+	}
+	s.activeMu.Lock()
+	defer s.activeMu.Unlock()
+	delete(s.activeStarts, chainID)
+}
+
+func (s *Service) cancelActiveStart(chainID string) bool {
+	if s == nil || strings.TrimSpace(chainID) == "" {
+		return false
+	}
+	s.activeMu.Lock()
+	active := s.activeStarts[chainID]
+	s.activeMu.Unlock()
+	if active == nil || active.cancel == nil {
+		return false
+	}
+	active.cancel()
+	return true
+}
+
+func (s *Service) stopActiveStarts(timeout time.Duration) {
+	if s == nil {
+		return
+	}
+	s.activeMu.Lock()
+	active := make(map[string]*activeStart, len(s.activeStarts))
+	for chainID, start := range s.activeStarts {
+		active[chainID] = start
+	}
+	s.activeMu.Unlock()
+	if len(active) == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	for chainID := range active {
+		_, _ = s.CancelChain(ctx, chainID)
+	}
+	for chainID, start := range active {
+		if start == nil || start.done == nil {
+			continue
+		}
+		select {
+		case <-start.done:
+			s.unregisterActiveStart(chainID)
+		case <-ctx.Done():
+			return
+		}
 	}
 }
 

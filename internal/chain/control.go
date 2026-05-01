@@ -181,7 +181,7 @@ func LatestActiveExecution(events []Event) (ActiveExecution, bool) {
 			if err := json.Unmarshal([]byte(event.EventData), &payload); err != nil {
 				continue
 			}
-			if payload.OrchestratorPID <= 0 {
+			if payload.OrchestratorPID <= 0 && payload.ExecutionID == "" {
 				continue
 			}
 			if payload.ActiveExecution != nil && !*payload.ActiveExecution {

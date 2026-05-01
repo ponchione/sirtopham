@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/ponchione/sodoryard/internal/chaininput"
 	"github.com/ponchione/sodoryard/internal/operator"
 )
 
@@ -167,23 +168,7 @@ func (m *Model) setLaunchFieldText(value string) {
 }
 
 func parseLaunchSpecs(value string) []string {
-	if strings.TrimSpace(value) == "" {
-		return nil
-	}
-	seen := map[string]struct{}{}
-	var specs []string
-	for _, part := range strings.Split(value, ",") {
-		spec := strings.TrimSpace(part)
-		if spec == "" {
-			continue
-		}
-		if _, ok := seen[spec]; ok {
-			continue
-		}
-		seen[spec] = struct{}{}
-		specs = append(specs, spec)
-	}
-	return specs
+	return chaininput.ParseSpecs(value)
 }
 
 func firstLaunchRole(roles []operator.AgentRoleSummary) string {

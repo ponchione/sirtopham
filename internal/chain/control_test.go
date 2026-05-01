@@ -224,6 +224,30 @@ func TestLatestActiveExecutionReturnsLatestNonTerminalRegistration(t *testing.T)
 	}
 }
 
+func TestLatestActiveExecutionAllowsInProcessExecutionWithoutSignalPID(t *testing.T) {
+	ctx := context.Background()
+	store := NewStore(newChainTestDB(t))
+	chainID, err := store.StartChain(ctx, ChainSpec{MaxSteps: 5, MaxResolverLoops: 1, MaxDuration: 1, TokenBudget: 10})
+	if err != nil {
+		t.Fatalf("StartChain returned error: %v", err)
+	}
+	if err := store.LogEvent(ctx, chainID, "", EventChainStarted, map[string]any{"orchestrator_pid": 0, "execution_id": "exec-embedded", "active_execution": true}); err != nil {
+		t.Fatalf("LogEvent returned error: %v", err)
+	}
+
+	events, err := store.ListEvents(ctx, chainID)
+	if err != nil {
+		t.Fatalf("ListEvents returned error: %v", err)
+	}
+	exec, ok := LatestActiveExecution(events)
+	if !ok {
+		t.Fatal("LatestActiveExecution() ok = false, want true")
+	}
+	if exec.ExecutionID != "exec-embedded" || exec.OrchestratorPID != 0 {
+		t.Fatalf("LatestActiveExecution() = %+v, want exec-embedded/0", exec)
+	}
+}
+
 func TestLatestActiveStepProcessSkipsExitedProcess(t *testing.T) {
 	ctx := context.Background()
 	store := NewStore(newChainTestDB(t))

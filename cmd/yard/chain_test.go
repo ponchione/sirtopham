@@ -262,8 +262,8 @@ func TestApplyYardChainOverrides(t *testing.T) {
 	}
 }
 
-func TestYardParseSpecsTrimsWhitespaceAndDropsEmptyEntries(t *testing.T) {
-	got := yardParseSpecs(" specs/a.md, , specs/b.md ,, ")
+func TestYardParseSpecsTrimsWhitespaceDropsEmptyEntriesAndDeduplicates(t *testing.T) {
+	got := yardParseSpecs(" specs/a.md, , specs/b.md, specs/a.md ,, ")
 	want := []string{"specs/a.md", "specs/b.md"}
 	if len(got) != len(want) {
 		t.Fatalf("len(yardParseSpecs()) = %d, want %d (%v)", len(got), len(want), got)

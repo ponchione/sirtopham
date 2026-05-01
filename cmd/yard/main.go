@@ -31,7 +31,6 @@ func newRootCmd() *cobra.Command {
 	rootCmd.AddCommand(
 		newInitCmd(),
 		newYardServeCmd(&configPath),
-		newYardRunCmd(&configPath),
 		newYardIndexCmd(&configPath),
 		newYardAuthCmd(&configPath),
 		newYardDoctorCmd(&configPath),

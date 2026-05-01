@@ -46,18 +46,21 @@ func (s *Service) setChainStatus(ctx context.Context, chainID string, targetStat
 		result.Message = "already " + fallbackMessage
 		return result, nil
 	}
-	if nextStatus == "cancel_requested" {
-		pids, signalErr := s.signalActiveChainProcesses(ctx, store, chainID)
-		result.SignaledPIDs = pids
-		if signalErr != nil {
-			result.Warnings = append(result.Warnings, warningf("signal active chain process: %v", signalErr))
-		}
-	}
 	if err := store.SetChainStatus(ctx, chainID, nextStatus); err != nil {
 		return ControlResult{}, err
 	}
 	if err := store.LogEvent(ctx, chainID, "", eventType, map[string]any{"status": nextStatus}); err != nil {
 		return ControlResult{}, err
+	}
+	if nextStatus == "cancel_requested" {
+		if s.cancelActiveStart(chainID) {
+			result.Warnings = append(result.Warnings, warningf("cancelled in-process chain runner"))
+		}
+		pids, signalErr := s.signalActiveChainProcesses(ctx, store, chainID)
+		result.SignaledPIDs = pids
+		if signalErr != nil {
+			result.Warnings = append(result.Warnings, warningf("signal active chain process: %v", signalErr))
+		}
 	}
 	return result, nil
 }
@@ -79,12 +82,22 @@ func (s *Service) signalActiveChainProcesses(ctx context.Context, store *chain.S
 		}
 	}
 	if exec, ok := chain.LatestActiveExecution(events); ok && exec.OrchestratorPID > 0 {
+		if currentPID := s.currentProcessID(); currentPID > 0 && exec.OrchestratorPID == currentPID {
+			return signaled, firstErr
+		}
 		signaled = append(signaled, exec.OrchestratorPID)
 		if err := s.processSignaler(exec.OrchestratorPID); err != nil && !errors.Is(err, ErrProcessNotRunning) && firstErr == nil {
 			firstErr = err
 		}
 	}
 	return signaled, firstErr
+}
+
+func (s *Service) currentProcessID() int {
+	if s == nil || s.processID == nil {
+		return 0
+	}
+	return s.processID()
 }
 
 func controlStatusMessage(targetStatus string, persistedStatus string, fallback string) string {

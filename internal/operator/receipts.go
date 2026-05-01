@@ -28,10 +28,36 @@ func (s *Service) ReadReceipt(ctx context.Context, chainID string, step string) 
 		return ReceiptView{}, err
 	}
 	content, err := backend.ReadDocument(ctx, path)
+	if err != nil && step == "" {
+		fallbackPath, ok := s.defaultStepReceiptPath(ctx, chainID)
+		if ok {
+			fallbackContent, fallbackErr := backend.ReadDocument(ctx, fallbackPath)
+			if fallbackErr == nil {
+				return ReceiptView{ChainID: chainID, Step: step, Path: fallbackPath, Content: fallbackContent}, nil
+			}
+		}
+	}
 	if err != nil {
 		return ReceiptView{}, err
 	}
 	return ReceiptView{ChainID: chainID, Step: step, Path: path, Content: content}, nil
+}
+
+func (s *Service) defaultStepReceiptPath(ctx context.Context, chainID string) (string, bool) {
+	store, err := s.store()
+	if err != nil {
+		return "", false
+	}
+	steps, err := store.ListSteps(ctx, chainID)
+	if err != nil {
+		return "", false
+	}
+	for _, step := range steps {
+		if step.ReceiptPath != "" {
+			return step.ReceiptPath, true
+		}
+	}
+	return "", false
 }
 
 func receiptPathForStep(chainID string, step string, steps []chain.Step) (string, bool) {

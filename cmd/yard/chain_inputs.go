@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/ponchione/sodoryard/internal/chaininput"
 	appconfig "github.com/ponchione/sodoryard/internal/config"
 )
 
@@ -36,15 +37,5 @@ func applyYardChainOverrides(cfg *appconfig.Config, flags yardChainFlags) {
 }
 
 func yardParseSpecs(specs string) []string {
-	if strings.TrimSpace(specs) == "" {
-		return nil
-	}
-	parts := strings.Split(specs, ",")
-	out := make([]string, 0, len(parts))
-	for _, part := range parts {
-		if trimmed := strings.TrimSpace(part); trimmed != "" {
-			out = append(out, trimmed)
-		}
-	}
-	return out
+	return chaininput.ParseSpecs(specs)
 }

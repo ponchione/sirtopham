@@ -225,6 +225,14 @@ func runOneStepMode(ctx context.Context, rt *rtpkg.OrchestratorRuntime, opts Opt
 		if errors.Is(err, tool.ErrChainComplete) {
 			return finishControlledChain(ctx, rt.ChainStore, chainID, watch, opts.WatchFlushTimeout)
 		}
+		cleanupCtx := context.WithoutCancel(ctx)
+		if finalizeErr := finalizeRequestedChainStatus(cleanupCtx, rt.ChainStore, chainID); finalizeErr != nil {
+			return nil, finalizeErr
+		}
+		status := terminalStatus(cleanupCtx, rt.ChainStore, chainID)
+		if status == "cancelled" || status == "paused" {
+			return finishControlledChain(cleanupCtx, rt.ChainStore, chainID, watch, opts.WatchFlushTimeout)
+		}
 		return nil, err
 	}
 	if err := finalizeRequestedChainStatus(ctx, rt.ChainStore, chainID); err != nil {
@@ -457,6 +465,21 @@ func closeErroredExecution(ctx context.Context, store *chain.Store, chainID stri
 	events := mustListEvents(ctx, store, chainID)
 	if _, ok := chain.LatestActiveExecution(events); !ok {
 		return nil
+	}
+	ch, err := store.GetChain(ctx, chainID)
+	if err != nil {
+		return err
+	}
+	if finalStatus, ok := chain.FinalizeControlStatus(ch.Status); ok {
+		eventType, eventOK := chain.FinalizeControlEventType(ch.Status)
+		if !eventOK {
+			return store.SetChainStatus(ctx, chainID, finalStatus)
+		}
+		return chain.ApplyTerminalChainClosure(ctx, store, chainID, chain.TerminalChainClosure{
+			Status:    finalStatus,
+			EventType: eventType,
+			Extra:     map[string]any{"finalized_from": ch.Status},
+		})
 	}
 	return chain.ApplyTerminalChainClosure(ctx, store, chainID, chain.TerminalChainClosure{
 		Status:    "failed",

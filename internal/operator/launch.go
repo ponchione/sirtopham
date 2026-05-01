@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/ponchione/sodoryard/internal/chaininput"
 	"github.com/ponchione/sodoryard/internal/chainrun"
 )
 
@@ -88,24 +90,41 @@ func (s *Service) StartChain(ctx context.Context, req LaunchRequest) (StartResul
 		TokenBudget:      req.TokenBudget,
 	}
 	chainIDCh := make(chan string, 1)
+	doneCh := make(chan startChainDone, 1)
+	runnerCtx, runnerCancel := context.WithCancel(context.WithoutCancel(ctx))
+	var startedMu sync.Mutex
+	startedChainID := ""
+	setStartedChainID := func(chainID string) {
+		startedMu.Lock()
+		startedChainID = chainID
+		startedMu.Unlock()
+	}
+	getStartedChainID := func() string {
+		startedMu.Lock()
+		defer startedMu.Unlock()
+		return startedChainID
+	}
 	startOpts.OnChainID = func(chainID string) {
+		setStartedChainID(chainID)
+		s.registerActiveStart(chainID, runnerCancel, doneCh)
 		select {
 		case chainIDCh <- chainID:
 		default:
 		}
 	}
-	doneCh := make(chan startChainDone, 1)
 	starter := s.chainStarter
 	if starter == nil {
 		starter = chainrun.Start
 	}
-	processID := s.processID
-	if processID == nil {
-		processID = func() int { return 0 }
-	}
 	go func() {
-		result, err := starter(context.WithoutCancel(ctx), cfg, startOpts, chainrun.Deps{BuildRuntime: s.buildRuntime, ProcessID: processID})
+		defer func() {
+			if chainID := getStartedChainID(); chainID != "" {
+				s.unregisterActiveStart(chainID)
+			}
+		}()
+		result, err := starter(runnerCtx, cfg, startOpts, chainrun.Deps{BuildRuntime: s.buildRuntime, ProcessID: func() int { return 0 }})
 		if result != nil && result.ChainID != "" {
+			setStartedChainID(result.ChainID)
 			select {
 			case chainIDCh <- result.ChainID:
 			default:
@@ -126,6 +145,7 @@ func (s *Service) StartChain(ctx context.Context, req LaunchRequest) (StartResul
 		}
 		return StartResult{ChainID: done.Result.ChainID, Status: done.Result.Status, Preview: preview}, nil
 	case <-ctx.Done():
+		runnerCancel()
 		return StartResult{}, ctx.Err()
 	}
 }
@@ -138,7 +158,7 @@ type startChainDone struct {
 func normalizeLaunchRequest(req LaunchRequest) LaunchRequest {
 	req.Role = strings.TrimSpace(req.Role)
 	req.SourceTask = strings.TrimSpace(req.SourceTask)
-	req.SourceSpecs = normalizeSourceSpecs(req.SourceSpecs)
+	req.SourceSpecs = chaininput.NormalizeSpecs(req.SourceSpecs)
 	if req.Mode == "" {
 		if req.Role != "" {
 			req.Mode = LaunchModeOneStep
@@ -165,23 +185,6 @@ func withLaunchDefaults(req LaunchRequest) LaunchRequest {
 		req.TokenBudget = 5_000_000
 	}
 	return req
-}
-
-func normalizeSourceSpecs(specs []string) []string {
-	seen := map[string]struct{}{}
-	normalized := make([]string, 0, len(specs))
-	for _, spec := range specs {
-		spec = strings.TrimSpace(spec)
-		if spec == "" {
-			continue
-		}
-		if _, ok := seen[spec]; ok {
-			continue
-		}
-		seen[spec] = struct{}{}
-		normalized = append(normalized, spec)
-	}
-	return normalized
 }
 
 func compileLaunchTask(req LaunchRequest) string {

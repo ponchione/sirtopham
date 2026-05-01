@@ -12,3 +12,12 @@ func TestRootCommandRegistersTUI(t *testing.T) {
 		t.Fatalf("Find(tui) = %#v, want tui command", cmd)
 	}
 }
+
+func TestRootCommandDoesNotRegisterPublicRun(t *testing.T) {
+	root := newRootCmd()
+	for _, cmd := range root.Commands() {
+		if cmd.Name() == "run" {
+			t.Fatal("root command still registers public run command")
+		}
+	}
+}
