@@ -281,10 +281,10 @@ PROJECT_DIR=/path/to/project docker compose run --rm yard yard brain index
 PROJECT_DIR=/path/to/project docker compose run --rm yard yard chain start --task "do the thing"
 ```
 
-For browser access to `yard serve` from a one-shot container, publish the port and bind the server to all interfaces:
+For browser access to `yard serve` from a one-shot container, publish the port and explicitly allow the all-interfaces bind. Only use this on a trusted network:
 
 ```bash
-PROJECT_DIR=/path/to/project docker compose run --rm -p 8090:8090 yard yard serve --host 0.0.0.0
+PROJECT_DIR=/path/to/project docker compose run --rm -p 8090:8090 yard yard serve --host 0.0.0.0 --allow-external
 ```
 
 For `yard index` or `yard brain index` inside the container, make sure the mounted project's `yard.yaml` points embedding and local-service URLs at addresses reachable from that container. If the repo-owned local LLM stack is running on the same `llm-net` network, use service names such as `http://nomic-embed:12435` instead of `localhost`.

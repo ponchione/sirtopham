@@ -26,6 +26,7 @@ server:
   port: 8090
   dev_mode: false
   open_browser: false
+  allow_external: false
 
 routing:
   default:

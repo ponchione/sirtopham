@@ -99,10 +99,11 @@ func (d Duration) Duration() time.Duration {
 }
 
 type ServerConfig struct {
-	Host        string `yaml:"host"`
-	Port        int    `yaml:"port"`
-	DevMode     bool   `yaml:"dev_mode"`
-	OpenBrowser bool   `yaml:"open_browser"`
+	Host          string `yaml:"host"`
+	Port          int    `yaml:"port"`
+	DevMode       bool   `yaml:"dev_mode"`
+	OpenBrowser   bool   `yaml:"open_browser"`
+	AllowExternal bool   `yaml:"allow_external"`
 }
 
 type RoutingConfig struct {
@@ -250,10 +251,11 @@ func Default() *Config {
 		ServerPort:  defaultServerPort,
 		ServerHost:  defaultServerHost,
 		Server: ServerConfig{
-			Host:        defaultServerHost,
-			Port:        defaultServerPort,
-			DevMode:     false,
-			OpenBrowser: true,
+			Host:          defaultServerHost,
+			Port:          defaultServerPort,
+			DevMode:       false,
+			OpenBrowser:   true,
+			AllowExternal: false,
 		},
 		Routing: RoutingConfig{
 			Default: RouteConfig{

@@ -55,6 +55,9 @@ func TestLoadMissingFileReturnsDefaults(t *testing.T) {
 	if cfg.Server.Host != defaultServerHost {
 		t.Fatalf("Server.Host = %q, want %q", cfg.Server.Host, defaultServerHost)
 	}
+	if cfg.Server.AllowExternal {
+		t.Fatal("Server.AllowExternal = true, want false")
+	}
 	if cfg.Routing.Default.Provider != "codex" {
 		t.Fatalf("Routing.Default.Provider = %q, want codex", cfg.Routing.Default.Provider)
 	}
@@ -124,6 +127,7 @@ func TestLoadPartialYAMLOverridesSpecifiedFields(t *testing.T) {
 		"log_level: debug\n" +
 		"server:\n" +
 		"  port: 9000\n" +
+		"  allow_external: true\n" +
 		"agent:\n" +
 		"  shell_timeout_seconds: 60\n" +
 		"  tool_result_store_root: \"" + filepath.Join(projectRoot, ".artifacts", "tool-results") + "\"\n" +
@@ -160,6 +164,9 @@ func TestLoadPartialYAMLOverridesSpecifiedFields(t *testing.T) {
 	}
 	if cfg.Server.Host != defaultServerHost {
 		t.Fatalf("Server.Host = %q, want default %q", cfg.Server.Host, defaultServerHost)
+	}
+	if !cfg.Server.AllowExternal {
+		t.Fatal("Server.AllowExternal = false, want true")
 	}
 	if cfg.Brain.Enabled {
 		t.Fatal("Brain.Enabled = true, want false")

@@ -3,10 +3,12 @@ package main
 import (
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"os/exec"
 	"os/signal"
 	goruntime "runtime"
+	"strings"
 	"syscall"
 	"time"
 
@@ -23,27 +25,29 @@ import (
 
 func newYardServeCmd(configPath *string) *cobra.Command {
 	var (
-		portOverride int
-		hostOverride string
-		devMode      bool
+		portOverride  int
+		hostOverride  string
+		devMode       bool
+		allowExternal bool
 	)
 
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Start the web UI and API server",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runYardServe(cmd, *configPath, portOverride, hostOverride, devMode)
+			return runYardServe(cmd, *configPath, portOverride, hostOverride, devMode, allowExternal)
 		},
 	}
 
 	cmd.Flags().IntVar(&portOverride, "port", 0, "Override server port")
 	cmd.Flags().StringVar(&hostOverride, "host", "", "Override server host")
 	cmd.Flags().BoolVar(&devMode, "dev", false, "Enable development mode")
+	cmd.Flags().BoolVar(&allowExternal, "allow-external", false, "Allow listening on a non-loopback host")
 
 	return cmd
 }
 
-func runYardServe(cmd *cobra.Command, configPath string, portOverride int, hostOverride string, devMode bool) error {
+func runYardServe(cmd *cobra.Command, configPath string, portOverride int, hostOverride string, devMode bool, allowExternal bool) error {
 	cfg, err := appconfig.Load(configPath)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
@@ -56,6 +60,12 @@ func runYardServe(cmd *cobra.Command, configPath string, portOverride int, hostO
 	}
 	if devMode {
 		cfg.Server.DevMode = true
+	}
+	if allowExternal {
+		cfg.Server.AllowExternal = true
+	}
+	if err := validateYardServeBind(cfg.Server.Host, cfg.Server.AllowExternal); err != nil {
+		return err
 	}
 
 	rt, err := rtpkg.BuildEngineRuntime(cmd.Context(), cfg)
@@ -134,6 +144,30 @@ func runYardServe(cmd *cobra.Command, configPath string, portOverride int, hostO
 	agentLoop.Cancel()
 	logger.Info("shutdown complete")
 	return nil
+}
+
+func validateYardServeBind(host string, allowExternal bool) error {
+	if allowExternal || yardServeHostIsLoopback(host) {
+		return nil
+	}
+	displayHost := host
+	if strings.TrimSpace(displayHost) == "" {
+		displayHost = "<empty>"
+	}
+	return fmt.Errorf("refusing to listen on non-loopback host %q without explicit external access; use --allow-external or set server.allow_external: true only on a trusted network", displayHost)
+}
+
+func yardServeHostIsLoopback(host string) bool {
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return false
+	}
+	host = strings.TrimPrefix(strings.TrimSuffix(host, "]"), "[")
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func yardLaunchBrowser(url string, logger *slog.Logger) {
