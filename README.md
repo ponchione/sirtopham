@@ -320,8 +320,8 @@ Current repo state:
 - `tidmouth` remains only as the internal engine binary required by the current spawn contract.
 - Live packaging/install surfaces no longer ship unsupported `sodoryard` or placeholder `knapford` binaries.
 - The active UI direction is terminal-first: `yard tui` is now implemented as the initial daily-driver operator console, while `yard serve` remains the browser/API surface for rich inspection. This direction is specified in `docs/specs/20-operator-console-tui.md` and `docs/specs/21-web-inspector.md`.
-- Implemented TUI/operator work includes readiness metadata, recent chain and detail views, receipt summaries/content, event following, pause/cancel controls, receipt opening through `$PAGER`/`$EDITOR`, and launch preview/start for one-step and orchestrated chains.
-- Remaining TUI-first work includes constrained orchestration, search/filter across chains and receipts, open-in-web handoffs, persistent launch drafts, and presets.
+- Implemented TUI/operator work includes readiness metadata, recent chain and detail views, receipt summaries/content, event following, pause/cancel controls, receipt opening through `$PAGER`/`$EDITOR`, launch preview/start for one-step and orchestrated chains, and search/filter across chains and receipts.
+- Remaining TUI-first work includes constrained orchestration, open-in-web handoffs, persistent launch drafts, and presets.
 - The remaining active docs are the README, current specs, `NEXT_SESSION_HANDOFF.md`, and `TUI_IMPLEMENTATION_PLAN.md`; stale migration/implementation-plan markdown is being removed rather than treated as archival guidance.
 
 If you are resuming work cold, read in this order:
@@ -340,7 +340,7 @@ First thing to address next session:
 - keep `tidmouth` limited to the internal engine contract (`run`, `index`) unless you explicitly redesign the spawn contract too
 - keep operator-facing docs aligned with the actual `yard` / container / runtime surface
 - keep TUI-first docs clear about target behavior versus already-implemented commands
-- choose the next implementation slice from constrained orchestration, search/filter, open-in-web handoffs, persistent launch drafts, or presets
+- choose the next implementation slice from constrained orchestration, open-in-web handoffs, persistent launch drafts, or presets
 - rerun `make test` and `make build` after each narrow slice
 
 Useful commands:

@@ -243,6 +243,161 @@ func TestModelLoadsSelectedReceipt(t *testing.T) {
 	}
 }
 
+func TestModelFiltersChainsAndKeepsVisibleSelection(t *testing.T) {
+	model := NewModel(newFakeOperator(), Options{RefreshInterval: -1})
+	loaded, _ := model.Update(model.refreshCmd()())
+	got := loaded.(Model)
+	got.screen = screenChains
+	got.chainCursor = 1
+	loaded, _ = got.Update(got.refreshCmd()())
+	got = loaded.(Model)
+	if got.detail == nil || got.detail.Chain.ID != "chain-2" {
+		t.Fatalf("detail = %+v, want chain-2 before filter", got.detail)
+	}
+
+	updated, cmd := got.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	got = updated.(Model)
+	if cmd != nil {
+		t.Fatal("entering chain filter returned command")
+	}
+	if !got.chainFilter.Editing {
+		t.Fatal("chain filter edit mode not enabled")
+	}
+	for _, r := range []rune("second") {
+		updated, cmd = got.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		got = updated.(Model)
+	}
+	if got.chainFilter.Query != "second" {
+		t.Fatalf("chain filter query = %q, want second", got.chainFilter.Query)
+	}
+	visible := got.visibleChains()
+	if len(visible) != 1 || visible[0].ID != "chain-2" || got.chainCursor != 0 {
+		t.Fatalf("visible chains = %+v cursor=%d, want only chain-2 selected", visible, got.chainCursor)
+	}
+	if cmd == nil {
+		t.Fatal("filter edit did not request refresh")
+	}
+	updated, _ = got.Update(cmd())
+	got = updated.(Model)
+	if got.detail == nil || got.detail.Chain.ID != "chain-2" {
+		t.Fatalf("detail = %+v, want filtered chain-2", got.detail)
+	}
+
+	updated, cmd = got.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	got = updated.(Model)
+	if cmd != nil {
+		t.Fatal("accepting chain filter returned command")
+	}
+	if got.chainFilter.Editing {
+		t.Fatal("enter did not leave chain filter edit mode")
+	}
+}
+
+func TestModelEscClearsAcceptedChainFilterBeforeLeavingScreen(t *testing.T) {
+	model := NewModel(newFakeOperator(), Options{RefreshInterval: -1})
+	loaded, _ := model.Update(model.refreshCmd()())
+	got := loaded.(Model)
+	got.screen = screenChains
+	got.chainFilter.Query = "second"
+	got.chainCursor = 0
+	loaded, _ = got.Update(got.refreshCmd()())
+	got = loaded.(Model)
+	if len(got.visibleChains()) != 1 {
+		t.Fatalf("visible chain count = %d, want 1 before esc", len(got.visibleChains()))
+	}
+
+	updated, cmd := got.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	got = updated.(Model)
+	if got.screen != screenChains {
+		t.Fatalf("screen = %v, want chains after clearing filter", got.screen)
+	}
+	if got.chainFilter.Query != "" {
+		t.Fatalf("chain filter query = %q, want cleared", got.chainFilter.Query)
+	}
+	if cmd == nil {
+		t.Fatal("clearing chain filter returned nil refresh command")
+	}
+	updated, _ = got.Update(cmd())
+	got = updated.(Model)
+
+	updated, cmd = got.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	got = updated.(Model)
+	if cmd != nil {
+		t.Fatal("plain esc returned command")
+	}
+	if got.screen != screenDashboard {
+		t.Fatalf("screen = %v, want dashboard after second esc", got.screen)
+	}
+}
+
+func TestModelFilterEditTextControls(t *testing.T) {
+	model := NewModel(newFakeOperator(), Options{RefreshInterval: -1})
+	loaded, _ := model.Update(model.refreshCmd()())
+	got := loaded.(Model)
+	got.screen = screenChains
+
+	updated, _ := got.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	got = updated.(Model)
+	var cmd tea.Cmd
+	for _, r := range []rune("abc") {
+		updated, cmd = got.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		got = updated.(Model)
+	}
+	if cmd == nil || got.chainFilter.Query != "abc" {
+		t.Fatalf("query=%q cmd nil=%t, want abc and refresh cmd", got.chainFilter.Query, cmd == nil)
+	}
+	updated, cmd = got.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	got = updated.(Model)
+	if cmd == nil || got.chainFilter.Query != "ab" {
+		t.Fatalf("after backspace query=%q cmd nil=%t, want ab and refresh cmd", got.chainFilter.Query, cmd == nil)
+	}
+	updated, cmd = got.Update(tea.KeyMsg{Type: tea.KeyCtrlU})
+	got = updated.(Model)
+	if cmd == nil || got.chainFilter.Query != "" {
+		t.Fatalf("after ctrl-u query=%q cmd nil=%t, want empty and refresh cmd", got.chainFilter.Query, cmd == nil)
+	}
+}
+
+func TestModelReceiptFilterUsesLoadedContent(t *testing.T) {
+	model := NewModel(newFakeOperator(), Options{RefreshInterval: -1})
+	model.screen = screenReceipts
+	loaded, _ := model.Update(model.refreshCmd()())
+	got := loaded.(Model)
+
+	updated, cmd := got.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	got = updated.(Model)
+	if cmd == nil {
+		t.Fatal("receipt move returned nil refresh command")
+	}
+	updated, _ = got.Update(cmd())
+	got = updated.(Model)
+	if got.receipt == nil || got.receipt.Content != "step receipt" {
+		t.Fatalf("selected receipt = %+v, want loaded step receipt", got.receipt)
+	}
+
+	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	got = updated.(Model)
+	if !got.receiptFilter.Editing {
+		t.Fatal("receipt filter edit mode not enabled")
+	}
+	for _, r := range []rune("step receipt") {
+		updated, cmd = got.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		got = updated.(Model)
+	}
+	visible := got.visibleReceiptItems()
+	if len(visible) != 1 || visible[0].Step != "1" {
+		t.Fatalf("visible receipts = %+v, want loaded step receipt", visible)
+	}
+	if cmd == nil {
+		t.Fatal("receipt content filter did not request refresh")
+	}
+	updated, _ = got.Update(cmd())
+	got = updated.(Model)
+	if got.receipt == nil || got.receipt.Step != "1" || got.receipt.Content != "step receipt" {
+		t.Fatalf("receipt after content filter = %+v, want step receipt", got.receipt)
+	}
+}
+
 func TestModelReceiptListDoesNotInventOrchestratorReceipt(t *testing.T) {
 	fake := newFakeOperator()
 	fake.chains = []operator.ChainSummary{{ID: "one-step", Status: "completed", SourceTask: "one step"}}

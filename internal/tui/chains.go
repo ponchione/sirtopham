@@ -6,14 +6,20 @@ import (
 )
 
 func (m Model) renderChains() string {
-	chainLines := []string{m.styles.title.Render("Chains")}
+	visibleChains := m.visibleChains()
+	chainLines := []string{
+		m.styles.title.Render("Chains"),
+		m.styles.subtle.Render(renderFilterStatus(m.chainFilter.Query, m.chainFilter.Editing, len(visibleChains), len(m.chains), "chains")),
+	}
 	if m.notice != "" {
 		chainLines = append(chainLines, m.styles.subtle.Render(m.notice))
 	}
 	if len(m.chains) == 0 {
 		chainLines = append(chainLines, m.styles.subtle.Render("No chains found."))
+	} else if len(visibleChains) == 0 {
+		chainLines = append(chainLines, m.styles.subtle.Render("No chains match the filter."))
 	} else {
-		for i, ch := range m.chains {
+		for i, ch := range visibleChains {
 			line := fmt.Sprintf("%s  %-16s  steps=%d tokens=%d  %s", ch.ID, ch.Status, ch.TotalSteps, ch.TotalTokens, trimOneLine(ch.SourceTask, 48))
 			if i == m.chainCursor {
 				line = m.styles.selected.Render("> " + line)

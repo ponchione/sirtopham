@@ -6,7 +6,11 @@ import (
 )
 
 func (m Model) renderReceipts() string {
-	lines := []string{m.styles.title.Render("Receipts")}
+	visibleItems := m.visibleReceiptItems()
+	lines := []string{
+		m.styles.title.Render("Receipts"),
+		m.styles.subtle.Render(renderFilterStatus(m.receiptFilter.Query, m.receiptFilter.Editing, len(visibleItems), len(m.receiptItems), "receipts")),
+	}
 	if m.notice != "" {
 		lines = append(lines, m.styles.subtle.Render(m.notice))
 	}
@@ -19,7 +23,11 @@ func (m Model) renderReceipts() string {
 		lines = append(lines, m.styles.subtle.Render("No receipts recorded."))
 		return strings.Join(lines, "\n")
 	}
-	for i, item := range m.receiptItems {
+	if len(visibleItems) == 0 {
+		lines = append(lines, m.styles.subtle.Render("No receipts match the filter."))
+		return strings.Join(lines, "\n")
+	}
+	for i, item := range visibleItems {
 		line := fmt.Sprintf("%-18s %s", item.Label, item.Path)
 		if i == m.receiptCursor {
 			line = m.styles.selected.Render("> " + line)

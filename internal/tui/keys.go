@@ -1,6 +1,6 @@
 package tui
 
-const footerHelp = "? help  tab screen  l launch  v preview  S start  F follow  P pause  X cancel  q quit"
+const footerHelp = "? help  tab screen  / filter  enter open  r refresh  j/k move  l launch  v preview  S start  F follow  P pause  X cancel  q quit"
 
 func nextScreen(screen appScreen) appScreen {
 	switch screen {

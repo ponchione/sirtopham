@@ -26,8 +26,8 @@ All three surfaces should converge on shared internal runtime services. The TUI 
 
 Implementation status as of 2026-05-01:
 
-- Landed: `yard tui`, shared `internal/operator` reads and controls, dashboard readiness metadata, chain/detail views, receipt summaries/content, live event follow, pause/cancel, receipt open through `$PAGER`/`$EDITOR`, and launch preview/start for `one_step_chain`, `manual_roster`, and `sir_topham_decides`.
-- Remaining: constrained orchestration, search/filter across chains and receipts, open-in-web handoffs, persistent launch drafts, and presets.
+- Landed: `yard tui`, shared `internal/operator` reads and controls, dashboard readiness metadata, chain/detail views, receipt summaries/content, live event follow, pause/cancel, receipt open through `$PAGER`/`$EDITOR`, launch preview/start for `one_step_chain`, `manual_roster`, and `sir_topham_decides`, and search/filter across chains and receipts.
+- Remaining: constrained orchestration, open-in-web handoffs, persistent launch drafts, and presets.
 - Resume is currently a foreground command handoff: the TUI shows `yard chain resume <chain-id>` rather than continuing runner execution inside the TUI.
 
 ---
@@ -405,12 +405,12 @@ The first implementation should keep this simple and avoid hidden long-running s
 ### Phase D - Operator Polish
 
 - Built-in presets.
-- Search/filter across chains and receipts.
+- Search/filter across chains and receipts - landed.
 - Project tree file attachment.
 - Role roster actions.
 - Open-in-web handoffs.
 - Focused rendering tests for key screens.
-- Status: remaining, except focused TUI model/render tests already cover the current screens and controls.
+- Status: remaining for presets, project tree attachment, role roster actions, and open-in-web handoffs. Search/filter and focused TUI model/render tests are landed.
 
 ---
 

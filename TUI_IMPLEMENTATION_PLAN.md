@@ -22,9 +22,9 @@ Primary specs:
 - Public single-agent work is represented by `yard chain start --role ...`; `yard run` code remains for the internal headless engine helper path but is no longer registered on the public `yard` command tree.
 - `chainrun.Start` supports orchestrator mode, `one_step_chain` mode, and `manual_roster` mode. It does not yet implement constrained orchestration.
 - Bubble Tea, Bubbles, and Lip Gloss dependencies are present.
-- `yard tui` is implemented. It starts without `yard serve`, reads through `internal/operator`, and includes dashboard, chains, receipts, event follow, pause/cancel, receipt open, launch preview, and launch start flows.
+- `yard tui` is implemented. It starts without `yard serve`, reads through `internal/operator`, and includes dashboard, chains, receipts, event follow, pause/cancel, receipt open, launch preview, launch start flows, and search/filter for chains and receipts.
 - TUI resume currently shows the foreground `yard chain resume <chain-id>` command instead of continuing runner execution inside the TUI.
-- Remaining product gaps are constrained orchestration, search/filter across chains and receipts, open-in-web handoffs, persistent launch drafts, and presets.
+- Remaining product gaps are constrained orchestration, open-in-web handoffs, persistent launch drafts, and presets.
 
 ## Non-Negotiables
 
@@ -74,13 +74,13 @@ internal/server
 6. Initial TUI launch wizard for one-step and orchestrated chains.
 7. TUI readiness metadata for provider/model, index state, local services mode, active chains, and warnings.
 8. Manual roster mode through `chainrun.Start`, operator launch preview/start, and minimal TUI launch controls.
+9. TUI search/filter for chains and receipts.
 
 ## Recommended Next Order
 
-1. TUI search/filter for chains and receipts.
-2. Open-in-web handoffs that do not secretly start `yard serve`.
-3. Constrained orchestration once launch/request shapes can express role constraints cleanly.
-4. Persistent launch drafts and presets after the launch model needs durable cross-session state.
+1. Open-in-web handoffs that do not secretly start `yard serve`.
+2. Constrained orchestration once launch/request shapes can express role constraints cleanly.
+3. Persistent launch drafts and presets after the launch model needs durable cross-session state.
 
 This order keeps new work on the shared runtime path and avoids rebuilding execution behavior inside the TUI.
 
@@ -780,10 +780,9 @@ The original first slice is complete:
 
 Choose one narrow remaining slice:
 
-1. Search/filter for chains and receipts in `internal/tui`.
-2. Open-in-web handoffs that only display or use an already-running `yard serve`.
-3. Constrained orchestration once launch constraints are modeled.
-4. Persistent launch drafts and presets after durable launch records are justified.
+1. Open-in-web handoffs that only display or use an already-running `yard serve`.
+2. Constrained orchestration once launch constraints are modeled.
+3. Persistent launch drafts and presets after durable launch records are justified.
 
 For any slice, keep core operations routed through `internal/operator`, avoid Cobra shell-outs from the TUI, and run `make test` plus `make build`.
 

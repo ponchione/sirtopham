@@ -31,6 +31,11 @@ type receiptItem struct {
 	Path  string
 }
 
+type listFilter struct {
+	Query   string
+	Editing bool
+}
+
 type launchField int
 
 const (
@@ -64,9 +69,11 @@ type Model struct {
 	roles         []operator.AgentRoleSummary
 	chains        []operator.ChainSummary
 	chainCursor   int
+	chainFilter   listFilter
 	detail        *operator.ChainDetail
 	receiptItems  []receiptItem
 	receiptCursor int
+	receiptFilter listFilter
 	receipt       *operator.ReceiptView
 	viewport      viewport.Model
 
@@ -118,12 +125,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.roles = msg.Roles
 		m.ensureLaunchDefaults()
 		m.chains = msg.Chains
-		m.chainCursor = chainIndexByID(m.chains, msg.SelectedChainID, m.chainCursor)
+		m.chainCursor = chainIndexByID(m.visibleChains(), msg.SelectedChainID, m.chainCursor)
 		m.pendingChain = ""
 		m.detail = msg.Detail
 		m.receiptItems = buildReceiptItems(m.detail)
-		m.receiptCursor = clampCursor(m.receiptCursor, len(m.receiptItems))
 		m.receipt = msg.Receipt
+		m.receiptCursor = receiptIndexByKey(m.visibleReceiptItems(), msg.SelectedReceiptKey, m.receiptCursor)
 		m.lastUpdated = time.Now()
 		m.updateReceiptViewport()
 		if m.follow && m.followID == msg.SelectedChainID && m.detail != nil && !followStatusActive(m.detail.Chain.Status) {
@@ -245,16 +252,18 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
 		return m, tea.Quit
-	case "q":
-		if !m.launchEdit {
-			return m, tea.Quit
-		}
 	}
 	if m.confirm.Action != "" {
 		return m.handleConfirmationKey(msg)
 	}
 	if m.launchEdit {
 		return m.handleLaunchEditKey(msg)
+	}
+	if m.filterEditing() {
+		return m.handleFilterEditKey(msg)
+	}
+	if msg.String() == "q" {
+		return m, tea.Quit
 	}
 	switch msg.String() {
 	case "?":
@@ -270,11 +279,14 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.screen = m.previousScreen
 		} else {
 			m.screen = nextScreen(m.screen)
-			m.receiptCursor = clampCursor(m.receiptCursor, len(m.receiptItems))
+			m.receiptCursor = clampCursor(m.receiptCursor, len(m.visibleReceiptItems()))
 			m.updateReceiptViewport()
 		}
 		return m, nil
 	case "esc":
+		if cmd, ok := m.clearActiveFilter(); ok {
+			return m, cmd
+		}
 		if m.screen == screenHelp {
 			m.screen = m.previousScreen
 		} else if m.screen == screenReceipts {
@@ -312,6 +324,17 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.launchEdit = true
 			m.notice = "editing launch " + m.launchFieldLabel()
+			return m, nil
+		}
+	case "/":
+		if m.screen == screenChains {
+			m.chainFilter.Editing = true
+			m.notice = "editing chain filter"
+			return m, nil
+		}
+		if m.screen == screenReceipts {
+			m.receiptFilter.Editing = true
+			m.notice = "editing receipt filter"
 			return m, nil
 		}
 	case "F":
@@ -423,6 +446,41 @@ func (m Model) handleLaunchEditKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
+func (m Model) handleFilterEditKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEsc:
+		m.setActiveFilterEditing(false)
+		m.notice = "filter edit stopped"
+		return m, nil
+	case tea.KeyEnter:
+		m.setActiveFilterEditing(false)
+		m.notice = "filter applied"
+		return m, nil
+	case tea.KeyBackspace, tea.KeyCtrlH:
+		m.setActiveFilterQuery(dropLastRune(m.activeFilterQuery()))
+		m.err = nil
+		m.loading = true
+		return m, m.filterRefreshCmd()
+	case tea.KeyCtrlU:
+		m.setActiveFilterQuery("")
+		m.err = nil
+		m.loading = true
+		return m, m.filterRefreshCmd()
+	case tea.KeySpace:
+		m.setActiveFilterQuery(m.activeFilterQuery() + " ")
+		m.err = nil
+		m.loading = true
+		return m, m.filterRefreshCmd()
+	case tea.KeyRunes:
+		m.setActiveFilterQuery(m.activeFilterQuery() + string(msg.Runes))
+		m.err = nil
+		m.loading = true
+		return m, m.filterRefreshCmd()
+	default:
+		return m, nil
+	}
+}
+
 func (m Model) handleConfirmationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "y", "Y":
@@ -449,7 +507,7 @@ func (m Model) handleConfirmationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) pauseSelectedChain() (tea.Model, tea.Cmd) {
-	chainID := selectedChainID(m.chains, m.chainCursor)
+	chainID := m.selectedVisibleChainID()
 	if chainID == "" {
 		m.notice = "no chain selected"
 		return m, nil
@@ -464,7 +522,7 @@ func (m Model) pauseSelectedChain() (tea.Model, tea.Cmd) {
 }
 
 func (m Model) confirmCancelSelectedChain() (tea.Model, tea.Cmd) {
-	chainID := selectedChainID(m.chains, m.chainCursor)
+	chainID := m.selectedVisibleChainID()
 	if chainID == "" {
 		m.notice = "no chain selected"
 		return m, nil
@@ -480,7 +538,7 @@ func (m Model) confirmCancelSelectedChain() (tea.Model, tea.Cmd) {
 }
 
 func (m Model) showResumeCommand() (tea.Model, tea.Cmd) {
-	chainID := selectedChainID(m.chains, m.chainCursor)
+	chainID := m.selectedVisibleChainID()
 	if chainID == "" {
 		m.notice = "no chain selected"
 		return m, nil
@@ -495,7 +553,7 @@ func (m Model) showResumeCommand() (tea.Model, tea.Cmd) {
 }
 
 func (m Model) toggleFollowSelectedChain() (tea.Model, tea.Cmd) {
-	chainID := selectedChainID(m.chains, m.chainCursor)
+	chainID := m.selectedVisibleChainID()
 	if chainID == "" {
 		m.notice = "no chain selected"
 		return m, nil
@@ -552,7 +610,7 @@ func (m Model) openSelectedReceipt(mode ReceiptOpenMode) (tea.Model, tea.Cmd) {
 func (m Model) moveSelection(delta int) (tea.Model, tea.Cmd) {
 	switch m.screen {
 	case screenChains:
-		next := clampCursor(m.chainCursor+delta, len(m.chains))
+		next := clampCursor(m.chainCursor+delta, len(m.visibleChains()))
 		if next == m.chainCursor {
 			return m, nil
 		}
@@ -560,7 +618,7 @@ func (m Model) moveSelection(delta int) (tea.Model, tea.Cmd) {
 		m.loading = true
 		return m, m.refreshCmd()
 	case screenReceipts:
-		next := clampCursor(m.receiptCursor+delta, len(m.receiptItems))
+		next := clampCursor(m.receiptCursor+delta, len(m.visibleReceiptItems()))
 		if next == m.receiptCursor {
 			return m, nil
 		}
@@ -592,10 +650,12 @@ func (m Model) refreshCmd() tea.Cmd {
 		if err != nil {
 			return dataLoadedMsg{Err: err}
 		}
-		selectedID := selectedChainID(chains, m.chainCursor)
+		selectedID := m.selectedVisibleChainID()
 		if m.pendingChain != "" {
 			selectedID = m.pendingChain
 		}
+		visibleChains := filterChains(chains, m.chainFilter.Query)
+		selectedID = selectedChainID(visibleChains, chainIndexByID(visibleChains, selectedID, m.chainCursor))
 		var detail *operator.ChainDetail
 		if selectedID != "" {
 			loaded, err := m.svc.GetChainDetail(ctx, selectedID)
@@ -606,15 +666,19 @@ func (m Model) refreshCmd() tea.Cmd {
 		}
 		items := buildReceiptItems(detail)
 		var receipt *operator.ReceiptView
-		if m.screen == screenReceipts && selectedID != "" && len(items) > 0 {
-			item := items[clampCursor(m.receiptCursor, len(items))]
+		selectedReceiptKey := m.selectedVisibleReceiptKey()
+		visibleReceipts := filterReceiptItems(items, m.receiptFilter.Query, m.receipt)
+		selectedReceiptIndex := receiptIndexByKey(visibleReceipts, selectedReceiptKey, m.receiptCursor)
+		if m.screen == screenReceipts && selectedID != "" && len(visibleReceipts) > 0 {
+			item := visibleReceipts[selectedReceiptIndex]
 			loaded, err := m.svc.ReadReceipt(ctx, selectedID, item.Step)
 			if err != nil {
 				return dataLoadedMsg{Err: err}
 			}
 			receipt = &loaded
+			selectedReceiptKey = receiptItemKey(item)
 		}
-		return dataLoadedMsg{Status: status, Roles: roles, Chains: chains, Detail: detail, Receipt: receipt, SelectedChainID: selectedID}
+		return dataLoadedMsg{Status: status, Roles: roles, Chains: chains, Detail: detail, Receipt: receipt, SelectedChainID: selectedID, SelectedReceiptKey: selectedReceiptKey}
 	}
 }
 
@@ -777,6 +841,14 @@ func selectedChainID(chains []operator.ChainSummary, cursor int) string {
 	return chains[clampCursor(cursor, len(chains))].ID
 }
 
+func (m Model) selectedVisibleChainID() string {
+	return selectedChainID(m.visibleChains(), m.chainCursor)
+}
+
+func (m Model) visibleChains() []operator.ChainSummary {
+	return filterChains(m.chains, m.chainFilter.Query)
+}
+
 func chainIndexByID(chains []operator.ChainSummary, chainID string, fallback int) int {
 	if chainID != "" {
 		for i, ch := range chains {
@@ -817,7 +889,7 @@ func buildReceiptItems(detail *operator.ChainDetail) []receiptItem {
 }
 
 func (m Model) selectedChainStatus() string {
-	chainID := selectedChainID(m.chains, m.chainCursor)
+	chainID := m.selectedVisibleChainID()
 	if chainID == "" {
 		return ""
 	}
@@ -872,12 +944,12 @@ func followStatusActive(status string) bool {
 }
 
 func (m *Model) applyFollowDetail(detail operator.ChainDetail) {
-	if selectedChainID(m.chains, m.chainCursor) != detail.Chain.ID {
+	if m.selectedVisibleChainID() != detail.Chain.ID {
 		return
 	}
 	m.detail = &detail
 	m.receiptItems = buildReceiptItems(m.detail)
-	m.receiptCursor = clampCursor(m.receiptCursor, len(m.receiptItems))
+	m.receiptCursor = clampCursor(m.receiptCursor, len(m.visibleReceiptItems()))
 	for i := range m.chains {
 		if m.chains[i].ID != detail.Chain.ID {
 			continue
@@ -887,6 +959,104 @@ func (m *Model) applyFollowDetail(detail operator.ChainDetail) {
 		m.chains[i].TotalTokens = detail.Chain.TotalTokens
 		m.chains[i].UpdatedAt = detail.Chain.UpdatedAt
 		break
+	}
+}
+
+func (m Model) selectedVisibleReceiptKey() string {
+	items := m.visibleReceiptItems()
+	if len(items) == 0 {
+		return ""
+	}
+	return receiptItemKey(items[clampCursor(m.receiptCursor, len(items))])
+}
+
+func (m Model) visibleReceiptItems() []receiptItem {
+	return filterReceiptItems(m.receiptItems, m.receiptFilter.Query, m.receipt)
+}
+
+func receiptItemKey(item receiptItem) string {
+	return item.Step + "\x00" + item.Path
+}
+
+func receiptIndexByKey(items []receiptItem, key string, fallback int) int {
+	if key != "" {
+		for i, item := range items {
+			if receiptItemKey(item) == key {
+				return i
+			}
+		}
+	}
+	return clampCursor(fallback, len(items))
+}
+
+func (m Model) filterEditing() bool {
+	return (m.screen == screenChains && m.chainFilter.Editing) || (m.screen == screenReceipts && m.receiptFilter.Editing)
+}
+
+func (m Model) activeFilterQuery() string {
+	if m.screen == screenReceipts {
+		return m.receiptFilter.Query
+	}
+	return m.chainFilter.Query
+}
+
+func (m *Model) setActiveFilterEditing(editing bool) {
+	switch m.screen {
+	case screenChains:
+		m.chainFilter.Editing = editing
+	case screenReceipts:
+		m.receiptFilter.Editing = editing
+	}
+}
+
+func (m *Model) setActiveFilterQuery(query string) {
+	switch m.screen {
+	case screenChains:
+		selectedID := m.selectedVisibleChainID()
+		m.chainFilter.Query = query
+		m.chainCursor = chainIndexByID(m.visibleChains(), selectedID, m.chainCursor)
+	case screenReceipts:
+		selectedKey := m.selectedVisibleReceiptKey()
+		m.receiptFilter.Query = query
+		m.receiptCursor = receiptIndexByKey(m.visibleReceiptItems(), selectedKey, m.receiptCursor)
+	}
+}
+
+func (m Model) filterRefreshCmd() tea.Cmd {
+	switch m.screen {
+	case screenChains, screenReceipts:
+		return m.refreshCmd()
+	default:
+		return nil
+	}
+}
+
+func (m *Model) clearActiveFilter() (tea.Cmd, bool) {
+	switch m.screen {
+	case screenChains:
+		if strings.TrimSpace(m.chainFilter.Query) == "" {
+			return nil, false
+		}
+		selectedID := m.selectedVisibleChainID()
+		m.chainFilter.Query = ""
+		m.chainFilter.Editing = false
+		m.chainCursor = chainIndexByID(m.visibleChains(), selectedID, m.chainCursor)
+		m.notice = "chain filter cleared"
+		m.loading = true
+		return m.filterRefreshCmd(), true
+	case screenReceipts:
+		if strings.TrimSpace(m.receiptFilter.Query) == "" {
+			return nil, false
+		}
+		selectedKey := m.selectedVisibleReceiptKey()
+		m.receiptFilter.Query = ""
+		m.receiptFilter.Editing = false
+		m.receiptCursor = receiptIndexByKey(m.visibleReceiptItems(), selectedKey, m.receiptCursor)
+		m.notice = "receipt filter cleared"
+		m.loading = true
+		return m.filterRefreshCmd(), true
+	default:
+		return nil, false
 	}
 }
 

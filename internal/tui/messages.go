@@ -8,13 +8,14 @@ import (
 )
 
 type dataLoadedMsg struct {
-	Status          operator.RuntimeStatus
-	Roles           []operator.AgentRoleSummary
-	Chains          []operator.ChainSummary
-	Detail          *operator.ChainDetail
-	Receipt         *operator.ReceiptView
-	SelectedChainID string
-	Err             error
+	Status             operator.RuntimeStatus
+	Roles              []operator.AgentRoleSummary
+	Chains             []operator.ChainSummary
+	Detail             *operator.ChainDetail
+	Receipt            *operator.ReceiptView
+	SelectedChainID    string
+	SelectedReceiptKey string
+	Err                error
 }
 
 type controlMsg struct {
