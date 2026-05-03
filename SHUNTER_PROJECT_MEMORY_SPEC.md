@@ -28,7 +28,7 @@ The live runtime path no longer reads or writes `.brain/` during normal use.
 Agents interact with project memory through Sodoryard tools and runtime
 interfaces backed by Shunter.
 
-The human-facing affordance is Sodoryard itself: `yard tui`, `yard serve`,
+The human-facing affordance is Sodoryard itself: `yard`, `yard serve`,
 chain views, receipt views, brain search/read/write tools, and explicit export
 commands. Obsidian compatibility is not a requirement.
 
@@ -90,7 +90,7 @@ memory:
 The parent Yard process owns this runtime:
 
 - `yard serve`
-- `yard tui`
+- `yard`
 - `yard chain start`
 - any long-lived operator process that spawns step engines
 
@@ -599,7 +599,7 @@ Exit criteria:
 
 Exit criteria:
 
-- `yard serve`, `yard tui`, and agent turn persistence work from Shunter.
+- `yard serve`, `yard`, and agent turn persistence work from Shunter.
 - Context inspector reads reports from Shunter.
 - Existing conversation tests pass against Shunter-backed store.
 

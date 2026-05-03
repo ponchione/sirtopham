@@ -22,7 +22,7 @@ Primary specs:
 - Public single-agent work is represented by `yard chain start --role ...`; `yard run` code remains for the internal headless engine helper path but is no longer registered on the public `yard` command tree.
 - `chainrun.Start` supports orchestrator mode, `one_step_chain` mode, `manual_roster` mode, and `constrained_orchestration` mode. Constrained orchestration reuses the orchestrator runner and injects an allowed-role list into the orchestrator task packet.
 - Bubble Tea, Bubbles, and Lip Gloss dependencies are present.
-- `yard tui` is implemented. It starts without `yard serve`, reads through `internal/operator`, and includes dashboard, chains, receipts, chain and receipt filtering, event follow, pause/cancel, receipt open, web-inspector target handoffs, built-in/custom launch presets, persistent current launch drafts, launch role-list add/remove/clear controls, launch preview, and launch start flows.
+- Bare `yard` starts the TUI. It starts without `yard serve`, reads through `internal/operator`, and includes dashboard, chains, receipts, chain and receipt filtering, event follow, pause/cancel, receipt open, web-inspector target handoffs, built-in/custom launch presets, persistent current launch drafts, launch role-list add/remove/clear controls, launch preview, and launch start flows.
 - TUI resume currently shows the foreground `yard chain resume <chain-id>` command instead of continuing runner execution inside the TUI.
 - Remaining product gaps are project tree file attachment and fuller browser inspector parity.
 
@@ -42,7 +42,7 @@ Primary specs:
 cmd/yard
   cobra command wiring only
   yard chain ... calls internal services
-  yard tui calls internal/tui
+  bare yard calls internal/tui
   yard serve calls internal/server
 
 internal/operator
@@ -68,7 +68,7 @@ internal/server
 
 1. Shared operator service/read model.
 2. CLI chain read/control migration onto `internal/operator`.
-3. Read-only `yard tui` skeleton.
+3. Read-only TUI skeleton.
 4. One-step chain contract via `yard chain start --role ...`.
 5. TUI event follow, pause/cancel, receipt summaries, and receipt open handoffs.
 6. Initial TUI launch wizard for one-step and orchestrated chains.
@@ -198,7 +198,7 @@ make build
 
 ## Phase 2: Read-Only TUI Skeleton - Landed
 
-Goal: add `yard tui` and a working full-screen read-only console.
+Goal: make `yard` open a working full-screen read-only console.
 
 Dependencies:
 
@@ -281,7 +281,7 @@ Implementation notes:
 
 Acceptance:
 
-- `yard tui` starts without `yard serve`.
+- `yard` starts without `yard serve`.
 - It can show chain summaries and chain detail from `.yard/yard.db`.
 - It can display receipt content.
 - It exits cleanly on `q` and handles terminal resize.
@@ -298,7 +298,7 @@ Manual smoke:
 
 ```bash
 yard chain status
-yard tui
+yard
 ```
 
 ## Phase 3: One-Step Chain Contract - Landed
@@ -474,7 +474,7 @@ Manual smoke:
 
 ```bash
 yard chain start --watch=false --task "small real task"
-yard tui
+yard
 yard chain status <chain-id>
 ```
 
@@ -685,7 +685,7 @@ Write scope:
 
 Deliver:
 
-- read-only `yard tui`
+- read-only `yard` TUI
 - dashboard/chains/receipts
 - model/render tests
 
@@ -821,7 +821,7 @@ For any slice, keep core operations routed through `internal/operator`, avoid Co
 The target state is:
 
 ```bash
-yard tui
+yard
 # daily driver
 
 yard chain start --role coder --task "..."

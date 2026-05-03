@@ -21,17 +21,23 @@ var runYardTUI = func(ctx context.Context, svc tuiapp.Operator, opts tuiapp.Opti
 
 func newYardTUICmd(configPath *string) *cobra.Command {
 	return &cobra.Command{
-		Use:   "tui",
-		Short: "Open the terminal operator console",
+		Use:    "tui",
+		Short:  "Open the terminal operator console",
+		Hidden: true,
+		Args:   cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			svc, err := openYardReadOnlyOperator(cmd.Context(), *configPath)
-			if err != nil {
-				return fmt.Errorf("open operator: %w", err)
-			}
-			defer svc.Close()
-			return runYardTUI(cmd.Context(), svc, tuiapp.Options{WebBaseURL: yardTUIWebBaseURL(*configPath)})
+			return runYardTUICommand(cmd, *configPath)
 		},
 	}
+}
+
+func runYardTUICommand(cmd *cobra.Command, configPath string) error {
+	svc, err := openYardReadOnlyOperator(cmd.Context(), configPath)
+	if err != nil {
+		return fmt.Errorf("open operator: %w", err)
+	}
+	defer svc.Close()
+	return runYardTUI(cmd.Context(), svc, tuiapp.Options{WebBaseURL: yardTUIWebBaseURL(configPath)})
 }
 
 var _ tuiapp.Operator = (*operator.Service)(nil)

@@ -30,13 +30,13 @@ The split is intentional:
 
 | Surface | Primary responsibility |
 |---|---|
-| `yard tui` | Target TUI for starting, monitoring, and controlling work from the terminal |
+| bare `yard` | Target TUI for starting, monitoring, and controlling work from the terminal |
 | `yard serve` | Inspect rich transcripts, context, tools, diffs, files, and metrics |
-| `yard` CLI | Scriptable one-shot commands and automation |
+| `yard <subcommand>` CLI | Scriptable one-shot commands and automation |
 
 The browser can include chain views and convenience actions, but it should not be required for normal chain operation.
 
-Current TUI handoff status: `yard tui` can show the `yard serve` command and a target URL for the selected chain or receipt. It does not start or detect the web server.
+Current TUI handoff status: bare `yard` can show the `yard serve` command and a target URL for the selected chain or receipt. It does not start or detect the web server.
 
 ---
 
@@ -64,7 +64,7 @@ Current TUI handoff status: `yard tui` can show the `yard serve` command and a t
 
 ## Non-Goals
 
-- No second full operator console competing with `yard tui`.
+- No second full operator console competing with bare `yard`.
 - No browser-only chain execution path.
 - No mobile UI.
 - No hosted/multi-user/product onboarding assumptions.
@@ -257,5 +257,5 @@ The old route-heavy browser plan should not be implemented wholesale.
 
 - Which chain detail views are rich enough to justify browser work after the TUI lands?
 - Should document drag/drop survive as a first-class browser feature or move to file/editor-based TUI flows?
-- Should `yard tui` later detect an already-running `yard serve` and open deep links directly, or keep the current notice-only handoff?
+- Should the TUI later detect an already-running `yard serve` and open deep links directly, or keep the current notice-only handoff?
 - How much browser metrics work is useful before chain execution is stable enough to generate meaningful data?

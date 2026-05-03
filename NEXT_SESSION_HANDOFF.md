@@ -16,8 +16,8 @@ Read first
 6. `TUI_IMPLEMENTATION_PLAN.md`
 
 Current repo truth
-- The active UI direction is TUI-first: `yard tui` is the daily-driver operator console, and `yard serve` remains the optional web inspector/API surface.
-- `yard tui` is wired through `cmd/yard/tui.go`; the Bubble Tea app lives in `internal/tui`.
+- The active UI direction is TUI-first: bare `yard` is the daily-driver operator console, and `yard serve` remains the optional web inspector/API surface.
+- Bare `yard` is wired through `cmd/yard/tui.go`; the Bubble Tea app lives in `internal/tui`.
 - Shared operator services live in `internal/operator`; the TUI calls them directly and does not require or start `yard serve`.
 - `tidmouth` remains internal engine plumbing. Do not expose it as an operator-facing surface.
 - Landed TUI features include readiness metadata, recent chains and chain detail, step/event display, live event follow, pause/cancel, receipt summaries/content, receipt opening through `$PAGER`/`$EDITOR`, launch preview/start for `one_step_chain`, `manual_roster`, `constrained_orchestration`, and `sir_topham_decides`, chain/receipt filtering, web-inspector target handoffs, built-in and custom launch presets, persistent current launch drafts, and launch role-list add/remove/clear controls.

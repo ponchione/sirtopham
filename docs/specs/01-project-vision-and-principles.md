@@ -48,7 +48,7 @@ Two papers inform the core architecture:
 
 6. **Tools are first-class.** The tool system is generic and extensible. Adding a new tool is: implement the interface, register it, done.
 
-7. **Terminal-first operator console with a web inspector.** The `yard` CLI is the stable public command surface. The target daily-driver interface is `yard tui`: project readiness, chain launch/control, role selection, event following, receipts, and operational status live there. `yard serve` remains the browser/API surface for rich inspection, not the default command center. Autonomous single-agent work is a one-step chain, not a separate run surface.
+7. **Terminal-first operator console with a web inspector.** The `yard` CLI is the stable public command surface. The target daily-driver interface is bare `yard`: project readiness, chain launch/control, role selection, event following, receipts, and operational status live there. `yard serve` remains the browser/API surface for rich inspection, not the default command center. Autonomous single-agent work is a one-step chain, not a separate run surface.
 
 8. **Conversations and chains as the units of work.** Interactive chat is conversation-shaped. Autonomous harness work is chain-shaped, including one-step chains. Context assembly, metrics, persistence, receipts, and cost tracking attach to the appropriate unit instead of inventing a third execution model.
 

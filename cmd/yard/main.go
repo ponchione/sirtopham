@@ -3,7 +3,6 @@
 package main
 
 import (
-	"fmt"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -18,11 +17,11 @@ func newRootCmd() *cobra.Command {
 
 	rootCmd := &cobra.Command{
 		Use:          "yard",
-		Short:        "Yard — railway project operator CLI",
+		Short:        "Yard — terminal operator console and project CLI",
 		SilenceUsage: true,
+		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "yard %s\n", version)
-			return nil
+			return runYardTUICommand(cmd, configPath)
 		},
 	}
 

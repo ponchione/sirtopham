@@ -23,7 +23,7 @@ Consolidate all operator-facing commands under `yard`. One binary, one `--help`,
 ## 3. Command tree
 
 ```
-yard [--config yard.yaml]
+yard [--config yard.yaml]       # terminal operator console
 ├── init                        # project bootstrap (exists)
 ├── serve                       # web UI + API server
 ├── index                       # code index build/rebuild
@@ -232,7 +232,7 @@ The no-legacy target state does not preserve duplicated public command trees in 
 
 - Renaming the retained internal `tidmouth` engine binary
 - Changing the spawn subprocess binary name in the same slice as public CLI cleanup
-- Adding unrelated new top-level commands beyond separately specified surfaces such as `yard tui`
+- Adding unrelated new top-level commands beyond separately specified surfaces such as the bare `yard` TUI
 - Building the TUI or web-inspector surfaces themselves; this CLI spec only preserves the shared internal entry points used by [[20-operator-console-tui]] and [[21-web-inspector]]
 - Deprecation warnings or compatibility aliases for removed legacy surfaces
 - Changing retained operator-facing command behavior beyond the explicit chain-only run consolidation in this spec

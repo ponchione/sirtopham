@@ -8,10 +8,10 @@
 
 ## Overview
 
-The operator console is the target daily-driver interface for Yard. This spec describes target behavior. The initial `yard tui` implementation is available, and the intended launch command is:
+The operator console is the target daily-driver interface for Yard. This spec describes target behavior. The initial implementation is available, and the intended launch command is:
 
 ```bash
-yard tui
+yard
 ```
 
 The console is not a replacement for the `yard` CLI command tree. The CLI remains the scriptable, composable surface for init, index, auth, doctor, config, brain, llm, serve, and chain commands. The TUI is the keyboard-driven operational surface for the same local runtime: project readiness, role selection, chain launch, chain control, live event following, receipt browsing, and quick navigation into files or richer browser views.
@@ -26,7 +26,7 @@ All three surfaces should converge on shared internal runtime services. The TUI 
 
 Implementation status as of 2026-05-03:
 
-- Landed: `yard tui`, shared `internal/operator` reads and controls, dashboard readiness metadata, chain/detail views, chain and receipt filtering, receipt summaries/content, live event follow, pause/cancel, receipt open through `$PAGER`/`$EDITOR`, web-inspector target handoffs, built-in and custom launch presets, persistent current launch drafts, launch role-list add/remove/clear controls, and launch preview/start for `one_step_chain`, `manual_roster`, `constrained_orchestration`, and `sir_topham_decides`.
+- Landed: bare `yard` starts the TUI, shared `internal/operator` reads and controls, dashboard readiness metadata, chain/detail views, chain and receipt filtering, receipt summaries/content, live event follow, pause/cancel, receipt open through `$PAGER`/`$EDITOR`, web-inspector target handoffs, built-in and custom launch presets, persistent current launch drafts, launch role-list add/remove/clear controls, and launch preview/start for `one_step_chain`, `manual_roster`, `constrained_orchestration`, and `sir_topham_decides`.
 - Remaining: project tree file attachment and fuller browser inspector parity.
 - Resume is currently a foreground command handoff: the TUI shows `yard chain resume <chain-id>` rather than continuing runner execution inside the TUI.
 
@@ -385,7 +385,7 @@ Implemented first pass: the TUI shows the `yard serve` command and target web-in
 
 ### Phase A - Read-Only Console
 
-- Add `yard tui` command behind the normal build.
+- Make bare `yard` start the terminal console behind the normal build.
 - Show dashboard with project, provider/model, auth, index state, and active chains.
 - Show chains list/detail from existing stores.
 - Show receipts list/detail.
@@ -423,7 +423,7 @@ Implemented first pass: the TUI shows the `yard serve` command and target web-in
 
 ## Acceptance Criteria
 
-1. `yard tui` starts a full-screen terminal app without requiring `yard serve`.
+1. `yard` starts a full-screen terminal app without requiring `yard serve`.
 2. The dashboard shows project, provider/model, auth, code index, brain index, and active-chain state.
 3. The chains screen lists active and recent terminal chains.
 4. The operator can follow a running chain and see new events without restarting the app.
@@ -437,7 +437,7 @@ Implemented first pass: the TUI shows the `yard serve` command and target web-in
 
 ## Open Questions
 
-- Should a later `yard tui` handoff detect an already-running `yard serve` and open directly, or keep the current notice-only command/URL display?
+- Should a later TUI handoff detect an already-running `yard serve` and open directly, or keep the current notice-only command/URL display?
 - What is the minimum useful event-follow contract for chains: store polling cursor, channel subscription, or both?
 - Which screens deserve snapshot/golden tests versus ordinary model update tests?
 - Should document intake be terminal-native first, browser-native first, or deferred until chain launch is stable?
