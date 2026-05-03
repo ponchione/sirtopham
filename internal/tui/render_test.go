@@ -57,6 +57,26 @@ func TestChatRenderFormatsMarkdownBasics(t *testing.T) {
 	}
 }
 
+func TestChatRenderIncludesRunningAndUsageStatus(t *testing.T) {
+	model := NewModel(newFakeOperator(), Options{RefreshInterval: -1})
+	model.chatRunning = true
+	view := model.View()
+	if !strings.Contains(view, "generating response") || !strings.Contains(view, "ctrl+g cancels") {
+		t.Fatalf("chat running view missing cancel affordance:\n%s", view)
+	}
+
+	model.chatRunning = false
+	model.chatInputTokens = 12
+	model.chatOutputTokens = 34
+	model.chatStopReason = "stop"
+	view = model.View()
+	for _, want := range []string{"last turn tokens in:12 out:34", "stop:stop"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("chat usage view missing %q:\n%s", want, view)
+		}
+	}
+}
+
 func TestReceiptRenderIncludesContent(t *testing.T) {
 	model := NewModel(newFakeOperator(), Options{RefreshInterval: -1})
 	model.screen = screenReceipts

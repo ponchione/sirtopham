@@ -1,6 +1,6 @@
 package tui
 
-const footerHelp = "? help  enter send/edit  alt+enter newline  a chat  / filter  w web  tab screen  l launch  v preview  S start  q quit"
+const footerHelp = "? help  enter send/edit  alt+enter newline  ctrl+g cancel chat  a chat  / filter  w web  tab screen  l launch  S start  q quit"
 
 func nextScreen(screen appScreen) appScreen {
 	switch screen {

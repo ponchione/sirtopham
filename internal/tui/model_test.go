@@ -30,6 +30,7 @@ type fakeOperator struct {
 	savedPreset    operator.LaunchPreset
 	chatRequest    operator.ChatTurnRequest
 	chatResult     operator.ChatTurnResult
+	chatWaitCancel bool
 	pausedChain    string
 	cancelledChain string
 }
@@ -83,6 +84,9 @@ func newFakeOperator() *fakeOperator {
 			ConversationID: "chat-1",
 			Provider:       "codex",
 			Model:          "test-model",
+			InputTokens:    8,
+			OutputTokens:   5,
+			StopReason:     "stop",
 			Messages: []operator.ChatMessage{
 				{Role: "user", Content: "draft a spec"},
 				{Role: "assistant", Content: "Here is a spec outline."},
@@ -231,8 +235,12 @@ func (f *fakeOperator) SaveLaunchPreset(_ context.Context, name string, req oper
 	return preset, nil
 }
 
-func (f *fakeOperator) SendChatMessage(_ context.Context, req operator.ChatTurnRequest) (operator.ChatTurnResult, error) {
+func (f *fakeOperator) SendChatMessage(ctx context.Context, req operator.ChatTurnRequest) (operator.ChatTurnResult, error) {
 	f.chatRequest = req
+	if f.chatWaitCancel {
+		<-ctx.Done()
+		return operator.ChatTurnResult{}, ctx.Err()
+	}
 	result := f.chatResult
 	if result.ConversationID == "" {
 		result.ConversationID = "chat-1"
@@ -304,6 +312,9 @@ func TestModelChatEditsAndSendsRawMessage(t *testing.T) {
 	if got.chatInput != "" || !got.chatEdit {
 		t.Fatalf("chat input/edit = %q/%v, want cleared and edit true", got.chatInput, got.chatEdit)
 	}
+	if got.chatInputTokens != 8 || got.chatOutputTokens != 5 || got.chatStopReason != "stop" {
+		t.Fatalf("chat usage = %d/%d/%q, want 8/5/stop", got.chatInputTokens, got.chatOutputTokens, got.chatStopReason)
+	}
 }
 
 func TestModelChatComposerSupportsNewlines(t *testing.T) {
@@ -341,6 +352,42 @@ func TestModelChatComposerSupportsNewlines(t *testing.T) {
 	got = updated.(Model)
 	if fake.chatRequest.Message != "line one\nline two" {
 		t.Fatalf("chat request message = %q, want multiline message", fake.chatRequest.Message)
+	}
+}
+
+func TestModelChatCancelRequestsContextCancellation(t *testing.T) {
+	fake := newFakeOperator()
+	fake.chatWaitCancel = true
+	model := NewModel(fake, Options{RefreshInterval: -1})
+	updated, _ := model.Update(model.refreshCmd()())
+	got := updated.(Model)
+
+	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+	got = updated.(Model)
+	for _, r := range "cancel me" {
+		msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}}
+		if r == ' ' {
+			msg = tea.KeyMsg{Type: tea.KeySpace}
+		}
+		updated, _ = got.Update(msg)
+		got = updated.(Model)
+	}
+	updated, cmd := got.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	got = updated.(Model)
+	if cmd == nil || !got.chatRunning || got.chatCancel == nil {
+		t.Fatalf("chat send state = cmd:%v running:%v cancel:%v, want running cancellable command", cmd != nil, got.chatRunning, got.chatCancel != nil)
+	}
+
+	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyCtrlG})
+	got = updated.(Model)
+	if got.chatCancel != nil || got.notice != "chat cancel requested" {
+		t.Fatalf("cancel state = cancel:%v notice:%q, want cancel cleared and notice", got.chatCancel != nil, got.notice)
+	}
+
+	updated, _ = got.Update(cmd())
+	got = updated.(Model)
+	if got.chatRunning || got.err != nil || !got.chatEdit || got.notice != "chat turn canceled" {
+		t.Fatalf("canceled chat state = running:%v err:%v edit:%v notice:%q", got.chatRunning, got.err, got.chatEdit, got.notice)
 	}
 }
 

@@ -13,6 +13,7 @@ func (m Model) renderHelp() string {
 		"enter         send chat message while editing",
 		"alt+enter     insert newline while editing chat",
 		"ctrl+j        insert newline while editing chat",
+		"ctrl+g        cancel running chat turn",
 		"N             start a new chat on chat screen",
 		"enter         open selected chain receipts",
 		"esc           back",

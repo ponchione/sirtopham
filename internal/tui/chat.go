@@ -40,6 +40,11 @@ func (m Model) renderChat() string {
 	if m.chatConversationID != "" {
 		lines = append(lines, m.styles.chatMeta.Render(fmt.Sprintf("conversation %s", m.chatConversationID)))
 	}
+	if m.chatRunning {
+		lines = append(lines, m.styles.chatMeta.Render("generating response  ctrl+g cancels"))
+	} else if usage := m.chatUsageLine(); usage != "" {
+		lines = append(lines, m.styles.chatMeta.Render(usage))
+	}
 	lines = append(lines, "")
 	if len(m.chatMessages) == 0 {
 		lines = append(lines, renderEmptyChat(m.contentWidth())...)
@@ -52,6 +57,17 @@ func (m Model) renderChat() string {
 		lines = append(lines, "", m.styles.error.Render(m.err.Error()))
 	}
 	return strings.Join(lines, "\n")
+}
+
+func (m Model) chatUsageLine() string {
+	var parts []string
+	if m.chatInputTokens > 0 || m.chatOutputTokens > 0 {
+		parts = append(parts, fmt.Sprintf("last turn tokens in:%d out:%d", m.chatInputTokens, m.chatOutputTokens))
+	}
+	if strings.TrimSpace(m.chatStopReason) != "" {
+		parts = append(parts, "stop:"+m.chatStopReason)
+	}
+	return strings.Join(parts, "  ")
 }
 
 func renderEmptyChat(width int) []string {

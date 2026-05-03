@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -78,6 +79,11 @@ type Model struct {
 	chatComposer       textarea.Model
 	chatInput          string
 	chatEdit           bool
+	chatRunning        bool
+	chatCancel         context.CancelFunc
+	chatInputTokens    int
+	chatOutputTokens   int
+	chatStopReason     string
 	chainFilter        string
 	receiptFilter      string
 	filterEdit         bool
@@ -265,17 +271,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case chatTurnMsg:
 		m.loading = false
+		m.chatRunning = false
+		if m.chatCancel != nil {
+			m.chatCancel()
+			m.chatCancel = nil
+		}
 		if msg.Err != nil {
+			if errors.Is(msg.Err, context.Canceled) {
+				m.err = nil
+				m.chatEdit = true
+				cmd := m.chatComposer.Focus()
+				m.notice = "chat turn canceled"
+				return m, cmd
+			}
 			m.err = msg.Err
 			m.notice = ""
 			m.chatEdit = true
-			return m, nil
+			return m, m.chatComposer.Focus()
 		}
 		m.err = nil
 		m.chatConversationID = msg.Result.ConversationID
 		m.chatMessages = append([]operator.ChatMessage(nil), msg.Result.Messages...)
 		m.chatInput = ""
 		m.chatComposer.SetValue("")
+		m.chatInputTokens = msg.Result.InputTokens
+		m.chatOutputTokens = msg.Result.OutputTokens
+		m.chatStopReason = msg.Result.StopReason
 		m.chatEdit = true
 		cmd := m.chatComposer.Focus()
 		m.notice = fmt.Sprintf("chat response from %s:%s", msg.Result.Provider, msg.Result.Model)
@@ -325,6 +346,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "q":
 		if !m.launchEdit && !m.filterEdit && !m.chatEdit {
 			return m, tea.Quit
+		}
+	case "ctrl+g":
+		if m.screen == screenChat && m.chatRunning {
+			return m.cancelChatTurn()
 		}
 	}
 	if m.confirm.Action != "" {
@@ -376,6 +401,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.chatInput = ""
 			m.chatComposer.SetValue("")
 			m.chatEdit = true
+			m.chatInputTokens = 0
+			m.chatOutputTokens = 0
+			m.chatStopReason = ""
 			cmd := m.chatComposer.Focus()
 			m.notice = "new chat"
 			m.err = nil
@@ -555,8 +583,14 @@ func (m Model) handleChatEditKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.chatEdit = false
 		m.chatComposer.Blur()
 		m.loading = true
+		m.chatRunning = true
+		m.chatInputTokens = 0
+		m.chatOutputTokens = 0
+		m.chatStopReason = ""
+		ctx, cancel := context.WithTimeout(m.ctx, 10*time.Minute)
+		m.chatCancel = cancel
 		m.notice = "chat turn running"
-		return m, m.chatSendCmd(prompt)
+		return m, m.chatSendCmd(ctx, prompt)
 	case tea.KeyCtrlU:
 		m.chatInput = ""
 		m.chatComposer.SetValue("")
@@ -574,6 +608,17 @@ func (m Model) handleChatEditKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.err = nil
 		return m, cmd
 	}
+}
+
+func (m Model) cancelChatTurn() (tea.Model, tea.Cmd) {
+	if m.chatCancel == nil {
+		m.notice = "no chat turn to cancel"
+		return m, nil
+	}
+	m.chatCancel()
+	m.chatCancel = nil
+	m.notice = "chat cancel requested"
+	return m, nil
 }
 
 func (m Model) handleLaunchEditKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -870,14 +915,17 @@ func (m Model) refreshCmd() tea.Cmd {
 	}
 }
 
-func (m Model) chatSendCmd(prompt string) tea.Cmd {
+func (m Model) chatSendCmd(ctx context.Context, prompt string) tea.Cmd {
 	conversationID := m.chatConversationID
 	return func() tea.Msg {
 		if m.svc == nil {
 			return chatTurnMsg{Err: fmt.Errorf("operator service is not configured")}
 		}
-		ctx, cancel := context.WithTimeout(m.ctx, 10*time.Minute)
-		defer cancel()
+		if ctx == nil {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(m.ctx, 10*time.Minute)
+			defer cancel()
+		}
 		result, err := m.svc.SendChatMessage(ctx, operator.ChatTurnRequest{ConversationID: conversationID, Message: prompt})
 		return chatTurnMsg{Result: result, Err: err}
 	}
