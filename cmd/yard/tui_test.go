@@ -41,6 +41,7 @@ func TestTUICmdOpensReadOnlyOperatorAndRunsTUI(t *testing.T) {
 	configPath := "test-yard.yaml"
 	var openedConfig string
 	var ran bool
+	var gotOptions tuiapp.Options
 	openYardReadOnlyOperator = func(ctx context.Context, path string) (*operator.Service, error) {
 		openedConfig = path
 		return &operator.Service{}, nil
@@ -49,6 +50,7 @@ func TestTUICmdOpensReadOnlyOperatorAndRunsTUI(t *testing.T) {
 		if svc == nil {
 			t.Fatal("runYardTUI received nil service")
 		}
+		gotOptions = opts
 		ran = true
 		return nil
 	}
@@ -62,6 +64,9 @@ func TestTUICmdOpensReadOnlyOperatorAndRunsTUI(t *testing.T) {
 	}
 	if !ran {
 		t.Fatal("runYardTUI was not called")
+	}
+	if gotOptions.WebBaseURL != "http://localhost:8090" {
+		t.Fatalf("WebBaseURL = %q, want default yard serve URL", gotOptions.WebBaseURL)
 	}
 }
 

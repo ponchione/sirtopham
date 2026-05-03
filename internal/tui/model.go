@@ -41,11 +41,12 @@ const (
 )
 
 type launchDraft struct {
-	Mode       operator.LaunchMode
-	Role       string
-	Roster     []string
-	SourceTask string
-	SpecsText  string
+	Mode         operator.LaunchMode
+	Role         string
+	AllowedRoles []string
+	Roster       []string
+	SourceTask   string
+	SpecsText    string
 }
 
 type Model struct {
@@ -60,15 +61,21 @@ type Model struct {
 	chainLimit      int
 	receiptOpener   ReceiptOpener
 
-	status        operator.RuntimeStatus
-	roles         []operator.AgentRoleSummary
-	chains        []operator.ChainSummary
-	chainCursor   int
-	detail        *operator.ChainDetail
-	receiptItems  []receiptItem
-	receiptCursor int
-	receipt       *operator.ReceiptView
-	viewport      viewport.Model
+	status          operator.RuntimeStatus
+	roles           []operator.AgentRoleSummary
+	customPresets   []operator.LaunchPreset
+	chains          []operator.ChainSummary
+	chainCursor     int
+	detail          *operator.ChainDetail
+	receiptItems    []receiptItem
+	receiptCursor   int
+	receipt         *operator.ReceiptView
+	viewport        viewport.Model
+	chainFilter     string
+	receiptFilter   string
+	filterEdit      bool
+	filterScreen    appScreen
+	webBaseURLValue string
 
 	loading      bool
 	err          error
@@ -116,14 +123,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.err = nil
 		m.status = msg.Status
 		m.roles = msg.Roles
+		m.customPresets = msg.LaunchPresets
 		m.ensureLaunchDefaults()
 		m.chains = msg.Chains
-		m.chainCursor = chainIndexByID(m.chains, msg.SelectedChainID, m.chainCursor)
+		m.chainCursor = chainIndexByID(m.visibleChains(), msg.SelectedChainID, m.chainCursor)
 		m.pendingChain = ""
-		m.detail = msg.Detail
+		m.detail = nil
+		if msg.Detail != nil && msg.Detail.Chain.ID == m.selectedVisibleChainID() {
+			m.detail = msg.Detail
+		}
 		m.receiptItems = buildReceiptItems(m.detail)
-		m.receiptCursor = clampCursor(m.receiptCursor, len(m.receiptItems))
-		m.receipt = msg.Receipt
+		m.receipt = nil
+		if m.detail != nil && msg.Receipt != nil {
+			m.receipt = msg.Receipt
+		}
+		m.receiptCursor = clampCursor(m.receiptCursor, len(m.visibleReceiptItems()))
 		m.lastUpdated = time.Now()
 		m.updateReceiptViewport()
 		if m.follow && m.followID == msg.SelectedChainID && m.detail != nil && !followStatusActive(m.detail.Chain.Status) {
@@ -205,6 +219,42 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.notice = fmt.Sprintf("chain %s started", msg.Result.ChainID)
 		m.loading = true
 		return m, tea.Batch(m.refreshCmd(), m.followCmd())
+	case launchDraftSavedMsg:
+		m.loading = false
+		if msg.Err != nil {
+			m.err = msg.Err
+			m.notice = ""
+			return m, nil
+		}
+		m.err = nil
+		m.notice = "launch draft saved"
+		return m, nil
+	case launchDraftLoadedMsg:
+		m.loading = false
+		if msg.Err != nil {
+			m.err = msg.Err
+			m.notice = ""
+			return m, nil
+		}
+		m.err = nil
+		if !msg.Found {
+			m.notice = "no saved launch draft"
+			return m, nil
+		}
+		m.applyLaunchRequest(msg.Draft.Request)
+		m.notice = "launch draft loaded"
+		return m, nil
+	case launchPresetSavedMsg:
+		m.loading = false
+		if msg.Err != nil {
+			m.err = msg.Err
+			m.notice = ""
+			return m, nil
+		}
+		m.err = nil
+		m.upsertCustomPreset(msg.Preset)
+		m.notice = "launch preset saved: " + msg.Preset.Name
+		return m, nil
 	case tickMsg:
 		m.loading = true
 		return m, tea.Batch(m.refreshCmd(), m.tickCmd())
@@ -246,7 +296,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+c":
 		return m, tea.Quit
 	case "q":
-		if !m.launchEdit {
+		if !m.launchEdit && !m.filterEdit {
 			return m, tea.Quit
 		}
 	}
@@ -255,6 +305,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.launchEdit {
 		return m.handleLaunchEditKey(msg)
+	}
+	if m.filterEdit {
+		return m.handleFilterEditKey(msg)
 	}
 	switch msg.String() {
 	case "?":
@@ -270,7 +323,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.screen = m.previousScreen
 		} else {
 			m.screen = nextScreen(m.screen)
-			m.receiptCursor = clampCursor(m.receiptCursor, len(m.receiptItems))
+			m.receiptCursor = clampCursor(m.receiptCursor, len(m.visibleReceiptItems()))
 			m.updateReceiptViewport()
 		}
 		return m, nil
@@ -286,6 +339,15 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "r":
 		m.loading = true
 		return m, m.refreshCmd()
+	case "/":
+		if !m.filterAvailable() {
+			m.notice = "filter is available on chains and receipts"
+			return m, nil
+		}
+		m.filterEdit = true
+		m.filterScreen = m.screen
+		m.notice = fmt.Sprintf("editing %s filter", m.filterLabel())
+		return m, nil
 	case "v":
 		if m.screen == screenLaunch {
 			return m, m.launchPreviewCmd()
@@ -294,10 +356,30 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.screen == screenLaunch {
 			return m.confirmLaunch()
 		}
+	case "s":
+		if m.screen == screenLaunch {
+			m.loading = true
+			return m, m.saveLaunchDraftCmd()
+		}
+	case "L":
+		if m.screen == screenLaunch {
+			m.loading = true
+			return m, m.loadLaunchDraftCmd()
+		}
 	case "m":
 		if m.screen == screenLaunch {
 			m.toggleLaunchMode()
 			return m, nil
+		}
+	case "b":
+		if m.screen == screenLaunch {
+			m.nextLaunchPreset()
+			return m, nil
+		}
+	case "B":
+		if m.screen == screenLaunch {
+			m.loading = true
+			return m, m.saveLaunchPresetCmd()
 		}
 	case "n":
 		if m.screen == screenLaunch {
@@ -330,6 +412,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.screen == screenChains {
 			return m.confirmCancelSelectedChain()
 		}
+	case "w":
+		return m.showSelectedWebInspectorTarget()
 	case "enter":
 		if m.screen == screenDashboard {
 			m.screen = screenChains
@@ -423,6 +507,56 @@ func (m Model) handleLaunchEditKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
+func (m Model) handleFilterEditKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEsc:
+		m.filterEdit = false
+		if filterQueryEmpty(m.currentFilterText()) {
+			m.notice = fmt.Sprintf("%s filter empty", m.filterLabel())
+		} else {
+			m.notice = fmt.Sprintf("%s filter kept: %s", m.filterLabel(), m.currentFilterText())
+		}
+		return m, nil
+	case tea.KeyEnter:
+		m.filterEdit = false
+		if filterQueryEmpty(m.currentFilterText()) {
+			m.notice = fmt.Sprintf("%s filter empty", m.filterLabel())
+		} else {
+			m.notice = fmt.Sprintf("%s filter kept: %s", m.filterLabel(), m.currentFilterText())
+		}
+		return m, nil
+	case tea.KeyBackspace, tea.KeyCtrlH:
+		return m.updateCurrentFilter(dropLastRune(m.currentFilterText()))
+	case tea.KeyCtrlU:
+		return m.updateCurrentFilter("")
+	case tea.KeySpace:
+		return m.updateCurrentFilter(m.currentFilterText() + " ")
+	case tea.KeyRunes:
+		return m.updateCurrentFilter(m.currentFilterText() + string(msg.Runes))
+	default:
+		return m, nil
+	}
+}
+
+func (m Model) updateCurrentFilter(value string) (tea.Model, tea.Cmd) {
+	previousChainID := m.selectedVisibleChainID()
+	previousReceipt, hadReceipt := m.selectedVisibleReceiptItem()
+	m.setCurrentFilterText(value)
+	m.err = nil
+	switch m.filterScreen {
+	case screenChains:
+		m.syncFilteredChainSelection(previousChainID)
+		m.loading = true
+		return m, m.refreshCmd()
+	case screenReceipts:
+		m.syncFilteredReceiptSelection(previousReceipt, hadReceipt)
+		m.loading = true
+		return m, m.refreshCmd()
+	default:
+		return m, nil
+	}
+}
+
 func (m Model) handleConfirmationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "y", "Y":
@@ -449,7 +583,7 @@ func (m Model) handleConfirmationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) pauseSelectedChain() (tea.Model, tea.Cmd) {
-	chainID := selectedChainID(m.chains, m.chainCursor)
+	chainID := m.selectedVisibleChainID()
 	if chainID == "" {
 		m.notice = "no chain selected"
 		return m, nil
@@ -464,7 +598,7 @@ func (m Model) pauseSelectedChain() (tea.Model, tea.Cmd) {
 }
 
 func (m Model) confirmCancelSelectedChain() (tea.Model, tea.Cmd) {
-	chainID := selectedChainID(m.chains, m.chainCursor)
+	chainID := m.selectedVisibleChainID()
 	if chainID == "" {
 		m.notice = "no chain selected"
 		return m, nil
@@ -480,7 +614,7 @@ func (m Model) confirmCancelSelectedChain() (tea.Model, tea.Cmd) {
 }
 
 func (m Model) showResumeCommand() (tea.Model, tea.Cmd) {
-	chainID := selectedChainID(m.chains, m.chainCursor)
+	chainID := m.selectedVisibleChainID()
 	if chainID == "" {
 		m.notice = "no chain selected"
 		return m, nil
@@ -495,7 +629,7 @@ func (m Model) showResumeCommand() (tea.Model, tea.Cmd) {
 }
 
 func (m Model) toggleFollowSelectedChain() (tea.Model, tea.Cmd) {
-	chainID := selectedChainID(m.chains, m.chainCursor)
+	chainID := m.selectedVisibleChainID()
 	if chainID == "" {
 		m.notice = "no chain selected"
 		return m, nil
@@ -549,10 +683,20 @@ func (m Model) openSelectedReceipt(mode ReceiptOpenMode) (tea.Model, tea.Cmd) {
 	return m, m.receiptOpener(ReceiptOpenRequest{Mode: mode, Path: m.receipt.Path, Content: m.receipt.Content})
 }
 
+func (m Model) showSelectedWebInspectorTarget() (tea.Model, tea.Cmd) {
+	target, ok := m.selectedWebInspectorTarget()
+	if !ok {
+		m.notice = "no web inspector target selected"
+		return m, nil
+	}
+	m.notice = fmt.Sprintf("web inspector target for %s %s: run %s, then open %s", target.Kind, target.Label, target.Command, target.URL)
+	return m, nil
+}
+
 func (m Model) moveSelection(delta int) (tea.Model, tea.Cmd) {
 	switch m.screen {
 	case screenChains:
-		next := clampCursor(m.chainCursor+delta, len(m.chains))
+		next := clampCursor(m.chainCursor+delta, len(m.visibleChains()))
 		if next == m.chainCursor {
 			return m, nil
 		}
@@ -560,7 +704,7 @@ func (m Model) moveSelection(delta int) (tea.Model, tea.Cmd) {
 		m.loading = true
 		return m, m.refreshCmd()
 	case screenReceipts:
-		next := clampCursor(m.receiptCursor+delta, len(m.receiptItems))
+		next := clampCursor(m.receiptCursor+delta, len(m.visibleReceiptItems()))
 		if next == m.receiptCursor {
 			return m, nil
 		}
@@ -592,7 +736,11 @@ func (m Model) refreshCmd() tea.Cmd {
 		if err != nil {
 			return dataLoadedMsg{Err: err}
 		}
-		selectedID := selectedChainID(chains, m.chainCursor)
+		launchPresets, err := m.svc.ListLaunchPresets(ctx)
+		if err != nil {
+			return dataLoadedMsg{Err: err}
+		}
+		selectedID := selectedChainID(filterChains(chains, m.chainFilter), m.chainCursor)
 		if m.pendingChain != "" {
 			selectedID = m.pendingChain
 		}
@@ -606,15 +754,16 @@ func (m Model) refreshCmd() tea.Cmd {
 		}
 		items := buildReceiptItems(detail)
 		var receipt *operator.ReceiptView
-		if m.screen == screenReceipts && selectedID != "" && len(items) > 0 {
-			item := items[clampCursor(m.receiptCursor, len(items))]
+		visibleItems := filterReceiptItems(items, m.receipt, m.receiptFilter)
+		if m.screen == screenReceipts && selectedID != "" && len(visibleItems) > 0 {
+			item := visibleItems[clampCursor(m.receiptCursor, len(visibleItems))]
 			loaded, err := m.svc.ReadReceipt(ctx, selectedID, item.Step)
 			if err != nil {
 				return dataLoadedMsg{Err: err}
 			}
 			receipt = &loaded
 		}
-		return dataLoadedMsg{Status: status, Roles: roles, Chains: chains, Detail: detail, Receipt: receipt, SelectedChainID: selectedID}
+		return dataLoadedMsg{Status: status, Roles: roles, LaunchPresets: launchPresets, Chains: chains, Detail: detail, Receipt: receipt, SelectedChainID: selectedID}
 	}
 }
 
@@ -640,6 +789,45 @@ func (m Model) launchStartCmd(req operator.LaunchRequest) tea.Cmd {
 		defer cancel()
 		result, err := m.svc.StartChain(ctx, req)
 		return launchStartedMsg{Result: result, Err: err}
+	}
+}
+
+func (m Model) saveLaunchDraftCmd() tea.Cmd {
+	req := m.launchRequest()
+	return func() tea.Msg {
+		if m.svc == nil {
+			return launchDraftSavedMsg{Err: fmt.Errorf("operator service is not configured")}
+		}
+		ctx, cancel := context.WithTimeout(m.ctx, 15*time.Second)
+		defer cancel()
+		draft, err := m.svc.SaveLaunchDraft(ctx, req)
+		return launchDraftSavedMsg{Draft: draft, Err: err}
+	}
+}
+
+func (m Model) loadLaunchDraftCmd() tea.Cmd {
+	return func() tea.Msg {
+		if m.svc == nil {
+			return launchDraftLoadedMsg{Err: fmt.Errorf("operator service is not configured")}
+		}
+		ctx, cancel := context.WithTimeout(m.ctx, 15*time.Second)
+		defer cancel()
+		draft, found, err := m.svc.LoadLaunchDraft(ctx)
+		return launchDraftLoadedMsg{Draft: draft, Found: found, Err: err}
+	}
+}
+
+func (m Model) saveLaunchPresetCmd() tea.Cmd {
+	req := m.launchRequest()
+	name := customLaunchPresetName(req)
+	return func() tea.Msg {
+		if m.svc == nil {
+			return launchPresetSavedMsg{Err: fmt.Errorf("operator service is not configured")}
+		}
+		ctx, cancel := context.WithTimeout(m.ctx, 15*time.Second)
+		defer cancel()
+		preset, err := m.svc.SaveLaunchPreset(ctx, name, req)
+		return launchPresetSavedMsg{Preset: preset, Err: err}
 	}
 }
 
@@ -817,7 +1005,7 @@ func buildReceiptItems(detail *operator.ChainDetail) []receiptItem {
 }
 
 func (m Model) selectedChainStatus() string {
-	chainID := selectedChainID(m.chains, m.chainCursor)
+	chainID := m.selectedVisibleChainID()
 	if chainID == "" {
 		return ""
 	}
@@ -872,12 +1060,12 @@ func followStatusActive(status string) bool {
 }
 
 func (m *Model) applyFollowDetail(detail operator.ChainDetail) {
-	if selectedChainID(m.chains, m.chainCursor) != detail.Chain.ID {
+	if m.selectedVisibleChainID() != detail.Chain.ID {
 		return
 	}
 	m.detail = &detail
 	m.receiptItems = buildReceiptItems(m.detail)
-	m.receiptCursor = clampCursor(m.receiptCursor, len(m.receiptItems))
+	m.receiptCursor = clampCursor(m.receiptCursor, len(m.visibleReceiptItems()))
 	for i := range m.chains {
 		if m.chains[i].ID != detail.Chain.ID {
 			continue

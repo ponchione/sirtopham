@@ -10,6 +10,7 @@ import (
 type dataLoadedMsg struct {
 	Status          operator.RuntimeStatus
 	Roles           []operator.AgentRoleSummary
+	LaunchPresets   []operator.LaunchPreset
 	Chains          []operator.ChainSummary
 	Detail          *operator.ChainDetail
 	Receipt         *operator.ReceiptView
@@ -45,6 +46,22 @@ type launchPreviewMsg struct {
 
 type launchStartedMsg struct {
 	Result operator.StartResult
+	Err    error
+}
+
+type launchDraftSavedMsg struct {
+	Draft operator.LaunchDraft
+	Err   error
+}
+
+type launchDraftLoadedMsg struct {
+	Draft operator.LaunchDraft
+	Found bool
+	Err   error
+}
+
+type launchPresetSavedMsg struct {
+	Preset operator.LaunchPreset
 	Err    error
 }
 

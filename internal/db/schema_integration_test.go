@@ -336,6 +336,32 @@ func TestEnsureChainSchemaCreatesTables(t *testing.T) {
 	}
 }
 
+func TestEnsureLaunchSchemaCreatesTables(t *testing.T) {
+	ctx := context.Background()
+	db := newTestDB(t)
+
+	if _, err := InitIfNeeded(ctx, db); err != nil {
+		t.Fatalf("InitIfNeeded returned error: %v", err)
+	}
+	if err := EnsureLaunchSchema(ctx, db); err != nil {
+		t.Fatalf("EnsureLaunchSchema returned error: %v", err)
+	}
+
+	for _, table := range []string{"launches", "launch_presets"} {
+		var count int
+		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&count); err != nil {
+			t.Fatalf("query sqlite_master for %s returned error: %v", table, err)
+		}
+		if count != 1 {
+			t.Fatalf("table %s count = %d, want 1", table, count)
+		}
+	}
+
+	if err := EnsureLaunchSchema(ctx, db); err != nil {
+		t.Fatalf("EnsureLaunchSchema second call returned error: %v", err)
+	}
+}
+
 func TestBrainDocumentQueriesUpsertListAndFetchByPath(t *testing.T) {
 	ctx := context.Background()
 	db := newTestDB(t)

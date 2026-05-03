@@ -1,7 +1,7 @@
 # 21 - Web Inspector
 
 **Status:** Active companion spec
-**Last Updated:** 2026-05-01
+**Last Updated:** 2026-05-03
 **Owner:** Mitchell
 
 ---
@@ -35,6 +35,8 @@ The split is intentional:
 | `yard` CLI | Scriptable one-shot commands and automation |
 
 The browser can include chain views and convenience actions, but it should not be required for normal chain operation.
+
+Current TUI handoff status: `yard tui` can show the `yard serve` command and a target URL for the selected chain or receipt. It does not start or detect the web server.
 
 ---
 
@@ -214,7 +216,7 @@ Pause/resume/cancel endpoints may exist for parity, but their presence does not 
 ## Implementation Guidance
 
 - Keep React route work focused on inspection surfaces already hard or awkward in terminal panes.
-- Avoid browser-only launch state unless persistent launch drafts become a shared backend feature.
+- Avoid browser-only launch state. Persistent current launch drafts and custom presets now live in shared operator storage; future browser launch work should use that backend path instead of React-owned state.
 - Do not introduce a second execution path. Browser actions that start or control work must call the same internal chain runner/service path as CLI and TUI.
 - Prefer read-only browser additions before write/control additions.
 - Preserve the embedded frontend production model through `web/dist` and `webfs/dist`.
@@ -255,5 +257,5 @@ The old route-heavy browser plan should not be implemented wholesale.
 
 - Which chain detail views are rich enough to justify browser work after the TUI lands?
 - Should document drag/drop survive as a first-class browser feature or move to file/editor-based TUI flows?
-- Should `yard tui` open deep links into the web inspector once `yard serve` is running?
+- Should `yard tui` later detect an already-running `yard serve` and open deep links directly, or keep the current notice-only handoff?
 - How much browser metrics work is useful before chain execution is stable enough to generate meaningful data?

@@ -1,6 +1,6 @@
 # 08 — Data Model
 
-**Status:** Draft v0.1 **Last Updated:** 2026-05-01 **Author:** Mitchell
+**Status:** Draft v0.1 **Last Updated:** 2026-05-03 **Author:** Mitchell
 
 ---
 
@@ -34,7 +34,7 @@ During active development, the canonical schema still lives in a single `schema.
 - rebuild `messages_fts` triggers so `role='tool'` messages are indexed
 - add `context_reports.token_budget_json` when missing
 - ensure the chain orchestrator tables and indexes exist
-- ensure launch and operation tables and indexes exist (`launches`, `launch_presets`, `background_operations`)
+- ensure launch draft and preset tables and indexes exist (`launches`, `launch_presets`)
 
 This is not a general migration framework. It is a narrow bridge for dev-era databases whose data is useful enough to preserve. Once the schema stabilizes (v0.5+), migrate to versioned migration files — either golang-migrate or hand-written `.sql` files with a version table. The schema is simple enough that manual migrations are viable for a personal tool.
 
@@ -436,7 +436,43 @@ The chain orchestrator owns additional `chains`, `steps`, and `events` tables in
 
 ### Launch and Operation Tables
 
-Durable launch and operation state is shared operator-surface state, not browser-owned state. When implemented, `launches`, `launch_presets`, and `background_operations` live in the same `.yard/yard.db` database. A launch stores the operator-authored work packet and agent plan before TUI- or browser-started work becomes a chain. Custom launch presets store reusable templates; built-in presets are generated in code. Background operations track UI-started maintenance work such as code-index and brain-index rebuilds. The product lifecycle is specified in [[20-operator-console-tui]], with browser inspection boundaries in [[21-web-inspector]]. CLI-started chains do not require launch records.
+Durable launch and operation state is shared operator-surface state, not browser-owned state. The implemented `launches` table currently stores the project-local current TUI launch draft. It preserves the operator-authored work packet and selected agent plan before TUI-started work becomes a chain, but started chains are not linked back to launch rows yet. The implemented `launch_presets` table stores durable custom role/mode shapes; built-in presets are generated in code. Background operations remain future tables. The product lifecycle is specified in [[20-operator-console-tui]], with browser inspection boundaries in [[21-web-inspector]]. CLI-started chains do not require launch records.
+
+```sql
+CREATE TABLE IF NOT EXISTS launches (
+    id                  TEXT NOT NULL,
+    project_id          TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    status              TEXT NOT NULL DEFAULT 'draft',
+    mode                TEXT NOT NULL,
+    role                TEXT,
+    allowed_roles       TEXT,
+    roster              TEXT,
+    source_task         TEXT,
+    source_specs        TEXT,
+    created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at          TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY(project_id, id)
+);
+
+CREATE INDEX idx_launches_project_updated ON launches(project_id, updated_at DESC);
+CREATE INDEX idx_launches_status ON launches(project_id, status);
+
+CREATE TABLE IF NOT EXISTS launch_presets (
+    id                  TEXT NOT NULL,
+    project_id          TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    name                TEXT NOT NULL,
+    mode                TEXT NOT NULL,
+    role                TEXT,
+    allowed_roles       TEXT,
+    roster              TEXT,
+    created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at          TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY(project_id, id),
+    UNIQUE(project_id, name)
+);
+
+CREATE INDEX idx_launch_presets_project_updated ON launch_presets(project_id, updated_at DESC);
+```
 
 ### index_state
 

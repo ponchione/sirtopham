@@ -24,6 +24,8 @@ DROP TABLE IF EXISTS tool_executions;
 DROP TABLE IF EXISTS messages;
 DROP TABLE IF EXISTS index_state;
 DROP TABLE IF EXISTS conversations;
+DROP TABLE IF EXISTS launch_presets;
+DROP TABLE IF EXISTS launches;
 DROP TABLE IF EXISTS projects;
 `
 
@@ -243,6 +245,48 @@ CREATE INDEX IF NOT EXISTS idx_events_created ON events(created_at);
 `
 	if _, err := db.ExecContext(ctx, ddl); err != nil {
 		return fmt.Errorf("ensure chain schema: %w", err)
+	}
+	return nil
+}
+
+func EnsureLaunchSchema(ctx context.Context, db *sql.DB) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	const ddl = `
+CREATE TABLE IF NOT EXISTS launches (
+    id                  TEXT NOT NULL,
+    project_id          TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    status              TEXT NOT NULL DEFAULT 'draft',
+    mode                TEXT NOT NULL,
+    role                TEXT,
+    allowed_roles       TEXT,
+    roster              TEXT,
+    source_task         TEXT,
+    source_specs        TEXT,
+    created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at          TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY(project_id, id)
+);
+CREATE INDEX IF NOT EXISTS idx_launches_project_updated ON launches(project_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_launches_status ON launches(project_id, status);
+CREATE TABLE IF NOT EXISTS launch_presets (
+    id                  TEXT NOT NULL,
+    project_id          TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    name                TEXT NOT NULL,
+    mode                TEXT NOT NULL,
+    role                TEXT,
+    allowed_roles       TEXT,
+    roster              TEXT,
+    created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at          TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY(project_id, id),
+    UNIQUE(project_id, name)
+);
+CREATE INDEX IF NOT EXISTS idx_launch_presets_project_updated ON launch_presets(project_id, updated_at DESC);
+`
+	if _, err := db.ExecContext(ctx, ddl); err != nil {
+		return fmt.Errorf("ensure launch schema: %w", err)
 	}
 	return nil
 }

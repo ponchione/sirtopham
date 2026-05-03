@@ -31,3 +31,19 @@ func TestReceiptRenderIncludesContent(t *testing.T) {
 		}
 	}
 }
+
+func TestRenderShowsActiveFilter(t *testing.T) {
+	model := NewModel(newFakeOperator(), Options{RefreshInterval: -1})
+	model.screen = screenChains
+	model.chainFilter = "coder"
+	updated, _ := model.Update(model.refreshCmd()())
+	got := updated.(Model)
+
+	view := got.View()
+	if !strings.Contains(view, "filter: coder (1/2 chains)") {
+		t.Fatalf("chain view missing active filter:\n%s", view)
+	}
+	if strings.Contains(view, "chain-2") {
+		t.Fatalf("chain view rendered filtered-out chain:\n%s", view)
+	}
+}

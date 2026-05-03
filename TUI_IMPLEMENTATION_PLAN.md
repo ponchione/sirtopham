@@ -1,6 +1,6 @@
 # TUI Implementation Plan
 
-Last updated: 2026-05-01
+Last updated: 2026-05-03
 
 This is the status-aware implementation plan for moving Yard to the new TUI-first operator direction. It records both the slices that have landed and the remaining work.
 
@@ -15,16 +15,16 @@ Primary specs:
 
 - `yard serve` already serves the React app and API. Keep it. It now maps to the web-inspector role.
 - `yard chain start` already delegates to `internal/chainrun.Start`.
-- `internal/operator` is implemented and is the shared service for runtime status, chain summaries/details, event reads, receipt reads, control requests, role listing, and launch preview/start.
+- `internal/operator` is implemented and is the shared service for runtime status, chain summaries/details, event reads, receipt reads, control requests, role listing, launch draft save/load, launch preset list/save, and launch preview/start.
 - `cmd/yard/chain_readonly.go` and `cmd/yard/chain_control.go` use `internal/operator` instead of owning runtime behavior directly.
 - `internal/chain.Store` supports chains, steps, events, status transitions, events-since polling, and receipt path lookup through steps.
 - `internal/spawn.SpawnAgentTool` exposes the reusable step runner path used by tool execution and one-step chains.
 - Public single-agent work is represented by `yard chain start --role ...`; `yard run` code remains for the internal headless engine helper path but is no longer registered on the public `yard` command tree.
-- `chainrun.Start` supports orchestrator mode, `one_step_chain` mode, and `manual_roster` mode. It does not yet implement constrained orchestration.
+- `chainrun.Start` supports orchestrator mode, `one_step_chain` mode, `manual_roster` mode, and `constrained_orchestration` mode. Constrained orchestration reuses the orchestrator runner and injects an allowed-role list into the orchestrator task packet.
 - Bubble Tea, Bubbles, and Lip Gloss dependencies are present.
-- `yard tui` is implemented. It starts without `yard serve`, reads through `internal/operator`, and includes dashboard, chains, receipts, event follow, pause/cancel, receipt open, launch preview, and launch start flows.
+- `yard tui` is implemented. It starts without `yard serve`, reads through `internal/operator`, and includes dashboard, chains, receipts, chain and receipt filtering, event follow, pause/cancel, receipt open, web-inspector target handoffs, built-in/custom launch presets, persistent current launch drafts, launch preview, and launch start flows.
 - TUI resume currently shows the foreground `yard chain resume <chain-id>` command instead of continuing runner execution inside the TUI.
-- Remaining product gaps are constrained orchestration, search/filter across chains and receipts, open-in-web handoffs, persistent launch drafts, and presets.
+- Remaining product gaps are project tree file attachment, richer role roster actions, and fuller browser inspector parity.
 
 ## Non-Negotiables
 
@@ -74,13 +74,16 @@ internal/server
 6. Initial TUI launch wizard for one-step and orchestrated chains.
 7. TUI readiness metadata for provider/model, index state, local services mode, active chains, and warnings.
 8. Manual roster mode through `chainrun.Start`, operator launch preview/start, and minimal TUI launch controls.
+9. TUI search/filter for chains and receipts, including local matching on loaded chain summaries, receipt summaries, and the visible loaded receipt.
+10. Notice-only web-inspector target handoffs for selected chains and receipts. The TUI shows `yard serve` plus the target URL and does not start a server.
+11. Constrained orchestration through `internal/operator` and `internal/chainrun`: the TUI selects allowed roles, and the existing orchestrator path receives those role constraints in the compiled work packet.
+12. Built-in TUI launch presets for common role/mode shapes. These are generated from configured roles, preserve the current task/spec draft, and do not create durable preset state.
+13. Persistent current launch drafts. The TUI saves with `s`, loads with `L`, and stores the current draft in `.yard/yard.db` through `internal/operator`.
+14. Custom TUI launch presets. The TUI saves the current role/mode shape with `B`, stores it in `.yard/yard.db`, and cycles built-in plus custom presets with `b`.
 
 ## Recommended Next Order
 
-1. TUI search/filter for chains and receipts.
-2. Open-in-web handoffs that do not secretly start `yard serve`.
-3. Constrained orchestration once launch/request shapes can express role constraints cleanly.
-4. Persistent launch drafts and presets after the launch model needs durable cross-session state.
+1. Project tree file attachment, richer role roster actions, or browser inspector parity.
 
 This order keeps new work on the shared runtime path and avoids rebuilding execution behavior inside the TUI.
 
@@ -474,7 +477,7 @@ yard tui
 yard chain status <chain-id>
 ```
 
-## Phase 5: TUI Launch Wizard - Mostly Landed
+## Phase 5: TUI Launch Wizard - Landed
 
 Goal: start new work from the TUI.
 
@@ -484,13 +487,11 @@ Launch modes to implement first:
 
 1. `one_step_chain` - landed
 2. `manual_roster` - landed
-3. `sir_topham_decides` - landed
+3. `constrained_orchestration` - landed
+4. `sir_topham_decides` - landed
 
-Defer:
+Deferred:
 
-- `constrained_orchestration`
-- persistent launch drafts
-- custom presets
 - browser document drop integration
 
 New operator service methods:
@@ -499,6 +500,7 @@ New operator service methods:
 type LaunchRequest struct {
     Mode chainrun.Mode
     Role string
+    AllowedRoles []string
     SourceTask string
     SourceSpecs []string
     ExplicitFiles []string
@@ -515,10 +517,28 @@ type LaunchPreview struct {
     Mode string
     Summary string
     CompiledTask string
+    AllowedRoles []string
     Warnings []RuntimeWarning
 }
 
+type LaunchDraft struct {
+    ID string
+    Request LaunchRequest
+    UpdatedAt string
+}
+
+type LaunchPreset struct {
+    ID string
+    Name string
+    Request LaunchRequest
+    UpdatedAt string
+}
+
 func (s *Service) ValidateLaunch(ctx context.Context, req LaunchRequest) (LaunchPreview, error)
+func (s *Service) SaveLaunchDraft(ctx context.Context, req LaunchRequest) (LaunchDraft, error)
+func (s *Service) LoadLaunchDraft(ctx context.Context) (LaunchDraft, bool, error)
+func (s *Service) ListLaunchPresets(ctx context.Context) ([]LaunchPreset, error)
+func (s *Service) SaveLaunchPreset(ctx context.Context, name string, req LaunchRequest) (LaunchPreset, error)
 func (s *Service) StartChain(ctx context.Context, req LaunchRequest) (StartResult, error)
 ```
 
@@ -529,6 +549,8 @@ TUI flow:
 - If one-step, select role.
 - Enter task text.
 - Optionally add specs by path.
+- Save or load the current draft with `s` and `L`.
+- Save the current role/mode shape as a custom preset with `B`; cycle built-in and custom presets with `b`.
 - Show preflight summary.
 - Confirm start.
 - Route to chain follow view.
@@ -586,7 +608,7 @@ Useful additions:
 - read-only `/chains/:id`
 - receipt markdown rendering
 - event log filtering
-- links from TUI "open in web" when `yard serve` is already running
+- TUI web-inspector handoff targets - landed as command/URL display without server detection or startup
 
 Avoid:
 
@@ -728,16 +750,16 @@ Avoid:
 
 ## Database Considerations
 
-Current `chains` schema does not include `launch_id` or `launch_mode`, even though newer specs mention those concepts. Do not add those fields until a durable launch/draft feature actually needs them.
+Current `chains` schema does not include `launch_id` or `launch_mode`, even though newer specs mention those concepts. The persistent launch slices added `launches` and `launch_presets` tables for shared operator launch state, but they do not link started chains to launches yet.
 
 When a later feature needs durable launch mode:
 
 - Add `launch_mode TEXT NOT NULL DEFAULT 'sir_topham_decides'` to `chains`.
 - Add compatibility upgrade for existing dev DBs.
 - Update `internal/db/schema.sql`, `internal/db/init.go`, sqlc queries, generated code, and data model tests.
-- Add `launch_id TEXT` only when persistent launch records are actually implemented.
+- Add `launch_id TEXT` only when broader launch history or cross-surface launch resumption actually needs chain-to-launch linkage.
 
-Do not create `launches`, `launch_presets`, or `background_operations` tables until persistent launch drafts are being implemented.
+The `launches` table currently stores the project-local current draft row. The `launch_presets` table stores durable custom role/mode shapes. Do not create `background_operations` tables until background operation tracking is being implemented.
 
 ## Test Strategy
 
@@ -780,10 +802,7 @@ The original first slice is complete:
 
 Choose one narrow remaining slice:
 
-1. Search/filter for chains and receipts in `internal/tui`.
-2. Open-in-web handoffs that only display or use an already-running `yard serve`.
-3. Constrained orchestration once launch constraints are modeled.
-4. Persistent launch drafts and presets after durable launch records are justified.
+1. Project tree file attachment, richer role roster actions, or browser inspector parity.
 
 For any slice, keep core operations routed through `internal/operator`, avoid Cobra shell-outs from the TUI, and run `make test` plus `make build`.
 

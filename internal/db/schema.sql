@@ -232,3 +232,41 @@ CREATE TABLE IF NOT EXISTS events (
 
 CREATE INDEX IF NOT EXISTS idx_events_chain ON events(chain_id);
 CREATE INDEX IF NOT EXISTS idx_events_created ON events(created_at);
+
+-- ---------------------------------------------------------------------------
+-- Operator launch drafts
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS launches (
+    id                  TEXT NOT NULL,
+    project_id          TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    status              TEXT NOT NULL DEFAULT 'draft',
+    mode                TEXT NOT NULL,
+    role                TEXT,
+    allowed_roles       TEXT,
+    roster              TEXT,
+    source_task         TEXT,
+    source_specs        TEXT,
+    created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at          TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY(project_id, id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_launches_project_updated ON launches(project_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_launches_status ON launches(project_id, status);
+
+CREATE TABLE IF NOT EXISTS launch_presets (
+    id                  TEXT NOT NULL,
+    project_id          TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    name                TEXT NOT NULL,
+    mode                TEXT NOT NULL,
+    role                TEXT,
+    allowed_roles       TEXT,
+    roster              TEXT,
+    created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at          TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY(project_id, id),
+    UNIQUE(project_id, name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_launch_presets_project_updated ON launch_presets(project_id, updated_at DESC);

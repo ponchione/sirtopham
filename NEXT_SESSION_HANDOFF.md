@@ -9,106 +9,66 @@ Objective
 
 Read first
 1. `AGENTS.md`
-2. `README.md`
-3. `NEXT_SESSION_HANDOFF.md`
-4. Skill: `test-driven-development`
-5. Skill: `plan` only if the user asks for planning instead of execution
+2. `RTK.md`
+3. `README.md`
+4. `NEXT_SESSION_HANDOFF.md`
+5. `docs/specs/20-operator-console-tui.md`
+6. `TUI_IMPLEMENTATION_PLAN.md`
 
 Current repo truth
-- The old `cmd/yard/chain.go` micro-extraction track is effectively stopped by default.
-  - `cmd/yard/chain.go` is already down to a small orchestration surface.
-  - The execution-state helper split landed previously and should be treated as complete unless a genuinely new tiny seam appears.
-- The latest completed simplification slice is now in `internal/tool/brain_search.go`.
-  - The file is reduced to the tool contract and runtime flow.
-  - The pure helper cluster was extracted into sibling files:
-    - `internal/tool/brain_search_tags.go`
-    - `internal/tool/brain_search_format.go`
-  - Direct helper coverage now lives in:
-    - `internal/tool/brain_search_helpers_test.go`
-- `internal/tool/brain_test.go` also now includes a focused regression that locks normalized runtime-tag matching so runtime results with tags like `debug-history` / `runtime_cache` do not unnecessarily fall back to reading the backing document.
-- Current-truth markdown should stay compact:
-  - keep `README.md`, specs, and this handoff authoritative
-  - do not recreate execution-plan scratch docs as standing repo guidance
+- The active UI direction is TUI-first: `yard tui` is the daily-driver operator console, and `yard serve` remains the optional web inspector/API surface.
+- `yard tui` is wired through `cmd/yard/tui.go`; the Bubble Tea app lives in `internal/tui`.
+- Shared operator services live in `internal/operator`; the TUI calls them directly and does not require or start `yard serve`.
+- `tidmouth` remains internal engine plumbing. Do not expose it as an operator-facing surface.
+- Landed TUI features include readiness metadata, recent chains and chain detail, step/event display, live event follow, pause/cancel, receipt summaries/content, receipt opening through `$PAGER`/`$EDITOR`, launch preview/start for `one_step_chain`, `manual_roster`, `constrained_orchestration`, and `sir_topham_decides`, chain/receipt filtering, web-inspector target handoffs, built-in and custom launch presets, and persistent current launch drafts.
+- Resume is still a foreground command handoff: the TUI shows `yard chain resume <chain-id>` rather than continuing runner execution inside the TUI.
+- Remaining TUI-first product gaps are project tree file attachment, richer role roster actions, and fuller browser inspector parity.
 
-Most recent landed slice
-- Extracted pure `brain_search` helper logic out of `internal/tool/brain_search.go` without changing the tool’s schema or user-visible behavior.
-- Moved tag/query helpers into `internal/tool/brain_search_tags.go`:
-  - `stringSliceHasAllFolded(...)`
-  - `normalizeBrainSearchTags(...)`
-  - `normalizeBrainTag(...)`
-  - `normalizeBrainSearchText(...)`
-  - `brainDocumentHasAllTags(...)`
-  - `parseBrainFrontmatterTags(...)`
-  - `parseBrainMetadataTags(...)`
-  - `extractBrainInlineTags(...)`
-- Moved formatting/query-label helpers into `internal/tool/brain_search_format.go`:
-  - `formatRuntimeBrainSearchHits(...)`
-  - `describeBrainSearchQuery(...)`
-  - `pluralizeBrainSearchResults(...)`
-  - `titleFromPath(...)`
-  - `titleCase(...)`
-- Kept `internal/tool/brain_search.go` centered on:
-  - constructors and schema
-  - `Execute(...)`
-  - keyword/runtime dispatch
-  - tag-filtered search flow
-  - query logging
-- Added direct helper tests in `internal/tool/brain_search_helpers_test.go` for:
-  - tag normalization and deduping
-  - punctuation/whitespace normalization
-  - frontmatter tag parsing (inline and multiline forms)
-  - metadata tag parsing
-  - inline tag extraction
-  - multi-source tag satisfaction
-  - runtime-hit formatting
-  - query label formatting
-  - title normalization and pluralization
-- Added focused runtime regression coverage in `internal/tool/brain_test.go`:
-  - `TestBrainSearchRuntimeTagFilterMatchesNormalizedTagsWithoutReadingDocument`
+Most recent landed slices
+- Implemented TUI search/filter for chains and receipts inside `internal/tui`.
+- `/` starts filter editing on the chains and receipts screens.
+- `esc` exits filter editing and keeps the current query; `ctrl+u` clears it; backspace edits it; an empty query means no filtering.
+- Chain filtering matches loaded chain summary data: chain ID, status, source task, source specs, and current step role/status/verdict/receipt path where available.
+- Receipt filtering matches loaded receipt summary data: label, step, path, and the visible loaded receipt content without broad receipt reads.
+- Filter changes clamp cursors safely and refresh the currently selected chain/detail/receipt so selection stays coherent.
+- Help/footer and render output now show the filter keys and active filter state.
+- Implemented notice-only web-inspector handoffs for selected chains and receipts.
+- `w` shows the `yard serve` command and target URL. It does not detect, start, or supervise the web server.
+- The TUI target base URL comes from the configured `server.host` / `server.port` when available and falls back to `http://localhost:8090`.
+- Implemented constrained orchestration through `internal/operator` and `internal/chainrun`.
+- The TUI launch mode cycle now includes `constrained_orchestration`; `n` adds allowed roles for that mode.
+- Constrained orchestration reuses the existing orchestrator execution path and injects the allowed-role list into the orchestrator task packet. It does not add a second scheduler or durable launch table.
+- Implemented built-in TUI launch presets. `b` cycles presets generated from configured roles; presets preserve the current task/spec draft and only change mode/role selection.
+- Implemented persistent current launch drafts. The launch screen saves with `s` and loads with `L`; drafts are stored through `internal/operator` in the `.yard/yard.db` `launches` table and do not add a second execution path.
+- Implemented custom TUI launch presets. `B` saves the current role/mode shape as a durable preset in `launch_presets`; `b` cycles built-in and custom presets while preserving task/spec draft text.
 
-Behavior that must remain unchanged
-- `brain_search` schema/description text stays unchanged unless the user asks for a contract change.
-- Keyword vs semantic/auto fallback behavior stays unchanged.
-- Tag filtering semantics stay unchanged across frontmatter, metadata lines, and inline hashtags.
-- Punctuation-only tagged loose-fallback behavior stays unchanged.
-- Query-log wording stays unchanged.
-- Result ordering and title formatting stay unchanged.
-- The normalized runtime-tag match fast path should stay covered:
-  - equivalent tags like `debug-history` and `debug history` should match without requiring a backend document read.
+Validation completed for the landed slice
+- Focused TUI package:
+  - `rtk env CGO_ENABLED=1 CGO_LDFLAGS='-L/home/gernsback/source/sodoryard/lib/linux_amd64 -llancedb_go -lm -ldl -lpthread' LD_LIBRARY_PATH='/home/gernsback/source/sodoryard/lib/linux_amd64' go test -tags sqlite_fts5 ./internal/tui` ✅
+- Focused TUI plus CLI command wiring:
+  - `rtk env CGO_ENABLED=1 CGO_LDFLAGS='-L/home/gernsback/source/sodoryard/lib/linux_amd64 -llancedb_go -lm -ldl -lpthread' LD_LIBRARY_PATH='/home/gernsback/source/sodoryard/lib/linux_amd64' go test -tags sqlite_fts5 ./internal/tui ./cmd/yard` ✅
+- Focused constrained launch support:
+  - `rtk env CGO_ENABLED=1 CGO_LDFLAGS='-L/home/gernsback/source/sodoryard/lib/linux_amd64 -llancedb_go -lm -ldl -lpthread' LD_LIBRARY_PATH='/home/gernsback/source/sodoryard/lib/linux_amd64' go test -tags sqlite_fts5 ./internal/chainrun ./internal/operator ./internal/tui` ✅
+- Focused built-in preset support:
+  - `rtk env CGO_ENABLED=1 CGO_LDFLAGS='-L/home/gernsback/source/sodoryard/lib/linux_amd64 -llancedb_go -lm -ldl -lpthread' LD_LIBRARY_PATH='/home/gernsback/source/sodoryard/lib/linux_amd64' go test -tags sqlite_fts5 ./internal/tui` ✅
+- Full project validation should be rerun after any follow-up slice:
+  - `rtk make test`
+  - `rtk make build`
 
-Validation already completed on the current tree
-- Focused helper coverage:
-  - `go test -tags sqlite_fts5 ./internal/tool -run 'TestNormalizeBrain|TestParseBrain|TestExtractBrain|TestBrainDocumentHasAllTags|TestFormatRuntimeBrainSearchHits|TestDescribeBrainSearchQuery|TestTitleFromPath|TestTitleCase|TestPluralizeBrainSearchResults|TestStringSliceHasAllFoldedNormalizesBrainTags' -v` ✅
-- Focused `brain_search` regression coverage:
-  - `go test -tags sqlite_fts5 ./internal/tool -run 'TestBrainSearch(Disabled|EmptyQuery|KeywordSuccess|NoResults|SemanticFallback|AutoPassesGraphExpansionConfigToRuntime|FormatsMultiHopGraphAndHybridGraphLabels|RuntimeTagFilterMatchesNormalizedTagsWithoutReadingDocument|WithTagsFiltersHitsByTag|WithTagsFallsBackToLooseMatchWithinTaggedDocs|WithTagsSkipsLooseFallbackForPunctuationOnlyQuery|WithTagsExcludesMissingTags|WithTagOnlyQueryReturnsTaggedNotes|MaxResults|AppendsQueryLogWhenEnabled|DoesNotAppendQueryLogWhenDisabled|DoesNotAppendQueryLogOnFailure|PurityDependsOnQueryLogging)' -v` ✅
-- Full tool package:
-  - `go test -tags sqlite_fts5 ./internal/tool -v` ✅
-- Full project validation:
-  - `make test` ✅
-  - `make build` ✅
-- Non-blocking note:
-  - `npm audit --json` currently reports zero vulnerabilities after the frontend dependency cleanup.
-
-What a fresh agent should do next
-1. Treat the `brain_search` helper extraction as landed.
-2. Do not continue splitting `cmd/yard/chain.go` or `internal/tool/brain_search.go` just because more theoretical seams exist.
-3. If the user still wants simplification work, start with a fresh re-scout and choose only a new obviously bounded seam.
-4. If the user wants feature work instead, follow the current repo/runtime/spec truth rather than stale simplification plans.
-
-Recommended workflow for the next agent
-1. Inspect repo state with `git status --short --branch`.
-2. Read `AGENTS.md`, `README.md`, and this handoff before deciding on scope.
-3. If continuing simplification, re-scout first instead of forcing another extraction from the same area.
-4. Use strict TDD for any new behavior change:
-   - write the failing test first
-   - run the targeted test and watch it fail
-   - implement the minimum fix
-   - rerun targeted tests
-   - rerun broader relevant tests
-5. Finish with `make test` and `make build` before handing off or committing.
+Recommended next order
+1. Project tree file attachment, richer role roster actions, or browser inspector parity.
 
 Do not change by default
-- Do not redesign file/brain tool schemas without focused tests and an explicit need.
-- Do not reopen the stopped `cmd/yard/chain.go` simplification track without a new re-scout.
-- Do not reopen broad markdown cleanup beyond keeping current-truth docs current.
-- Do not touch `yard.yaml`, `.yard/`, or `.brain/` unless the task explicitly requires it.
+- Do not add search behavior to `cmd/yard`.
+- Do not shell out from the TUI to Cobra commands for core behavior.
+- Do not add database tables for TUI filter/search.
+- Do not secretly start `yard serve` from the TUI unless a future slice explicitly designs that behavior.
+- Do not churn `yard.yaml`, `.yard/`, or `.brain/` unless the task explicitly requires it.
+- Do not create new standing plan docs unless specifically needed.
+
+Recommended workflow for the next agent
+1. Inspect repo state with `rtk git status --short --branch`.
+2. Read the files listed above before deciding scope.
+3. Keep new TUI behavior in `internal/tui` unless the feature genuinely belongs in shared runtime packages.
+4. Prefer focused model/render tests in `internal/tui/model_test.go` and `internal/tui/render_test.go`.
+5. Finish with `rtk make test` and `rtk make build`.

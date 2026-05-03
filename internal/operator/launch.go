@@ -54,6 +54,16 @@ func (s *Service) ValidateLaunch(ctx context.Context, req LaunchRequest) (Launch
 			return LaunchPreview{}, fmt.Errorf("agent role %q not found in config", "orchestrator")
 		}
 		req.Role = "orchestrator"
+	case LaunchModeConstrained:
+		if _, ok := cfg.AgentRoles["orchestrator"]; !ok {
+			return LaunchPreview{}, fmt.Errorf("agent role %q not found in config", "orchestrator")
+		}
+		allowedRoles, err := resolveLaunchAllowedRoles(cfg, req)
+		if err != nil {
+			return LaunchPreview{}, err
+		}
+		req.AllowedRoles = allowedRoles
+		req.Role = "orchestrator"
 	case LaunchModeManualRoster:
 		roster, err := resolveLaunchRoster(cfg, req)
 		if err != nil {
@@ -68,6 +78,7 @@ func (s *Service) ValidateLaunch(ctx context.Context, req LaunchRequest) (Launch
 	return LaunchPreview{
 		Mode:         req.Mode,
 		Role:         req.Role,
+		AllowedRoles: append([]string(nil), req.AllowedRoles...),
 		Roster:       append([]string(nil), req.Roster...),
 		Summary:      summarizeLaunch(req),
 		CompiledTask: compiled,
@@ -87,11 +98,13 @@ func (s *Service) StartChain(ctx context.Context, req LaunchRequest) (StartResul
 	req = withLaunchDefaults(normalizeLaunchRequest(req))
 	req.Mode = preview.Mode
 	req.Role = preview.Role
+	req.AllowedRoles = append([]string(nil), preview.AllowedRoles...)
 	req.Roster = append([]string(nil), preview.Roster...)
 
 	startOpts := chainrun.Options{
 		Mode:             chainrun.Mode(req.Mode),
 		Role:             req.Role,
+		AllowedRoles:     append([]string(nil), req.AllowedRoles...),
 		Roster:           chainrunRoster(req.Roster),
 		SourceSpecs:      append([]string(nil), req.SourceSpecs...),
 		SourceTask:       req.SourceTask,
@@ -170,10 +183,13 @@ func normalizeLaunchRequest(req LaunchRequest) LaunchRequest {
 	req.Role = strings.TrimSpace(req.Role)
 	req.SourceTask = strings.TrimSpace(req.SourceTask)
 	req.SourceSpecs = chaininput.NormalizeSpecs(req.SourceSpecs)
+	req.AllowedRoles = normalizeRoster(req.AllowedRoles)
 	req.Roster = normalizeRoster(req.Roster)
 	if req.Mode == "" {
 		if len(req.Roster) > 0 {
 			req.Mode = LaunchModeManualRoster
+		} else if len(req.AllowedRoles) > 0 {
+			req.Mode = LaunchModeConstrained
 		} else if req.Role != "" {
 			req.Mode = LaunchModeOneStep
 		} else {
@@ -209,6 +225,9 @@ func compileLaunchTask(req LaunchRequest) string {
 	if len(req.SourceSpecs) > 0 {
 		parts = append(parts, "Specs: "+strings.Join(req.SourceSpecs, ", "))
 	}
+	if req.Mode == LaunchModeConstrained && len(req.AllowedRoles) > 0 {
+		parts = append(parts, "Allowed roles: "+strings.Join(req.AllowedRoles, ", "))
+	}
 	return strings.Join(parts, "\n\n")
 }
 
@@ -218,6 +237,8 @@ func summarizeLaunch(req LaunchRequest) string {
 		return fmt.Sprintf("Run one %s step", req.Role)
 	case LaunchModeManualRoster:
 		return fmt.Sprintf("Run manual roster: %s", strings.Join(req.Roster, " -> "))
+	case LaunchModeConstrained:
+		return fmt.Sprintf("Run constrained orchestration with roles: %s", strings.Join(req.AllowedRoles, ", "))
 	default:
 		return "Run Sir Topham-managed orchestration"
 	}
@@ -247,6 +268,42 @@ func resolveLaunchRoster(cfg *appconfig.Config, req LaunchRequest) ([]string, er
 		roster[i] = roleName
 	}
 	return roster, nil
+}
+
+func resolveLaunchAllowedRoles(cfg *appconfig.Config, req LaunchRequest) ([]string, error) {
+	roles := normalizeAllowedRoles(req.AllowedRoles)
+	if len(roles) == 0 && strings.TrimSpace(req.Role) != "" && req.Role != "orchestrator" {
+		roles = normalizeAllowedRoles(strings.Split(req.Role, ","))
+	}
+	if len(roles) == 0 {
+		return nil, fmt.Errorf("constrained orchestration requires at least one allowed role")
+	}
+	for i := range roles {
+		roleName, _, err := cfg.ResolveAgentRole(roles[i])
+		if err != nil {
+			return nil, fmt.Errorf("resolve constrained role %d: %w", i+1, err)
+		}
+		roles[i] = roleName
+	}
+	return roles, nil
+}
+
+func normalizeAllowedRoles(roles []string) []string {
+	normalized := make([]string, 0, len(roles))
+	seen := make(map[string]struct{}, len(roles))
+	for _, role := range roles {
+		role = strings.TrimSpace(role)
+		if role == "" {
+			continue
+		}
+		key := strings.ToLower(role)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		normalized = append(normalized, role)
+	}
+	return normalized
 }
 
 func normalizeRoster(roles []string) []string {

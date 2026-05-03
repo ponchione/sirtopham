@@ -15,11 +15,19 @@ func (m Model) renderReceipts() string {
 		return strings.Join(lines, "\n")
 	}
 	lines = append(lines, fmt.Sprintf("chain: %s", m.detail.Chain.ID), "")
-	if len(m.receiptItems) == 0 {
-		lines = append(lines, m.styles.subtle.Render("No receipts recorded."))
+	visibleItems := m.visibleReceiptItems()
+	if filterLine := renderFilterLine("receipts", m.receiptFilter, m.filterEdit && m.filterScreen == screenReceipts, len(visibleItems), len(m.receiptItems)); filterLine != "" {
+		lines = append(lines, filterLine)
+	}
+	if len(visibleItems) == 0 {
+		message := "No receipts recorded."
+		if len(m.receiptItems) > 0 {
+			message = "No receipts match filter."
+		}
+		lines = append(lines, m.styles.subtle.Render(message))
 		return strings.Join(lines, "\n")
 	}
-	for i, item := range m.receiptItems {
+	for i, item := range visibleItems {
 		line := fmt.Sprintf("%-18s %s", item.Label, item.Path)
 		if i == m.receiptCursor {
 			line = m.styles.selected.Render("> " + line)
@@ -31,7 +39,7 @@ func (m Model) renderReceipts() string {
 	lines = append(lines, "", m.styles.title.Render("Content"))
 	if m.receipt != nil {
 		lines = append(lines, fmt.Sprintf("path: %s", m.receipt.Path))
-		lines = append(lines, "controls: o pager  E editor")
+		lines = append(lines, "controls: o pager  E editor  w web")
 	}
 	if m.err != nil {
 		lines = append(lines, m.styles.error.Render(m.err.Error()))

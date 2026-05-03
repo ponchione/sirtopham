@@ -336,6 +336,16 @@ func (s *Service) config() (*appconfig.Config, error) {
 	return nil, errors.New("operator runtime config is nil")
 }
 
+func (s *Service) database() (*sql.DB, error) {
+	if s == nil || s.rt == nil {
+		return nil, errors.New("operator service is closed")
+	}
+	if s.rt.Database == nil {
+		return nil, errors.New("operator runtime database is nil")
+	}
+	return s.rt.Database, nil
+}
+
 func interruptProcess(pid int) error {
 	proc, err := os.FindProcess(pid)
 	if err != nil {

@@ -39,6 +39,9 @@ func EnsureDatabase(ctx context.Context, projectRoot, projectName, stateDir stri
 	if err := appdb.EnsureChainSchema(ctx, database); err != nil {
 		return false, fmt.Errorf("ensure chain schema: %w", err)
 	}
+	if err := appdb.EnsureLaunchSchema(ctx, database); err != nil {
+		return false, fmt.Errorf("ensure launch schema: %w", err)
+	}
 
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err = database.ExecContext(ctx, `

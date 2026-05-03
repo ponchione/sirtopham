@@ -14,6 +14,7 @@ func (m Model) renderLaunch() string {
 		lines = append(lines, m.styles.subtle.Render(m.notice))
 	}
 	lines = append(lines, "")
+	lines = append(lines, fmt.Sprintf("preset: %s", m.activeLaunchPresetName()))
 	lines = append(lines, m.renderLaunchField(launchFieldTask, "task", renderLaunchTask(m.launch.SourceTask, m.launchEdit && m.launchField == launchFieldTask)))
 	lines = append(lines, m.renderLaunchField(launchFieldSpecs, "specs", renderLaunchSpecs(m.launch.SpecsText, m.launchEdit && m.launchField == launchFieldSpecs)))
 	lines = append(lines, m.renderLaunchField(launchFieldMode, "mode", string(m.launch.Mode)))
@@ -22,11 +23,14 @@ func (m Model) renderLaunch() string {
 		role = "none"
 	}
 	roleLabel := "role"
-	if m.launch.Mode == operator.LaunchModeManualRoster {
+	switch m.launch.Mode {
+	case operator.LaunchModeManualRoster:
 		roleLabel = "roster"
+	case operator.LaunchModeConstrained:
+		roleLabel = "allowed"
 	}
 	lines = append(lines, m.renderLaunchField(launchFieldRole, roleLabel, role))
-	lines = append(lines, "", "controls: i edit task/specs  m mode  n role/roster  v preview  S start")
+	lines = append(lines, "", "controls: b preset  B save preset  i edit task/specs  m mode  n role/roster/allowed  s save  L load  v preview  S start")
 	lines = append(lines, "", m.styles.title.Render("Preview"))
 	if m.preview == nil {
 		lines = append(lines, m.styles.subtle.Render("No preview yet."))
@@ -38,6 +42,9 @@ func (m Model) renderLaunch() string {
 		)
 		if len(m.preview.Roster) > 0 {
 			lines = append(lines, fmt.Sprintf("roster: %s", strings.Join(m.preview.Roster, " -> ")))
+		}
+		if len(m.preview.AllowedRoles) > 0 {
+			lines = append(lines, fmt.Sprintf("allowed: %s", strings.Join(m.preview.AllowedRoles, ", ")))
 		}
 		lines = append(lines, "", m.styles.title.Render("Compiled task"), trimOneLine(m.preview.CompiledTask, 120))
 		if len(m.preview.Warnings) > 0 {
@@ -96,6 +103,9 @@ func (m *Model) ensureLaunchDefaults() {
 	if m.launch.Mode == operator.LaunchModeManualRoster && len(m.launch.Roster) == 0 && m.launch.Role != "" {
 		m.launch.Roster = []string{m.launch.Role}
 	}
+	if m.launch.Mode == operator.LaunchModeConstrained && len(m.launch.AllowedRoles) == 0 && m.launch.Role != "" {
+		m.launch.AllowedRoles = []string{m.launch.Role}
+	}
 	if m.launchField > launchFieldRole {
 		m.launchField = launchFieldTask
 	}
@@ -107,6 +117,12 @@ func (m *Model) toggleLaunchMode() {
 		m.launch.Mode = operator.LaunchModeOrchestrator
 		m.notice = "launch mode set to orchestrator"
 	case operator.LaunchModeOrchestrator:
+		m.launch.Mode = operator.LaunchModeConstrained
+		if len(m.launch.AllowedRoles) == 0 && m.launch.Role != "" {
+			m.launch.AllowedRoles = []string{m.launch.Role}
+		}
+		m.notice = "launch mode set to constrained orchestration"
+	case operator.LaunchModeConstrained:
 		m.launch.Mode = operator.LaunchModeManualRoster
 		if len(m.launch.Roster) == 0 && m.launch.Role != "" {
 			m.launch.Roster = []string{m.launch.Role}
@@ -123,6 +139,15 @@ func (m *Model) toggleLaunchMode() {
 func (m *Model) nextLaunchRole() {
 	if len(m.roles) == 0 {
 		m.notice = "no roles configured"
+		return
+	}
+	if m.launch.Mode == operator.LaunchModeConstrained {
+		next := m.nextAllowedRole()
+		m.launch.AllowedRoles = append(m.launch.AllowedRoles, next)
+		m.launch.Role = next
+		m.notice = fmt.Sprintf("allowed constrained role added: %s", next)
+		m.clearLaunchPreview()
+		m.err = nil
 		return
 	}
 	if m.launch.Mode == operator.LaunchModeManualRoster {
@@ -202,10 +227,24 @@ func (m Model) launchRequest() operator.LaunchRequest {
 		SourceTask:  m.launch.SourceTask,
 		SourceSpecs: parseLaunchSpecs(m.launch.SpecsText),
 	}
+	if m.launch.Mode == operator.LaunchModeConstrained {
+		req.AllowedRoles = append([]string(nil), m.launch.AllowedRoles...)
+	}
 	if m.launch.Mode == operator.LaunchModeManualRoster {
 		req.Roster = append([]string(nil), m.launch.Roster...)
 	}
 	return req
+}
+
+func (m *Model) applyLaunchRequest(req operator.LaunchRequest) {
+	m.launch.Mode = req.Mode
+	m.launch.Role = req.Role
+	m.launch.AllowedRoles = append([]string(nil), req.AllowedRoles...)
+	m.launch.Roster = append([]string(nil), req.Roster...)
+	m.launch.SourceTask = req.SourceTask
+	m.launch.SpecsText = strings.Join(req.SourceSpecs, ", ")
+	m.ensureLaunchDefaults()
+	m.clearLaunchPreview()
 }
 
 func (m *Model) clearLaunchPreview() {
@@ -222,6 +261,14 @@ func sameLaunchRequest(left operator.LaunchRequest, right operator.LaunchRequest
 	}
 	for i := range left.Roster {
 		if left.Roster[i] != right.Roster[i] {
+			return false
+		}
+	}
+	if len(left.AllowedRoles) != len(right.AllowedRoles) {
+		return false
+	}
+	for i := range left.AllowedRoles {
+		if left.AllowedRoles[i] != right.AllowedRoles[i] {
 			return false
 		}
 	}
@@ -252,7 +299,33 @@ func (m Model) launchRoleDisplay() string {
 	if m.launch.Mode == operator.LaunchModeManualRoster {
 		return strings.Join(m.launch.Roster, " -> ")
 	}
+	if m.launch.Mode == operator.LaunchModeConstrained {
+		return strings.Join(m.launch.AllowedRoles, ", ")
+	}
 	return m.launch.Role
+}
+
+func (m Model) nextAllowedRole() string {
+	current := ""
+	if len(m.launch.AllowedRoles) > 0 {
+		current = m.launch.AllowedRoles[len(m.launch.AllowedRoles)-1]
+	} else {
+		current = m.launch.Role
+	}
+	next := firstLaunchRole(m.roles)
+	for offset := range m.roles {
+		if m.roles[offset].Name != current {
+			continue
+		}
+		for step := 1; step <= len(m.roles); step++ {
+			candidate := m.roles[(offset+step)%len(m.roles)].Name
+			if candidate != "orchestrator" {
+				return candidate
+			}
+		}
+		break
+	}
+	return next
 }
 
 func (m Model) nextRosterRole() string {

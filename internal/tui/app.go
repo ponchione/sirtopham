@@ -20,6 +20,10 @@ type Operator interface {
 	PauseChain(context.Context, string) (operator.ControlResult, error)
 	CancelChain(context.Context, string) (operator.ControlResult, error)
 	ValidateLaunch(context.Context, operator.LaunchRequest) (operator.LaunchPreview, error)
+	SaveLaunchDraft(context.Context, operator.LaunchRequest) (operator.LaunchDraft, error)
+	LoadLaunchDraft(context.Context) (operator.LaunchDraft, bool, error)
+	ListLaunchPresets(context.Context) ([]operator.LaunchPreset, error)
+	SaveLaunchPreset(context.Context, string, operator.LaunchRequest) (operator.LaunchPreset, error)
 	StartChain(context.Context, operator.LaunchRequest) (operator.StartResult, error)
 }
 
@@ -29,6 +33,7 @@ type Options struct {
 	FollowInterval  time.Duration
 	ChainLimit      int
 	ReceiptOpener   ReceiptOpener
+	WebBaseURL      string
 }
 
 func Run(ctx context.Context, svc Operator, opts Options) error {
@@ -71,6 +76,7 @@ func NewModel(svc Operator, opts Options) Model {
 		followInterval:  opts.FollowInterval,
 		chainLimit:      opts.ChainLimit,
 		receiptOpener:   opts.ReceiptOpener,
+		webBaseURLValue: opts.WebBaseURL,
 		styles:          newStyles(),
 	}
 }

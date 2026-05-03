@@ -33,6 +33,7 @@ type Mode string
 
 const (
 	ModeOrchestrator Mode = "sir_topham_decides"
+	ModeConstrained  Mode = "constrained_orchestration"
 	ModeOneStep      Mode = "one_step_chain"
 	ModeManualRoster Mode = "manual_roster"
 )
@@ -51,6 +52,7 @@ type Options struct {
 	ChainID          string
 	Mode             Mode
 	Role             string
+	AllowedRoles     []string
 	Roster           []StepRequest
 	SourceSpecs      []string
 	SourceTask       string
@@ -106,12 +108,19 @@ func Start(ctx context.Context, cfg *appconfig.Config, opts Options, deps Deps) 
 	}
 	var roleCfg appconfig.AgentRoleConfig
 	var systemPrompt string
-	if mode == ModeOrchestrator {
+	if mode == ModeOrchestrator || mode == ModeConstrained {
 		var ok bool
 		roleCfg, ok = cfg.AgentRoles["orchestrator"]
 		if !ok {
 			return nil, fmt.Errorf("agent role %q not found in config", "orchestrator")
 		}
+		if mode == ModeConstrained {
+			opts, err = resolveAllowedRoles(cfg, opts)
+			if err != nil {
+				return nil, err
+			}
+		}
+		opts.Role = "orchestrator"
 		systemPrompt, _, err = rtpkg.LoadRoleSystemPrompt("orchestrator", cfg.ProjectRoot, roleCfg.SystemPrompt)
 		if err != nil {
 			return nil, err
@@ -358,7 +367,7 @@ func withDefaultDeps(deps Deps) Deps {
 func resolveMode(opts Options) (Mode, error) {
 	if opts.Mode != "" {
 		switch opts.Mode {
-		case ModeOrchestrator, ModeOneStep, ModeManualRoster:
+		case ModeOrchestrator, ModeConstrained, ModeOneStep, ModeManualRoster:
 			return opts.Mode, nil
 		default:
 			return "", fmt.Errorf("unsupported chain mode %q", opts.Mode)
@@ -366,6 +375,9 @@ func resolveMode(opts Options) (Mode, error) {
 	}
 	if len(opts.Roster) > 0 {
 		return ModeManualRoster, nil
+	}
+	if len(opts.AllowedRoles) > 0 {
+		return ModeConstrained, nil
 	}
 	if strings.TrimSpace(opts.Role) != "" {
 		return ModeOneStep, nil
@@ -399,6 +411,26 @@ func resolveStepRoles(cfg *appconfig.Config, opts Options, mode Mode) (Options, 
 	}
 }
 
+func resolveAllowedRoles(cfg *appconfig.Config, opts Options) (Options, error) {
+	roles := normalizeRoleNames(opts.AllowedRoles)
+	if len(roles) == 0 && strings.TrimSpace(opts.Role) != "" && opts.Role != "orchestrator" {
+		roles = normalizeRoleNames(strings.Split(opts.Role, ","))
+	}
+	if len(roles) == 0 {
+		return opts, fmt.Errorf("chain start: constrained orchestration requires at least one allowed role")
+	}
+	for i := range roles {
+		roleName, _, err := cfg.ResolveAgentRole(roles[i])
+		if err != nil {
+			return opts, fmt.Errorf("chain start: constrained role %d: %w", i+1, err)
+		}
+		roles[i] = roleName
+	}
+	opts.AllowedRoles = roles
+	opts.Role = "orchestrator"
+	return opts, nil
+}
+
 func prepareChainForExecution(ctx context.Context, store *chain.Store, chainID string, opts Options) (Options, bool, bool, error) {
 	existing, err := resolveExistingChain(ctx, store, chainID)
 	if err != nil {
@@ -420,7 +452,11 @@ func prepareChainForExecution(ctx context.Context, store *chain.Store, chainID s
 	if _, err := store.StartChain(ctx, chainSpecFromOptions(chainID, opts)); err != nil {
 		return opts, false, false, err
 	}
-	_ = store.LogEvent(ctx, chainID, "", chain.EventChainStarted, map[string]any{"specs": opts.SourceSpecs, "task": opts.SourceTask})
+	payload := map[string]any{"specs": opts.SourceSpecs, "task": opts.SourceTask, "mode": string(opts.Mode)}
+	if len(opts.AllowedRoles) > 0 {
+		payload["allowed_roles"] = opts.AllowedRoles
+	}
+	_ = store.LogEvent(ctx, chainID, "", chain.EventChainStarted, payload)
 	return opts, isNew, resumed, nil
 }
 
@@ -591,10 +627,21 @@ func buildTask(opts Options, chainID string, receiptPaths []string) string {
 	if len(receiptPaths) > 0 {
 		history = fmt.Sprintf("Relevant existing receipt paths to read first: %s.", strings.Join(receiptPaths, ", "))
 	}
+	roleConstraints := constrainedRoleInstruction(opts)
+	if roleConstraints != "" {
+		history = history + " " + roleConstraints
+	}
 	if len(opts.SourceSpecs) > 0 {
 		return fmt.Sprintf("You are managing a chain execution. Source specs: %s. Chain ID: %s. Read the specs from the brain. %s Continue orchestrating from the current point.", strings.Join(opts.SourceSpecs, ", "), chainID, history)
 	}
 	return fmt.Sprintf("You are managing a chain execution. Task: %s. Chain ID: %s. %s Continue orchestrating from the current point.", strings.TrimSpace(opts.SourceTask), chainID, history)
+}
+
+func constrainedRoleInstruction(opts Options) string {
+	if opts.Mode != ModeConstrained || len(opts.AllowedRoles) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("Constrained orchestration is enabled. When spawning agent steps, choose only from these configured role keys: %s. Do not spawn unlisted roles.", strings.Join(opts.AllowedRoles, ", "))
 }
 
 func buildOneStepTask(opts Options) string {
@@ -723,6 +770,24 @@ func existingReceiptPaths(steps []chain.Step) []string {
 		paths = append(paths, path)
 	}
 	return paths
+}
+
+func normalizeRoleNames(roles []string) []string {
+	normalized := make([]string, 0, len(roles))
+	seen := make(map[string]struct{}, len(roles))
+	for _, role := range roles {
+		role = strings.TrimSpace(role)
+		if role == "" {
+			continue
+		}
+		key := strings.ToLower(role)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		normalized = append(normalized, role)
+	}
+	return normalized
 }
 
 func exitCode(status string, events []chain.Event) int {

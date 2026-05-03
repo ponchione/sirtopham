@@ -1,7 +1,7 @@
 # 20 - Operator Console TUI
 
 **Status:** Active build spec
-**Last Updated:** 2026-05-01
+**Last Updated:** 2026-05-03
 **Owner:** Mitchell
 
 ---
@@ -24,10 +24,10 @@ The browser app remains available through `yard serve`, but its target role is t
 
 All three surfaces should converge on shared internal runtime services. The TUI must not shell out to `yard chain start`, `yard index`, or other Cobra commands for core behavior. Cobra commands, the TUI, and HTTP handlers should call the same internal packages.
 
-Implementation status as of 2026-05-01:
+Implementation status as of 2026-05-03:
 
-- Landed: `yard tui`, shared `internal/operator` reads and controls, dashboard readiness metadata, chain/detail views, receipt summaries/content, live event follow, pause/cancel, receipt open through `$PAGER`/`$EDITOR`, and launch preview/start for `one_step_chain`, `manual_roster`, and `sir_topham_decides`.
-- Remaining: constrained orchestration, search/filter across chains and receipts, open-in-web handoffs, persistent launch drafts, and presets.
+- Landed: `yard tui`, shared `internal/operator` reads and controls, dashboard readiness metadata, chain/detail views, chain and receipt filtering, receipt summaries/content, live event follow, pause/cancel, receipt open through `$PAGER`/`$EDITOR`, web-inspector target handoffs, built-in and custom launch presets, persistent current launch drafts, and launch preview/start for `one_step_chain`, `manual_roster`, `constrained_orchestration`, and `sir_topham_decides`.
+- Remaining: project tree file attachment, richer role roster actions, and fuller browser inspector parity.
 - Resume is currently a foreground command handoff: the TUI shows `yard chain resume <chain-id>` rather than continuing runner execution inside the TUI.
 
 ---
@@ -165,7 +165,9 @@ Launch modes:
 | `one_step_chain` | Run one selected role against the work packet |
 | `manual_roster` | Run an ordered role list, each step receiving previous receipts |
 | `sir_topham_decides` | Let the orchestrator choose the flow |
-| `constrained_orchestration` | Let the orchestrator choose within selected roles/checkpoints |
+| `constrained_orchestration` | Let the orchestrator choose within selected allowed roles |
+
+Built-in presets are available in the launch screen and preserve the current task/spec draft while changing mode and role selection. Custom presets can be saved from the current launch role/mode shape with `B` and are included in the `b` preset cycle. The current launch draft can be saved and loaded across sessions through shared operator state.
 
 Fields:
 
@@ -182,9 +184,9 @@ Fields:
 
 MVP behavior:
 
-- The current launch draft lives in memory until started.
+- The current launch draft lives in memory until saved. `s` saves the current draft and `L` loads the saved draft.
 - Starting compiles a deterministic work packet and calls the same internal chain start path used by `yard chain start`.
-- Persistent launch records are optional until durable drafts, custom presets, or cross-surface resume become necessary.
+- Persistent current drafts and custom presets are stored in `.yard/yard.db` through `internal/operator`. Broader launch history remains future work.
 
 ### Chains
 
@@ -292,13 +294,15 @@ Default bindings:
 | `enter` | Open selected item or confirm focused action |
 | `esc` | Back, close modal, or clear focus |
 | `/` | Search/filter current list |
+| `backspace` / `ctrl+u` | Edit or clear the active filter while filtering |
 | `r` | Refresh focused screen |
 | `n` | New launch |
 | `f` | Follow selected chain |
 | `p` | Pause/resume selected chain when supported |
 | `x` | Cancel selected chain after confirmation |
 | `e` | Open selected file/receipt in `$EDITOR` |
-| `o` | Open selected item in web inspector when available |
+| `o` | Open selected receipt in `$PAGER` when on receipts |
+| `w` | Show web inspector target for selected chain/receipt without starting `yard serve` |
 
 Bindings should be visible in the bottom hint bar and discoverable through `?`.
 
@@ -372,6 +376,8 @@ If `yard serve` is not running, an open-in-web action may either:
 
 The first implementation should keep this simple and avoid hidden long-running server side effects.
 
+Implemented first pass: the TUI shows the `yard serve` command and target web-inspector URL for the selected chain or receipt. It does not detect, start, or supervise the web server.
+
 ---
 
 ## Implementation Phases
@@ -400,7 +406,7 @@ The first implementation should keep this simple and avoid hidden long-running s
 - Add manual roster mode when the runner supports it.
 - Validate preflight warnings before start.
 - Preview compiled work packet.
-- Status: mostly landed. One-step, manual-roster, and orchestrated launch preview/start are present; constrained orchestration remains deferred.
+- Status: landed for one-step, manual-roster, constrained orchestration, and orchestrated launch preview/start. Constrained orchestration is an orchestrator-managed run with an allowed-role list, not a second scheduler.
 
 ### Phase D - Operator Polish
 
@@ -410,7 +416,7 @@ The first implementation should keep this simple and avoid hidden long-running s
 - Role roster actions.
 - Open-in-web handoffs.
 - Focused rendering tests for key screens.
-- Status: remaining, except focused TUI model/render tests already cover the current screens and controls.
+- Status: chain/receipt filtering, built-in/custom launch presets, persistent current launch drafts, and notice-only web-inspector target handoffs are landed. Project tree file attachment, role roster actions, and fuller browser inspector parity remain.
 
 ---
 
@@ -430,8 +436,7 @@ The first implementation should keep this simple and avoid hidden long-running s
 
 ## Open Questions
 
-- Should persistent launch drafts land before or after the first useful TUI?
-- Should `yard tui` be allowed to start `yard serve` for open-in-web actions, or should it only display the command?
+- Should a later `yard tui` handoff detect an already-running `yard serve` and open directly, or keep the current notice-only command/URL display?
 - What is the minimum useful event-follow contract for chains: store polling cursor, channel subscription, or both?
 - Which screens deserve snapshot/golden tests versus ordinary model update tests?
 - Should document intake be terminal-native first, browser-native first, or deferred until chain launch is stable?

@@ -424,6 +424,14 @@ func TestListAgentRolesAndValidateLaunch(t *testing.T) {
 	if manual.Mode != LaunchModeManualRoster || manual.Role != "coder,orchestrator" || !reflect.DeepEqual(manual.Roster, []string{"coder", "orchestrator"}) || manual.Summary != "Run manual roster: coder -> orchestrator" {
 		t.Fatalf("manual preview = %+v, want normalized roster preview", manual)
 	}
+
+	constrained, err := svc.ValidateLaunch(ctx, LaunchRequest{Mode: LaunchModeConstrained, AllowedRoles: []string{" coder ", "coder"}, SourceTask: "ship constrained"})
+	if err != nil {
+		t.Fatalf("ValidateLaunch constrained returned error: %v", err)
+	}
+	if constrained.Mode != LaunchModeConstrained || constrained.Role != "orchestrator" || !reflect.DeepEqual(constrained.AllowedRoles, []string{"coder"}) || constrained.Summary != "Run constrained orchestration with roles: coder" || !strings.Contains(constrained.CompiledTask, "Allowed roles: coder") {
+		t.Fatalf("constrained preview = %+v, want normalized constrained preview", constrained)
+	}
 }
 
 func TestValidateLaunchRejectsMissingInputsAndUnknownRole(t *testing.T) {
@@ -438,6 +446,9 @@ func TestValidateLaunchRejectsMissingInputsAndUnknownRole(t *testing.T) {
 	}
 	if _, err := svc.ValidateLaunch(ctx, LaunchRequest{Mode: LaunchModeManualRoster, SourceTask: "fix"}); err == nil || !strings.Contains(err.Error(), "manual roster requires at least one role") {
 		t.Fatalf("ValidateLaunch missing roster error = %v, want missing roster error", err)
+	}
+	if _, err := svc.ValidateLaunch(ctx, LaunchRequest{Mode: LaunchModeConstrained, SourceTask: "fix"}); err == nil || !strings.Contains(err.Error(), "constrained orchestration requires at least one allowed role") {
+		t.Fatalf("ValidateLaunch missing constrained roles error = %v, want missing allowed roles error", err)
 	}
 }
 
@@ -518,6 +529,176 @@ func TestStartChainMapsManualRosterLaunchRequestToChainrun(t *testing.T) {
 	}
 	if gotOpts.Mode != chainrun.ModeManualRoster || gotOpts.Role != "coder,orchestrator" || len(gotOpts.Roster) != 2 || gotOpts.Roster[0].Role != "coder" || gotOpts.Roster[1].Role != "orchestrator" {
 		t.Fatalf("chainrun opts = %+v, want manual roster mapped to step requests", gotOpts)
+	}
+}
+
+func TestStartChainMapsConstrainedLaunchRequestToChainrun(t *testing.T) {
+	ctx := context.Background()
+	projectRoot := t.TempDir()
+	configPath := writeOperatorTestConfig(t, projectRoot)
+	var gotOpts chainrun.Options
+	svc, err := Open(ctx, Options{
+		ConfigPath: configPath,
+		ReadOnly:   true,
+		ChainStarter: func(ctx context.Context, cfg *appconfig.Config, opts chainrun.Options, deps chainrun.Deps) (*chainrun.Result, error) {
+			gotOpts = opts
+			opts.OnChainID("constrained-launched")
+			return &chainrun.Result{ChainID: "constrained-launched", Status: "completed"}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	t.Cleanup(svc.Close)
+
+	result, err := svc.StartChain(ctx, LaunchRequest{Mode: LaunchModeConstrained, AllowedRoles: []string{"coder"}, SourceTask: "ship constrained"})
+	if err != nil {
+		t.Fatalf("StartChain returned error: %v", err)
+	}
+	if result.ChainID != "constrained-launched" || result.Preview.Summary != "Run constrained orchestration with roles: coder" {
+		t.Fatalf("result = %+v, want constrained preview", result)
+	}
+	if gotOpts.Mode != chainrun.ModeConstrained || gotOpts.Role != "orchestrator" || !reflect.DeepEqual(gotOpts.AllowedRoles, []string{"coder"}) || gotOpts.SourceTask != "ship constrained" {
+		t.Fatalf("chainrun opts = %+v, want constrained orchestrator mapped with allowed roles", gotOpts)
+	}
+}
+
+func TestLaunchDraftSaveLoadRoundTripsCurrentDraft(t *testing.T) {
+	ctx := context.Background()
+	projectRoot := t.TempDir()
+	configPath := writeOperatorTestConfig(t, projectRoot)
+	db := newOperatorTestDB(t)
+	store := chain.NewStore(db)
+	svc, err := Open(ctx, Options{
+		ConfigPath: configPath,
+		BuildRuntime: func(ctx context.Context, cfg *appconfig.Config) (*rtpkg.OrchestratorRuntime, error) {
+			return &rtpkg.OrchestratorRuntime{
+				Config:       cfg,
+				Database:     db,
+				ChainStore:   store,
+				BrainBackend: &fakeBrainBackend{},
+				Cleanup:      func() {},
+			}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	t.Cleanup(svc.Close)
+
+	initial, found, err := svc.LoadLaunchDraft(ctx)
+	if err != nil {
+		t.Fatalf("LoadLaunchDraft initial returned error: %v", err)
+	}
+	if found {
+		t.Fatalf("initial draft = %+v, want no draft", initial)
+	}
+
+	saved, err := svc.SaveLaunchDraft(ctx, LaunchRequest{
+		Mode:         LaunchModeConstrained,
+		Role:         "coder",
+		AllowedRoles: []string{"coder", "planner"},
+		SourceTask:   "persist launch",
+		SourceSpecs:  []string{"docs/specs/a.md", "docs/specs/b.md"},
+	})
+	if err != nil {
+		t.Fatalf("SaveLaunchDraft returned error: %v", err)
+	}
+	if saved.ID != "current" || saved.UpdatedAt == "" {
+		t.Fatalf("saved draft metadata = %+v, want current id and updated timestamp", saved)
+	}
+
+	loaded, found, err := svc.LoadLaunchDraft(ctx)
+	if err != nil {
+		t.Fatalf("LoadLaunchDraft returned error: %v", err)
+	}
+	if !found {
+		t.Fatal("LoadLaunchDraft found=false, want saved draft")
+	}
+	if loaded.Request.Mode != LaunchModeConstrained || loaded.Request.Role != "coder" || loaded.Request.SourceTask != "persist launch" {
+		t.Fatalf("loaded draft request = %+v, want constrained coder task", loaded.Request)
+	}
+	if !reflect.DeepEqual(loaded.Request.AllowedRoles, []string{"coder", "planner"}) || !reflect.DeepEqual(loaded.Request.SourceSpecs, []string{"docs/specs/a.md", "docs/specs/b.md"}) {
+		t.Fatalf("loaded draft slices = allowed %v specs %v", loaded.Request.AllowedRoles, loaded.Request.SourceSpecs)
+	}
+
+	if _, err := svc.SaveLaunchDraft(ctx, LaunchRequest{Mode: LaunchModeOneStep, Role: "coder", SourceTask: "replacement"}); err != nil {
+		t.Fatalf("SaveLaunchDraft replacement returned error: %v", err)
+	}
+	loaded, found, err = svc.LoadLaunchDraft(ctx)
+	if err != nil {
+		t.Fatalf("LoadLaunchDraft replacement returned error: %v", err)
+	}
+	if !found || loaded.Request.Mode != LaunchModeOneStep || loaded.Request.SourceTask != "replacement" || len(loaded.Request.AllowedRoles) != 0 {
+		t.Fatalf("loaded replacement = %+v, want overwritten one-step draft", loaded)
+	}
+}
+
+func TestLaunchPresetSaveListRoundTripsCustomPreset(t *testing.T) {
+	ctx := context.Background()
+	projectRoot := t.TempDir()
+	configPath := writeOperatorTestConfig(t, projectRoot)
+	db := newOperatorTestDB(t)
+	store := chain.NewStore(db)
+	svc, err := Open(ctx, Options{
+		ConfigPath: configPath,
+		BuildRuntime: func(ctx context.Context, cfg *appconfig.Config) (*rtpkg.OrchestratorRuntime, error) {
+			return &rtpkg.OrchestratorRuntime{
+				Config:       cfg,
+				Database:     db,
+				ChainStore:   store,
+				BrainBackend: &fakeBrainBackend{},
+				Cleanup:      func() {},
+			}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	t.Cleanup(svc.Close)
+
+	initial, err := svc.ListLaunchPresets(ctx)
+	if err != nil {
+		t.Fatalf("ListLaunchPresets initial returned error: %v", err)
+	}
+	if len(initial) != 0 {
+		t.Fatalf("initial presets = %+v, want none", initial)
+	}
+
+	saved, err := svc.SaveLaunchPreset(ctx, "audit pair", LaunchRequest{
+		Mode:        LaunchModeManualRoster,
+		Role:        "coder",
+		Roster:      []string{"coder", "orchestrator"},
+		SourceTask:  "do not persist",
+		SourceSpecs: []string{"docs/specs/nope.md"},
+	})
+	if err != nil {
+		t.Fatalf("SaveLaunchPreset returned error: %v", err)
+	}
+	if saved.Name != "audit pair" || saved.Request.SourceTask != "" || len(saved.Request.SourceSpecs) != 0 {
+		t.Fatalf("saved preset = %+v, want name without task/specs", saved)
+	}
+	if saved.Request.Mode != LaunchModeManualRoster || saved.Request.Role != "coder,orchestrator" || !reflect.DeepEqual(saved.Request.Roster, []string{"coder", "orchestrator"}) {
+		t.Fatalf("saved preset request = %+v, want manual roster", saved.Request)
+	}
+
+	presets, err := svc.ListLaunchPresets(ctx)
+	if err != nil {
+		t.Fatalf("ListLaunchPresets returned error: %v", err)
+	}
+	if len(presets) != 1 || presets[0].Name != "audit pair" || !reflect.DeepEqual(presets[0].Request.Roster, []string{"coder", "orchestrator"}) {
+		t.Fatalf("presets = %+v, want saved audit pair", presets)
+	}
+
+	if _, err := svc.SaveLaunchPreset(ctx, "audit pair", LaunchRequest{Mode: LaunchModeConstrained, AllowedRoles: []string{"coder"}, SourceTask: "ignored"}); err != nil {
+		t.Fatalf("SaveLaunchPreset update returned error: %v", err)
+	}
+	presets, err = svc.ListLaunchPresets(ctx)
+	if err != nil {
+		t.Fatalf("ListLaunchPresets after update returned error: %v", err)
+	}
+	if len(presets) != 1 || presets[0].Request.Mode != LaunchModeConstrained || !reflect.DeepEqual(presets[0].Request.AllowedRoles, []string{"coder"}) {
+		t.Fatalf("updated presets = %+v, want constrained replacement", presets)
 	}
 }
 

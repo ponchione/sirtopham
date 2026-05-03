@@ -78,6 +78,13 @@ func TestBuildTaskIncludesNoHistoryFallback(t *testing.T) {
 	}
 }
 
+func TestBuildTaskIncludesConstrainedRoleInstruction(t *testing.T) {
+	msg := buildTask(Options{Mode: ModeConstrained, SourceTask: "fix auth", AllowedRoles: []string{"planner", "coder"}}, "chain-1", nil)
+	if !containsAll(msg, "fix auth", "chain-1", "Constrained orchestration is enabled", "planner, coder", "Do not spawn unlisted roles") {
+		t.Fatalf("message = %q, want constrained role instruction", msg)
+	}
+}
+
 func TestBuildOneStepTaskIncludesSpecsWhenProvided(t *testing.T) {
 	msg := buildOneStepTask(Options{SourceTask: "fix auth", SourceSpecs: []string{"specs/auth.md"}})
 	if !containsAll(msg, "fix auth", "Source specs: specs/auth.md") {

@@ -23,6 +23,11 @@ type fakeOperator struct {
 	eventsSince    map[string][]chain.Event
 	launchRequest  operator.LaunchRequest
 	startRequest   operator.LaunchRequest
+	savedDraft     operator.LaunchDraft
+	loadDraft      operator.LaunchDraft
+	loadDraftFound bool
+	customPresets  []operator.LaunchPreset
+	savedPreset    operator.LaunchPreset
 	pausedChain    string
 	cancelledChain string
 }
@@ -47,8 +52,8 @@ func newFakeOperator() *fakeOperator {
 		},
 		roles: []operator.AgentRoleSummary{{Name: "coder"}, {Name: "orchestrator"}, {Name: "planner"}},
 		chains: []operator.ChainSummary{
-			{ID: "chain-1", Status: "running", SourceTask: "first task", TotalSteps: 1, TotalTokens: 12, StartedAt: started, UpdatedAt: started},
-			{ID: "chain-2", Status: "completed", SourceTask: "second task", TotalSteps: 2, TotalTokens: 34, StartedAt: started, UpdatedAt: started},
+			{ID: "chain-1", Status: "running", SourceTask: "first task", SourceSpecs: []string{"docs/specs/first.md"}, TotalSteps: 1, TotalTokens: 12, StartedAt: started, UpdatedAt: started, CurrentStep: &operator.StepSummary{SequenceNum: 1, Role: "coder", Status: "completed", ReceiptPath: "receipts/coder/chain-1-step-001.md"}},
+			{ID: "chain-2", Status: "completed", SourceTask: "second task", SourceSpecs: []string{"docs/specs/second.md"}, TotalSteps: 2, TotalTokens: 34, StartedAt: started, UpdatedAt: started, CurrentStep: &operator.StepSummary{SequenceNum: 1, Role: "planner", Status: "completed", ReceiptPath: "receipts/planner/chain-2-step-001.md"}},
 		},
 		details: map[string]operator.ChainDetail{
 			"chain-1": {
@@ -135,6 +140,7 @@ func (f *fakeOperator) ValidateLaunch(_ context.Context, req operator.LaunchRequ
 	}
 	role := req.Role
 	roster := append([]string(nil), req.Roster...)
+	allowedRoles := append([]string(nil), req.AllowedRoles...)
 	summary := "preview " + role
 	if req.Mode == operator.LaunchModeManualRoster {
 		if len(roster) == 0 && role != "" {
@@ -145,6 +151,16 @@ func (f *fakeOperator) ValidateLaunch(_ context.Context, req operator.LaunchRequ
 		}
 		role = strings.Join(roster, ",")
 		summary = "preview manual roster"
+	}
+	if req.Mode == operator.LaunchModeConstrained {
+		if len(allowedRoles) == 0 && role != "" {
+			allowedRoles = strings.Split(role, ",")
+		}
+		if len(allowedRoles) == 0 {
+			return operator.LaunchPreview{}, fmt.Errorf("constrained orchestration requires at least one allowed role")
+		}
+		role = "orchestrator"
+		summary = "preview constrained orchestration"
 	}
 	if role == "" {
 		role = "orchestrator"
@@ -157,9 +173,16 @@ func (f *fakeOperator) ValidateLaunch(_ context.Context, req operator.LaunchRequ
 		}
 		compiled += "Specs: " + strings.Join(req.SourceSpecs, ", ")
 	}
+	if len(allowedRoles) > 0 {
+		if compiled != "" {
+			compiled += "\n\n"
+		}
+		compiled += "Allowed roles: " + strings.Join(allowedRoles, ", ")
+	}
 	return operator.LaunchPreview{
 		Mode:         req.Mode,
 		Role:         role,
+		AllowedRoles: allowedRoles,
 		Roster:       roster,
 		Summary:      summary,
 		CompiledTask: compiled,
@@ -173,6 +196,28 @@ func (f *fakeOperator) StartChain(_ context.Context, req operator.LaunchRequest)
 	f.chains = append([]operator.ChainSummary{ch}, f.chains...)
 	f.details["chain-started"] = operator.ChainDetail{Chain: chain.Chain{ID: "chain-started", Status: "running", SourceTask: req.SourceTask}}
 	return operator.StartResult{ChainID: "chain-started", Status: "running", Preview: operator.LaunchPreview{Mode: req.Mode, Role: req.Role, Summary: "started"}}, nil
+}
+
+func (f *fakeOperator) SaveLaunchDraft(_ context.Context, req operator.LaunchRequest) (operator.LaunchDraft, error) {
+	f.savedDraft = operator.LaunchDraft{ID: "current", Request: req, UpdatedAt: "2026-05-01T12:02:00Z"}
+	return f.savedDraft, nil
+}
+
+func (f *fakeOperator) LoadLaunchDraft(context.Context) (operator.LaunchDraft, bool, error) {
+	return f.loadDraft, f.loadDraftFound, nil
+}
+
+func (f *fakeOperator) ListLaunchPresets(context.Context) ([]operator.LaunchPreset, error) {
+	return append([]operator.LaunchPreset(nil), f.customPresets...), nil
+}
+
+func (f *fakeOperator) SaveLaunchPreset(_ context.Context, name string, req operator.LaunchRequest) (operator.LaunchPreset, error) {
+	req.SourceTask = ""
+	req.SourceSpecs = nil
+	preset := operator.LaunchPreset{ID: "custom:" + name, Name: name, Request: req, UpdatedAt: "2026-05-01T12:04:00Z"}
+	f.savedPreset = preset
+	f.customPresets = append(f.customPresets, preset)
+	return preset, nil
 }
 
 func TestModelRefreshLoadsOperatorData(t *testing.T) {
@@ -192,7 +237,7 @@ func TestModelRefreshLoadsOperatorData(t *testing.T) {
 	if len(got.receiptItems) != 2 {
 		t.Fatalf("receipt item count = %d, want orchestrator plus step", len(got.receiptItems))
 	}
-	if got.launch.Role != "coder" || got.launch.Mode != operator.LaunchModeOneStep {
+	if got.launch.Role != "coder" || got.launch.Mode != operator.LaunchModeOneStep || got.activeLaunchPresetName() != "solo coder" {
 		t.Fatalf("launch defaults = %+v, want coder one-step", got.launch)
 	}
 }
@@ -243,6 +288,169 @@ func TestModelLoadsSelectedReceipt(t *testing.T) {
 	}
 }
 
+func TestModelEntersAndExitsFilterEditMode(t *testing.T) {
+	model := NewModel(newFakeOperator(), Options{RefreshInterval: -1})
+	loaded, _ := model.Update(model.refreshCmd()())
+	got := loaded.(Model)
+	got.screen = screenChains
+
+	updated, cmd := got.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	got = updated.(Model)
+	if cmd != nil {
+		t.Fatal("starting filter edit returned command")
+	}
+	if !got.filterEdit || got.filterScreen != screenChains {
+		t.Fatalf("filter edit state = edit %t screen %v, want chains edit", got.filterEdit, got.filterScreen)
+	}
+
+	for _, r := range []rune("ru") {
+		updated, cmd = got.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		got = updated.(Model)
+		if cmd == nil {
+			t.Fatalf("typing %q did not request filtered selection refresh", string(r))
+		}
+	}
+	if got.chainFilter != "ru" {
+		t.Fatalf("chainFilter = %q, want ru", got.chainFilter)
+	}
+	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	got = updated.(Model)
+	if got.chainFilter != "r" {
+		t.Fatalf("chainFilter after backspace = %q, want r", got.chainFilter)
+	}
+	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyCtrlU})
+	got = updated.(Model)
+	if got.chainFilter != "" {
+		t.Fatalf("chainFilter after ctrl+u = %q, want empty", got.chainFilter)
+	}
+	for _, r := range []rune("chain-2") {
+		updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		got = updated.(Model)
+	}
+	updated, cmd = got.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	got = updated.(Model)
+	if cmd != nil {
+		t.Fatal("escaping filter edit returned command")
+	}
+	if got.filterEdit || got.chainFilter != "chain-2" {
+		t.Fatalf("filter state after esc = edit %t query %q, want kept chain-2", got.filterEdit, got.chainFilter)
+	}
+	if got.notice != "chain filter kept: chain-2" {
+		t.Fatalf("notice = %q, want explicit keep notice", got.notice)
+	}
+}
+
+func TestChainFilterMatching(t *testing.T) {
+	chains := []operator.ChainSummary{
+		{
+			ID:          "chain-alpha",
+			Status:      "running",
+			SourceTask:  "repair auth flow",
+			SourceSpecs: []string{"docs/specs/auth.md"},
+			CurrentStep: &operator.StepSummary{SequenceNum: 2, Role: "coder", Status: "pending"},
+		},
+		{
+			ID:          "chain-beta",
+			Status:      "completed",
+			SourceTask:  "write docs",
+			SourceSpecs: []string{"docs/specs/docs.md"},
+			CurrentStep: &operator.StepSummary{SequenceNum: 1, Role: "planner", Status: "completed"},
+		},
+	}
+	tests := map[string][]string{
+		"alpha":       {"chain-alpha"},
+		"completed":   {"chain-beta"},
+		"auth":        {"chain-alpha"},
+		"docs.md":     {"chain-beta"},
+		"coder":       {"chain-alpha"},
+		"planner":     {"chain-beta"},
+		"pending":     {"chain-alpha"},
+		"repair flow": {"chain-alpha"},
+	}
+	for query, want := range tests {
+		if got := chainIDs(filterChains(chains, query)); !reflect.DeepEqual(got, want) {
+			t.Fatalf("filterChains(%q) = %v, want %v", query, got, want)
+		}
+	}
+}
+
+func TestReceiptFilterMatching(t *testing.T) {
+	items := []receiptItem{
+		{Label: "orchestrator", Path: "receipts/orchestrator/chain-1.md"},
+		{Label: "step 2 coder", Step: "2", Path: "receipts/coder/chain-1-step-002.md"},
+	}
+	loaded := &operator.ReceiptView{Step: "2", Path: "receipts/coder/chain-1-step-002.md", Content: "visible receipt content with retry details"}
+	tests := map[string][]string{
+		"orchestrator":  {"orchestrator"},
+		"2":             {"step 2 coder"},
+		"coder":         {"step 2 coder"},
+		"step-002":      {"step 2 coder"},
+		"retry details": {"step 2 coder"},
+	}
+	for query, want := range tests {
+		if got := receiptLabels(filterReceiptItems(items, loaded, query)); !reflect.DeepEqual(got, want) {
+			t.Fatalf("filterReceiptItems(%q) = %v, want %v", query, got, want)
+		}
+	}
+	if got := receiptLabels(filterReceiptItems(items, nil, "retry details")); len(got) != 0 {
+		t.Fatalf("filterReceiptItems without loaded content = %v, want no content match", got)
+	}
+}
+
+func TestModelClampsCursorAfterFilterChanges(t *testing.T) {
+	model := NewModel(newFakeOperator(), Options{RefreshInterval: -1})
+	loaded, _ := model.Update(model.refreshCmd()())
+	got := loaded.(Model)
+	got.screen = screenChains
+	got.chainCursor = 1
+	loaded, _ = got.Update(got.refreshCmd()())
+	got = loaded.(Model)
+	if got.detail == nil || got.detail.Chain.ID != "chain-2" {
+		t.Fatalf("detail before filter = %+v, want chain-2", got.detail)
+	}
+
+	got.filterEdit = true
+	got.filterScreen = screenChains
+	updated, cmd := got.updateCurrentFilter("chain-1")
+	got = updated.(Model)
+	if got.chainCursor != 0 || got.selectedVisibleChainID() != "chain-1" {
+		t.Fatalf("filtered selection = cursor %d id %q, want chain-1 at 0", got.chainCursor, got.selectedVisibleChainID())
+	}
+	if cmd == nil {
+		t.Fatal("chain filter change did not request selected detail refresh")
+	}
+	updated, _ = got.Update(cmd())
+	got = updated.(Model)
+	if got.detail == nil || got.detail.Chain.ID != "chain-1" {
+		t.Fatalf("detail after filter = %+v, want chain-1", got.detail)
+	}
+
+	got.screen = screenReceipts
+	loaded, _ = got.Update(got.refreshCmd()())
+	got = loaded.(Model)
+	got.receiptCursor = 1
+	loaded, _ = got.Update(got.refreshCmd()())
+	got = loaded.(Model)
+	if got.receipt == nil || got.receipt.Step != "1" {
+		t.Fatalf("receipt before filter = %+v, want step 1", got.receipt)
+	}
+	got.filterEdit = true
+	got.filterScreen = screenReceipts
+	updated, cmd = got.updateCurrentFilter("orchestrator")
+	got = updated.(Model)
+	if got.receiptCursor != 0 {
+		t.Fatalf("receiptCursor after filter = %d, want 0", got.receiptCursor)
+	}
+	if cmd == nil {
+		t.Fatal("receipt filter change did not request selected receipt refresh")
+	}
+	updated, _ = got.Update(cmd())
+	got = updated.(Model)
+	if got.receipt == nil || got.receipt.Path != "receipts/orchestrator/chain-1.md" {
+		t.Fatalf("receipt after filter = %+v, want orchestrator receipt", got.receipt)
+	}
+}
+
 func TestModelReceiptListDoesNotInventOrchestratorReceipt(t *testing.T) {
 	fake := newFakeOperator()
 	fake.chains = []operator.ChainSummary{{ID: "one-step", Status: "completed", SourceTask: "one step"}}
@@ -276,6 +484,22 @@ func TestModelReceiptListDoesNotInventOrchestratorReceipt(t *testing.T) {
 	if got.receipt == nil || got.receipt.Path != "receipts/coder/one-step-step-001.md" {
 		t.Fatalf("receipt = %+v, want one-step step receipt", got.receipt)
 	}
+}
+
+func chainIDs(chains []operator.ChainSummary) []string {
+	ids := make([]string, 0, len(chains))
+	for _, ch := range chains {
+		ids = append(ids, ch.ID)
+	}
+	return ids
+}
+
+func receiptLabels(items []receiptItem) []string {
+	labels := make([]string, 0, len(items))
+	for _, item := range items {
+		labels = append(labels, item.Label)
+	}
+	return labels
 }
 
 func TestModelLaunchDraftEditsAndPreviews(t *testing.T) {
@@ -380,6 +604,8 @@ func TestModelLaunchManualRosterControls(t *testing.T) {
 	got = updated.(Model)
 	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
 	got = updated.(Model)
+	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	got = updated.(Model)
 	if got.launch.Mode != operator.LaunchModeManualRoster || !reflect.DeepEqual(got.launch.Roster, []string{"coder"}) {
 		t.Fatalf("manual launch state = %+v, want coder roster", got.launch)
 	}
@@ -401,6 +627,232 @@ func TestModelLaunchManualRosterControls(t *testing.T) {
 	view := got.View()
 	if !strings.Contains(view, "roster: coder -> orchestrator") || !strings.Contains(view, "preview manual roster") {
 		t.Fatalf("manual roster view missing preview fragments:\n%s", view)
+	}
+}
+
+func TestModelLaunchConstrainedOrchestrationControls(t *testing.T) {
+	fake := newFakeOperator()
+	model := NewModel(fake, Options{RefreshInterval: -1})
+	loaded, _ := model.Update(model.refreshCmd()())
+	got := loaded.(Model)
+	got.screen = screenLaunch
+	got.launch.SourceTask = "ship constrained"
+
+	updated, _ := got.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	got = updated.(Model)
+	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	got = updated.(Model)
+	if got.launch.Mode != operator.LaunchModeConstrained || !reflect.DeepEqual(got.launch.AllowedRoles, []string{"coder"}) {
+		t.Fatalf("constrained launch state = %+v, want coder allowed role", got.launch)
+	}
+	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	got = updated.(Model)
+	if !reflect.DeepEqual(got.launch.AllowedRoles, []string{"coder", "planner"}) {
+		t.Fatalf("allowed roles = %v, want coder then planner", got.launch.AllowedRoles)
+	}
+	updated, cmd := got.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'v'}})
+	got = updated.(Model)
+	if cmd == nil {
+		t.Fatal("constrained preview returned nil command")
+	}
+	updated, _ = got.Update(cmd())
+	got = updated.(Model)
+	if fake.launchRequest.Mode != operator.LaunchModeConstrained || !reflect.DeepEqual(fake.launchRequest.AllowedRoles, []string{"coder", "planner"}) {
+		t.Fatalf("launch request = %+v, want constrained allowed roles", fake.launchRequest)
+	}
+	view := got.View()
+	for _, want := range []string{"allowed: coder, planner", "preview constrained orchestration", "Allowed roles: coder, planner"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("constrained view missing %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestModelCyclesBuiltInLaunchPresets(t *testing.T) {
+	fake := newFakeOperator()
+	model := NewModel(fake, Options{RefreshInterval: -1})
+	loaded, _ := model.Update(model.refreshCmd()())
+	got := loaded.(Model)
+	got.screen = screenLaunch
+	got.launch.SourceTask = "preserved task"
+	got.launch.SpecsText = "specs/preserved.md"
+
+	updated, _ := got.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
+	got = updated.(Model)
+	if got.launch.Mode != operator.LaunchModeOrchestrator || got.launch.Role != "orchestrator" {
+		t.Fatalf("first preset = %+v, want sir topham orchestrator", got.launch)
+	}
+	if got.launch.SourceTask != "preserved task" || got.launch.SpecsText != "specs/preserved.md" {
+		t.Fatalf("draft text/specs = %q/%q, want preserved", got.launch.SourceTask, got.launch.SpecsText)
+	}
+	if got.notice != "launch preset set to sir topham decides" {
+		t.Fatalf("notice = %q, want sir topham preset notice", got.notice)
+	}
+
+	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
+	got = updated.(Model)
+	if got.launch.Mode != operator.LaunchModeManualRoster || !reflect.DeepEqual(got.launch.Roster, []string{"planner", "coder"}) {
+		t.Fatalf("second preset = %+v, want plan then code roster", got.launch)
+	}
+
+	updated, cmd := got.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'v'}})
+	got = updated.(Model)
+	if cmd == nil {
+		t.Fatal("preset preview returned nil command")
+	}
+	updated, _ = got.Update(cmd())
+	got = updated.(Model)
+	if fake.launchRequest.Mode != operator.LaunchModeManualRoster || !reflect.DeepEqual(fake.launchRequest.Roster, []string{"planner", "coder"}) || fake.launchRequest.SourceTask != "preserved task" {
+		t.Fatalf("launch request = %+v, want plan then code preset preserving task", fake.launchRequest)
+	}
+	view := got.View()
+	if !strings.Contains(view, "preset: plan then code") || !strings.Contains(view, "roster: planner -> coder") {
+		t.Fatalf("preset view missing fragments:\n%s", view)
+	}
+}
+
+func TestModelSavesLaunchDraft(t *testing.T) {
+	fake := newFakeOperator()
+	model := NewModel(fake, Options{RefreshInterval: -1})
+	loaded, _ := model.Update(model.refreshCmd()())
+	got := loaded.(Model)
+	got.screen = screenLaunch
+	got.launch.SourceTask = "persist me"
+	got.launch.SpecsText = "specs/a.md, specs/b.md"
+	got.launch.Mode = operator.LaunchModeConstrained
+	got.launch.Role = "coder"
+	got.launch.AllowedRoles = []string{"coder", "planner"}
+
+	updated, cmd := got.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	got = updated.(Model)
+	if cmd == nil {
+		t.Fatal("save launch draft returned nil command")
+	}
+	updated, _ = got.Update(cmd())
+	got = updated.(Model)
+
+	if fake.savedDraft.Request.SourceTask != "persist me" || !reflect.DeepEqual(fake.savedDraft.Request.SourceSpecs, []string{"specs/a.md", "specs/b.md"}) {
+		t.Fatalf("saved draft request = %+v, want task and specs", fake.savedDraft.Request)
+	}
+	if fake.savedDraft.Request.Mode != operator.LaunchModeConstrained || !reflect.DeepEqual(fake.savedDraft.Request.AllowedRoles, []string{"coder", "planner"}) {
+		t.Fatalf("saved draft launch shape = %+v, want constrained coder/planner", fake.savedDraft.Request)
+	}
+	if got.loading || got.err != nil || got.notice != "launch draft saved" {
+		t.Fatalf("post-save state loading=%t err=%v notice=%q", got.loading, got.err, got.notice)
+	}
+}
+
+func TestModelLoadsLaunchDraft(t *testing.T) {
+	fake := newFakeOperator()
+	fake.loadDraftFound = true
+	fake.loadDraft = operator.LaunchDraft{
+		ID: "current",
+		Request: operator.LaunchRequest{
+			Mode:        operator.LaunchModeManualRoster,
+			Role:        "coder",
+			Roster:      []string{"planner", "coder"},
+			SourceTask:  "loaded draft",
+			SourceSpecs: []string{"specs/loaded.md"},
+		},
+		UpdatedAt: "2026-05-01T12:03:00Z",
+	}
+	model := NewModel(fake, Options{RefreshInterval: -1})
+	loaded, _ := model.Update(model.refreshCmd()())
+	got := loaded.(Model)
+	got.screen = screenLaunch
+	got.launch.SourceTask = "old draft"
+	got.preview = &operator.LaunchPreview{Summary: "stale preview"}
+	got.previewReq = &operator.LaunchRequest{SourceTask: "old draft"}
+
+	updated, cmd := got.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'L'}})
+	got = updated.(Model)
+	if cmd == nil {
+		t.Fatal("load launch draft returned nil command")
+	}
+	updated, _ = got.Update(cmd())
+	got = updated.(Model)
+
+	if got.launch.SourceTask != "loaded draft" || got.launch.SpecsText != "specs/loaded.md" {
+		t.Fatalf("loaded draft text/specs = %q/%q, want loaded values", got.launch.SourceTask, got.launch.SpecsText)
+	}
+	if got.launch.Mode != operator.LaunchModeManualRoster || !reflect.DeepEqual(got.launch.Roster, []string{"planner", "coder"}) {
+		t.Fatalf("loaded launch state = %+v, want manual roster", got.launch)
+	}
+	if got.preview != nil || got.previewReq != nil {
+		t.Fatalf("preview = %+v/%+v, want cleared after load", got.preview, got.previewReq)
+	}
+	if got.loading || got.err != nil || got.notice != "launch draft loaded" {
+		t.Fatalf("post-load state loading=%t err=%v notice=%q", got.loading, got.err, got.notice)
+	}
+}
+
+func TestModelSavesCustomLaunchPreset(t *testing.T) {
+	fake := newFakeOperator()
+	model := NewModel(fake, Options{RefreshInterval: -1})
+	loaded, _ := model.Update(model.refreshCmd()())
+	got := loaded.(Model)
+	got.screen = screenLaunch
+	got.launch.SourceTask = "do not store this"
+	got.launch.SpecsText = "specs/not-a-preset.md"
+	got.launch.Mode = operator.LaunchModeManualRoster
+	got.launch.Role = "coder"
+	got.launch.Roster = []string{"planner", "coder"}
+
+	updated, cmd := got.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'B'}})
+	got = updated.(Model)
+	if cmd == nil {
+		t.Fatal("save custom preset returned nil command")
+	}
+	updated, _ = got.Update(cmd())
+	got = updated.(Model)
+
+	if fake.savedPreset.Name != "custom roster planner -> coder" {
+		t.Fatalf("saved preset name = %q, want custom roster name", fake.savedPreset.Name)
+	}
+	if fake.savedPreset.Request.SourceTask != "" || len(fake.savedPreset.Request.SourceSpecs) != 0 {
+		t.Fatalf("saved preset request = %+v, want no task/specs", fake.savedPreset.Request)
+	}
+	if !reflect.DeepEqual(fake.savedPreset.Request.Roster, []string{"planner", "coder"}) {
+		t.Fatalf("saved preset roster = %v, want planner/coder", fake.savedPreset.Request.Roster)
+	}
+	if got.notice != "launch preset saved: custom roster planner -> coder" || len(got.customPresets) != 1 {
+		t.Fatalf("post-save notice/customPresets = %q/%d", got.notice, len(got.customPresets))
+	}
+}
+
+func TestModelCyclesCustomLaunchPreset(t *testing.T) {
+	fake := newFakeOperator()
+	fake.customPresets = []operator.LaunchPreset{
+		{
+			ID:   "custom:custom roster orchestrator -> coder",
+			Name: "custom roster orchestrator -> coder",
+			Request: operator.LaunchRequest{
+				Mode:   operator.LaunchModeManualRoster,
+				Role:   "orchestrator,coder",
+				Roster: []string{"orchestrator", "coder"},
+			},
+		},
+	}
+	model := NewModel(fake, Options{RefreshInterval: -1})
+	loaded, _ := model.Update(model.refreshCmd()())
+	got := loaded.(Model)
+	got.screen = screenLaunch
+	got.launch.SourceTask = "preserved"
+	got.launch.SpecsText = "specs/preserved.md"
+
+	for i := 0; i < 4; i++ {
+		updated, _ := got.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
+		got = updated.(Model)
+	}
+
+	if got.activeLaunchPresetName() != "custom roster orchestrator -> coder" {
+		t.Fatalf("active preset = %q, want custom preset", got.activeLaunchPresetName())
+	}
+	if !reflect.DeepEqual(got.launch.Roster, []string{"orchestrator", "coder"}) {
+		t.Fatalf("custom preset roster = %v, want orchestrator/coder", got.launch.Roster)
+	}
+	if got.launch.SourceTask != "preserved" || got.launch.SpecsText != "specs/preserved.md" {
+		t.Fatalf("draft text/specs = %q/%q, want preserved", got.launch.SourceTask, got.launch.SpecsText)
 	}
 }
 
@@ -568,6 +1020,42 @@ func TestModelDoesNotOpenMissingReceipt(t *testing.T) {
 	}
 	if got.notice != "no receipt selected" {
 		t.Fatalf("notice = %q, want no receipt selected", got.notice)
+	}
+}
+
+func TestModelShowsWebInspectorTargetForSelectedChain(t *testing.T) {
+	model := NewModel(newFakeOperator(), Options{RefreshInterval: -1, WebBaseURL: "http://127.0.0.1:7777"})
+	loaded, _ := model.Update(model.refreshCmd()())
+	got := loaded.(Model)
+	got.screen = screenChains
+
+	updated, cmd := got.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
+	got = updated.(Model)
+	if cmd != nil {
+		t.Fatal("web inspector handoff returned command")
+	}
+	for _, want := range []string{"web inspector target for chain chain-1", "run yard serve", "http://127.0.0.1:7777/chains/chain-1"} {
+		if !strings.Contains(got.notice, want) {
+			t.Fatalf("notice = %q, want fragment %q", got.notice, want)
+		}
+	}
+}
+
+func TestModelShowsWebInspectorTargetForSelectedReceipt(t *testing.T) {
+	model := NewModel(newFakeOperator(), Options{RefreshInterval: -1})
+	model.screen = screenReceipts
+	loaded, _ := model.Update(model.refreshCmd()())
+	got := loaded.(Model)
+
+	updated, cmd := got.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
+	got = updated.(Model)
+	if cmd != nil {
+		t.Fatal("receipt web inspector handoff returned command")
+	}
+	for _, want := range []string{"web inspector target for receipt receipts/orchestrator/chain-1.md", "run yard serve", "http://localhost:8090/chains/chain-1?receipt=receipts%2Forchestrator%2Fchain-1.md"} {
+		if !strings.Contains(got.notice, want) {
+			t.Fatalf("notice = %q, want fragment %q", got.notice, want)
+		}
 	}
 }
 

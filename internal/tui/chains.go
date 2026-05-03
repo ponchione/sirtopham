@@ -10,10 +10,18 @@ func (m Model) renderChains() string {
 	if m.notice != "" {
 		chainLines = append(chainLines, m.styles.subtle.Render(m.notice))
 	}
-	if len(m.chains) == 0 {
-		chainLines = append(chainLines, m.styles.subtle.Render("No chains found."))
+	visibleChains := m.visibleChains()
+	if filterLine := renderFilterLine("chains", m.chainFilter, m.filterEdit && m.filterScreen == screenChains, len(visibleChains), len(m.chains)); filterLine != "" {
+		chainLines = append(chainLines, filterLine)
+	}
+	if len(visibleChains) == 0 {
+		message := "No chains found."
+		if len(m.chains) > 0 {
+			message = "No chains match filter."
+		}
+		chainLines = append(chainLines, m.styles.subtle.Render(message))
 	} else {
-		for i, ch := range m.chains {
+		for i, ch := range visibleChains {
 			line := fmt.Sprintf("%s  %-16s  steps=%d tokens=%d  %s", ch.ID, ch.Status, ch.TotalSteps, ch.TotalTokens, trimOneLine(ch.SourceTask, 48))
 			if i == m.chainCursor {
 				line = m.styles.selected.Render("> " + line)
@@ -63,17 +71,21 @@ func (m Model) renderChains() string {
 }
 
 func controlsForStatus(status string) string {
-	parts := []string{"F follow"}
+	parts := []string{"F follow", "w web"}
+	hasStateControl := false
 	if canPauseChain(status) {
 		parts = append(parts, "P pause")
+		hasStateControl = true
 	}
 	if status == "paused" {
 		parts = append(parts, "R resume command")
+		hasStateControl = true
 	}
 	if canCancelChain(status) {
 		parts = append(parts, "X cancel")
+		hasStateControl = true
 	}
-	if len(parts) == 1 {
+	if !hasStateControl {
 		parts = append(parts, "terminal")
 	}
 	return strings.Join(parts, "  ")
