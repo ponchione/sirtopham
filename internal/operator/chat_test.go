@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"testing"
 
@@ -21,10 +22,14 @@ import (
 
 type chatProviderMock struct {
 	req *provider.Request
+	err error
 }
 
 func (p *chatProviderMock) Complete(_ context.Context, req *provider.Request) (*provider.Response, error) {
 	p.req = req
+	if p.err != nil {
+		return nil, p.err
+	}
 	return &provider.Response{
 		Content:    []provider.ContentBlock{provider.NewTextBlock("spec outline")},
 		Usage:      provider.Usage{InputTokens: 10, OutputTokens: 20},
@@ -86,6 +91,66 @@ func TestSendChatMessageUsesRawProviderWithoutToolsOrSystemPrompt(t *testing.T) 
 	var userText string
 	if err := json.Unmarshal(mock.req.Messages[0].Content, &userText); err != nil || userText != "draft a spec" {
 		t.Fatalf("user request content = %q err %v, want draft a spec", userText, err)
+	}
+}
+
+func TestSendChatMessageDiscardsCanceledExistingTurn(t *testing.T) {
+	ctx := context.Background()
+	db := newOperatorTestDB(t)
+	projectRoot := t.TempDir()
+	mock := &chatProviderMock{}
+	svc := openChatOperatorTestService(t, projectRoot, db, mock)
+
+	result, err := svc.SendChatMessage(ctx, ChatTurnRequest{Message: "draft a spec"})
+	if err != nil {
+		t.Fatalf("SendChatMessage returned error: %v", err)
+	}
+
+	mock.err = context.Canceled
+	if _, err := svc.SendChatMessage(ctx, ChatTurnRequest{ConversationID: result.ConversationID, Message: "cancel me"}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled SendChatMessage error = %v, want context.Canceled", err)
+	}
+	history, err := svc.rt.ConversationManager.ReconstructHistory(context.Background(), result.ConversationID)
+	if err != nil {
+		t.Fatalf("ReconstructHistory returned error: %v", err)
+	}
+	if len(history) != 2 {
+		t.Fatalf("history length after cancel = %d, want original 2 messages: %+v", len(history), history)
+	}
+	for _, msg := range history {
+		if msg.Content.Valid && msg.Content.String == "cancel me" {
+			t.Fatalf("canceled user message persisted in history: %+v", history)
+		}
+	}
+
+	mock.err = nil
+	if _, err := svc.SendChatMessage(ctx, ChatTurnRequest{ConversationID: result.ConversationID, Message: "retry"}); err != nil {
+		t.Fatalf("retry SendChatMessage returned error: %v", err)
+	}
+	if len(mock.req.Messages) != 3 {
+		t.Fatalf("retry provider history length = %d, want previous turn plus retry user", len(mock.req.Messages))
+	}
+	var retryText string
+	if err := json.Unmarshal(mock.req.Messages[2].Content, &retryText); err != nil || retryText != "retry" {
+		t.Fatalf("retry request content = %q err %v, want retry", retryText, err)
+	}
+}
+
+func TestSendChatMessageDeletesCanceledNewConversation(t *testing.T) {
+	ctx := context.Background()
+	db := newOperatorTestDB(t)
+	projectRoot := t.TempDir()
+	mock := &chatProviderMock{err: context.Canceled}
+	svc := openChatOperatorTestService(t, projectRoot, db, mock)
+
+	if _, err := svc.SendChatMessage(ctx, ChatTurnRequest{Message: "cancel me"}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled SendChatMessage error = %v, want context.Canceled", err)
+	}
+	if mock.req == nil || mock.req.ConversationID == "" {
+		t.Fatalf("provider request = %+v, want conversation id", mock.req)
+	}
+	if _, err := svc.rt.ConversationManager.Get(context.Background(), mock.req.ConversationID); err == nil {
+		t.Fatal("canceled new chat conversation still exists")
 	}
 }
 

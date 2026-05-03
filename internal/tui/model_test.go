@@ -355,6 +355,62 @@ func TestModelChatComposerSupportsNewlines(t *testing.T) {
 	}
 }
 
+func TestModelChatComposerAltEnterInsertsNewline(t *testing.T) {
+	fake := newFakeOperator()
+	model := NewModel(fake, Options{RefreshInterval: -1})
+	updated, _ := model.Update(model.refreshCmd()())
+	got := updated.(Model)
+
+	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+	got = updated.(Model)
+	got = typeChatText(t, got, "line one")
+	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyEnter, Alt: true})
+	got = updated.(Model)
+	if !got.chatEdit || got.loading {
+		t.Fatalf("alt+enter state = edit:%v loading:%v, want edit true and not loading", got.chatEdit, got.loading)
+	}
+	got = typeChatText(t, got, "line two")
+	if got.chatComposer.Value() != "line one\nline two" {
+		t.Fatalf("composer value = %q, want inserted newline", got.chatComposer.Value())
+	}
+}
+
+func TestModelChatComposerEscPreservesDraft(t *testing.T) {
+	model := NewModel(newFakeOperator(), Options{RefreshInterval: -1})
+	updated, _ := model.Update(model.refreshCmd()())
+	got := updated.(Model)
+
+	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+	got = updated.(Model)
+	got = typeChatText(t, got, "keep me")
+	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	got = updated.(Model)
+	if got.chatEdit || got.chatInput != "keep me" || got.chatComposer.Value() != "keep me" {
+		t.Fatalf("after esc = edit:%v input:%q composer:%q, want preserved draft outside edit", got.chatEdit, got.chatInput, got.chatComposer.Value())
+	}
+
+	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	got = updated.(Model)
+	if !got.chatEdit || got.chatComposer.Value() != "keep me" {
+		t.Fatalf("after re-enter edit = edit:%v composer:%q, want preserved draft", got.chatEdit, got.chatComposer.Value())
+	}
+}
+
+func TestModelChatComposerCtrlUClear(t *testing.T) {
+	model := NewModel(newFakeOperator(), Options{RefreshInterval: -1})
+	updated, _ := model.Update(model.refreshCmd()())
+	got := updated.(Model)
+
+	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+	got = updated.(Model)
+	got = typeChatText(t, got, "delete me")
+	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyCtrlU})
+	got = updated.(Model)
+	if got.chatInput != "" || got.chatComposer.Value() != "" {
+		t.Fatalf("after ctrl+u = input:%q composer:%q, want cleared", got.chatInput, got.chatComposer.Value())
+	}
+}
+
 func TestModelChatCancelRequestsContextCancellation(t *testing.T) {
 	fake := newFakeOperator()
 	fake.chatWaitCancel = true
@@ -389,6 +445,19 @@ func TestModelChatCancelRequestsContextCancellation(t *testing.T) {
 	if got.chatRunning || got.err != nil || !got.chatEdit || got.notice != "chat turn canceled" {
 		t.Fatalf("canceled chat state = running:%v err:%v edit:%v notice:%q", got.chatRunning, got.err, got.chatEdit, got.notice)
 	}
+}
+
+func typeChatText(t *testing.T, model Model, text string) Model {
+	t.Helper()
+	for _, r := range text {
+		msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}}
+		if r == ' ' {
+			msg = tea.KeyMsg{Type: tea.KeySpace}
+		}
+		updated, _ := model.Update(msg)
+		model = updated.(Model)
+	}
+	return model
 }
 
 func TestModelMovesChainSelectionAndReloadsDetail(t *testing.T) {

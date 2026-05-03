@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/lipgloss"
+
 	"github.com/ponchione/sodoryard/internal/operator"
 )
 
@@ -74,6 +76,28 @@ func TestChatRenderIncludesRunningAndUsageStatus(t *testing.T) {
 		if !strings.Contains(view, want) {
 			t.Fatalf("chat usage view missing %q:\n%s", want, view)
 		}
+	}
+}
+
+func TestChatRenderWrapsLongWordsWithinWidth(t *testing.T) {
+	styles := newStyles()
+	lines := renderChatContent(styles, strings.Repeat("x", 45), 20, styles.chatAgent)
+	if len(lines) < 2 {
+		t.Fatalf("rendered long word into %d lines, want wrapping", len(lines))
+	}
+	for _, line := range lines {
+		if width := lipgloss.Width(line); width > 20 {
+			t.Fatalf("rendered line width = %d, want <= 20: %q", width, line)
+		}
+	}
+}
+
+func TestFooterHelpIsScreenSpecific(t *testing.T) {
+	model := NewModel(newFakeOperator(), Options{RefreshInterval: -1})
+	model.screen = screenLaunch
+	view := model.View()
+	if !strings.Contains(view, "v preview") || strings.Contains(view, "ctrl+g cancel chat") {
+		t.Fatalf("launch footer is not screen-specific:\n%s", view)
 	}
 }
 

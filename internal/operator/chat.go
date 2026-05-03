@@ -4,8 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/ponchione/sodoryard/internal/conversation"
 	appdb "github.com/ponchione/sodoryard/internal/db"
@@ -32,6 +34,7 @@ func (s *Service) SendChatMessage(ctx context.Context, req ChatTurnRequest) (Cha
 	providerName := cfg.Routing.Default.Provider
 	modelName := cfg.Routing.Default.Model
 	convID := strings.TrimSpace(req.ConversationID)
+	createdConversation := false
 	if convID == "" {
 		conv, err := s.rt.ConversationManager.Create(ctx, cfg.ProjectRoot,
 			conversation.WithTitle(chatTitle(message)),
@@ -42,6 +45,7 @@ func (s *Service) SendChatMessage(ctx context.Context, req ChatTurnRequest) (Cha
 			return ChatTurnResult{}, fmt.Errorf("create chat conversation: %w", err)
 		}
 		convID = conv.ID
+		createdConversation = true
 	} else {
 		if _, err := s.rt.ConversationManager.Get(ctx, convID); err != nil {
 			return ChatTurnResult{}, fmt.Errorf("load chat conversation: %w", err)
@@ -60,7 +64,7 @@ func (s *Service) SendChatMessage(ctx context.Context, req ChatTurnRequest) (Cha
 	}
 	history, err := s.rt.ConversationManager.ReconstructHistory(ctx, convID)
 	if err != nil {
-		return ChatTurnResult{}, fmt.Errorf("load chat history: %w", err)
+		return ChatTurnResult{}, s.cleanupFailedRawChatTurn(ctx, convID, turnNumber, createdConversation, fmt.Errorf("load chat history: %w", err))
 	}
 	resp, err := s.rt.ProviderRouter.Complete(ctx, &provider.Request{
 		Messages:        chatProviderMessages(history),
@@ -74,14 +78,14 @@ func (s *Service) SendChatMessage(ctx context.Context, req ChatTurnRequest) (Cha
 		ProviderOptions: nil,
 	})
 	if err != nil {
-		return ChatTurnResult{}, fmt.Errorf("run raw chat completion: %w", err)
+		return ChatTurnResult{}, s.cleanupFailedRawChatTurn(ctx, convID, turnNumber, createdConversation, fmt.Errorf("run raw chat completion: %w", err))
 	}
 	if resp == nil {
-		return ChatTurnResult{}, fmt.Errorf("run raw chat completion: provider returned nil response")
+		return ChatTurnResult{}, s.cleanupFailedRawChatTurn(ctx, convID, turnNumber, createdConversation, fmt.Errorf("run raw chat completion: provider returned nil response"))
 	}
 	assistantContent, err := json.Marshal(resp.Content)
 	if err != nil {
-		return ChatTurnResult{}, fmt.Errorf("serialize chat assistant message: %w", err)
+		return ChatTurnResult{}, s.cleanupFailedRawChatTurn(ctx, convID, turnNumber, createdConversation, fmt.Errorf("serialize chat assistant message: %w", err))
 	}
 	if len(resp.Content) == 0 {
 		assistantContent, _ = json.Marshal([]provider.ContentBlock{provider.NewTextBlock("")})
@@ -90,7 +94,7 @@ func (s *Service) SendChatMessage(ctx context.Context, req ChatTurnRequest) (Cha
 		Role:    "assistant",
 		Content: string(assistantContent),
 	}}); err != nil {
-		return ChatTurnResult{}, fmt.Errorf("persist chat assistant message: %w", err)
+		return ChatTurnResult{}, s.cleanupFailedRawChatTurn(ctx, convID, turnNumber, createdConversation, fmt.Errorf("persist chat assistant message: %w", err))
 	}
 	history, err = s.rt.ConversationManager.ReconstructHistory(ctx, convID)
 	if err != nil {
@@ -109,6 +113,23 @@ func (s *Service) SendChatMessage(ctx context.Context, req ChatTurnRequest) (Cha
 		OutputTokens:   resp.Usage.OutputTokens,
 		StopReason:     string(resp.StopReason),
 	}, nil
+}
+
+func (s *Service) cleanupFailedRawChatTurn(ctx context.Context, conversationID string, turnNumber int, deleteConversation bool, cause error) error {
+	cleanupCtx := context.WithoutCancel(ctx)
+	cleanupCtx, cancel := context.WithTimeout(cleanupCtx, 5*time.Second)
+	defer cancel()
+
+	var cleanupErr error
+	if deleteConversation {
+		cleanupErr = s.rt.ConversationManager.Delete(cleanupCtx, conversationID)
+	} else {
+		cleanupErr = s.rt.ConversationManager.DiscardTurn(cleanupCtx, conversationID, turnNumber)
+	}
+	if cleanupErr != nil {
+		return errors.Join(cause, cleanupErr)
+	}
+	return cause
 }
 
 func chatProviderMessages(messages []appdb.Message) []provider.Message {

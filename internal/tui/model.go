@@ -570,6 +570,9 @@ func (m Model) handleChatEditKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.notice = "chat edit stopped"
 		return m, nil
 	case tea.KeyEnter:
+		if msg.Alt {
+			return m.updateChatComposer(msg)
+		}
 		prompt := strings.TrimSpace(m.chatComposer.Value())
 		if prompt == "" {
 			m.notice = "chat message is empty"
@@ -602,12 +605,16 @@ func (m Model) handleChatEditKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.err = nil
 		return m, nil
 	default:
-		var cmd tea.Cmd
-		m.chatComposer, cmd = m.chatComposer.Update(msg)
-		m.chatInput = m.chatComposer.Value()
-		m.err = nil
-		return m, cmd
+		return m.updateChatComposer(msg)
 	}
+}
+
+func (m Model) updateChatComposer(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+	m.chatComposer, cmd = m.chatComposer.Update(msg)
+	m.chatInput = m.chatComposer.Value()
+	m.err = nil
+	return m, cmd
 }
 
 func (m Model) cancelChatTurn() (tea.Model, tea.Cmd) {
@@ -1104,7 +1111,7 @@ func (m Model) renderFrame(body string) string {
 	width := maxInt(80, m.width)
 	top := m.styles.status.Width(width).Render(m.statusLine())
 	navAndBody := lipgloss.JoinHorizontal(lipgloss.Top, m.renderNav(), m.styles.panel.Width(m.contentWidth()).Render(body))
-	footer := m.styles.footer.Width(width).Render(footerHelp)
+	footer := m.styles.footer.Width(width).Render(m.footerHelp())
 	return lipgloss.JoinVertical(lipgloss.Left, top, navAndBody, footer)
 }
 

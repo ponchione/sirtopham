@@ -12,7 +12,7 @@ import (
 
 func newChatComposer(styles styles) textarea.Model {
 	composer := textarea.New()
-	composer.Placeholder = "Message GPT-5.5..."
+	composer.Placeholder = "Message configured model..."
 	composer.ShowLineNumbers = false
 	composer.Prompt = ""
 	composer.EndOfBufferCharacter = ' '
@@ -228,20 +228,40 @@ func wrapChatText(text string, width int) []string {
 		words := strings.Fields(paragraph)
 		line := ""
 		for _, word := range words {
-			if line == "" {
-				line = word
-				continue
+			chunks := splitLongChatWord(word, width)
+			for _, chunk := range chunks {
+				if line == "" {
+					line = chunk
+					continue
+				}
+				if len(line)+1+len(chunk) > width {
+					lines = append(lines, line)
+					line = chunk
+					continue
+				}
+				line += " " + chunk
 			}
-			if len(line)+1+len(word) > width {
-				lines = append(lines, line)
-				line = word
-				continue
-			}
-			line += " " + word
 		}
 		if line != "" {
 			lines = append(lines, line)
 		}
 	}
 	return lines
+}
+
+func splitLongChatWord(word string, width int) []string {
+	if width <= 0 || len(word) <= width {
+		return []string{word}
+	}
+	runes := []rune(word)
+	chunks := make([]string, 0, (len(runes)/width)+1)
+	for len(runes) > 0 {
+		n := width
+		if n > len(runes) {
+			n = len(runes)
+		}
+		chunks = append(chunks, string(runes[:n]))
+		runes = runes[n:]
+	}
+	return chunks
 }

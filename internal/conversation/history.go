@@ -265,6 +265,39 @@ func (m *HistoryManager) CancelIteration(ctx context.Context, conversationID str
 	return nil
 }
 
+// DiscardTurn atomically deletes all persisted state for a turn, including the
+// initial user message. It is intended for raw chat turns that fail or are
+// canceled before a complete assistant response exists.
+func (m *HistoryManager) DiscardTurn(ctx context.Context, conversationID string, turnNumber int) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := m.validate(); err != nil {
+		return err
+	}
+
+	tx, err := m.database.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("conversation history: begin discard turn tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM sub_calls WHERE conversation_id = ? AND turn_number = ?`, conversationID, turnNumber); err != nil {
+		return fmt.Errorf("conversation history: discard turn: delete sub calls: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM tool_executions WHERE conversation_id = ? AND turn_number = ?`, conversationID, turnNumber); err != nil {
+		return fmt.Errorf("conversation history: discard turn: delete tool executions: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM messages WHERE conversation_id = ? AND turn_number = ?`, conversationID, turnNumber); err != nil {
+		return fmt.Errorf("conversation history: discard turn: delete messages: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("conversation history: commit discard turn tx: %w", err)
+	}
+	return nil
+}
+
 // SeenFiles exposes the session-scoped seen-files tracker used by Layer 3.
 func (m *HistoryManager) SeenFiles(string) contextpkg.SeenFileLookup {
 	if m == nil {
