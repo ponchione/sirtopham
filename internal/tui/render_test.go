@@ -41,6 +41,22 @@ func TestChatRenderIncludesTranscriptAndComposer(t *testing.T) {
 	}
 }
 
+func TestChatRenderFormatsMarkdownBasics(t *testing.T) {
+	model := NewModel(newFakeOperator(), Options{RefreshInterval: -1})
+	model.chatMessages = []operator.ChatMessage{
+		{Role: "assistant", Content: "# Plan\n- write spec\n1. review it\n```go\nfunc main() {}\n```"},
+	}
+	updated, _ := model.Update(model.refreshCmd()())
+	got := updated.(Model)
+
+	view := got.View()
+	for _, want := range []string{"Plan", "- write spec", "1. review it", "code go", "func main() {}"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("chat markdown render missing %q:\n%s", want, view)
+		}
+	}
+}
+
 func TestReceiptRenderIncludesContent(t *testing.T) {
 	model := NewModel(newFakeOperator(), Options{RefreshInterval: -1})
 	model.screen = screenReceipts

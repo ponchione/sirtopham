@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/lipgloss"
+
 	"github.com/ponchione/sodoryard/internal/operator"
 )
 
@@ -63,17 +65,13 @@ func renderChatMessages(styles styles, messages []operator.ChatMessage, width in
 		if content == "" {
 			content = "[no visible text]"
 		}
-		wrapped := wrapChatText(content, maxInt(20, width-2))
-		if len(wrapped) == 0 {
-			wrapped = []string{""}
-		}
 		lines = append(lines, label)
-		for _, line := range wrapped {
+		for _, line := range renderChatContent(styles, content, maxInt(20, width-2), bodyStyle) {
 			if line == "" {
 				lines = append(lines, "")
 				continue
 			}
-			lines = append(lines, bodyStyle.Render("  "+line))
+			lines = append(lines, line)
 		}
 		lines = append(lines, "")
 	}
@@ -84,6 +82,107 @@ func renderChatMessages(styles styles, messages []operator.ChatMessage, width in
 		return lines[len(lines)-maxLines:]
 	}
 	return lines
+}
+
+func renderChatContent(styles styles, text string, width int, bodyStyle lipgloss.Style) []string {
+	if width <= 0 {
+		width = 72
+	}
+	var rendered []string
+	inCode := false
+	for _, raw := range strings.Split(text, "\n") {
+		trimmed := strings.TrimSpace(raw)
+		if strings.HasPrefix(trimmed, "```") {
+			if inCode {
+				inCode = false
+				continue
+			}
+			inCode = true
+			language := strings.TrimSpace(strings.TrimPrefix(trimmed, "```"))
+			if language != "" {
+				rendered = append(rendered, styles.chatCodeHeader.Render("  code "+language))
+			}
+			continue
+		}
+		if inCode {
+			rendered = append(rendered, renderCodeLine(styles, raw, width))
+			continue
+		}
+		if trimmed == "" {
+			rendered = append(rendered, "")
+			continue
+		}
+		if heading, ok := markdownHeading(trimmed); ok {
+			rendered = append(rendered, styles.chatHeading.Render("  "+heading))
+			continue
+		}
+		if prefix, content, ok := markdownListItem(trimmed); ok {
+			rendered = append(rendered, renderWrappedContent(content, width, "  "+prefix, "  "+strings.Repeat(" ", len(prefix)), bodyStyle)...)
+			continue
+		}
+		rendered = append(rendered, renderWrappedContent(trimmed, width, "  ", "  ", bodyStyle)...)
+	}
+	if len(rendered) == 0 {
+		return []string{bodyStyle.Render("  [no visible text]")}
+	}
+	return rendered
+}
+
+func renderCodeLine(styles styles, line string, width int) string {
+	line = strings.TrimRight(line, " \t")
+	if line == "" {
+		line = " "
+	}
+	if len(line) > width {
+		line = line[:maxInt(1, width-3)] + "..."
+	}
+	return styles.chatCode.Width(maxInt(12, width)).Render(line)
+}
+
+func renderWrappedContent(text string, width int, firstPrefix string, nextPrefix string, style lipgloss.Style) []string {
+	wrapped := wrapChatText(text, maxInt(12, width-len(firstPrefix)))
+	if len(wrapped) == 0 {
+		return []string{style.Render(firstPrefix)}
+	}
+	lines := make([]string, 0, len(wrapped))
+	for i, line := range wrapped {
+		prefix := nextPrefix
+		if i == 0 {
+			prefix = firstPrefix
+		}
+		lines = append(lines, style.Render(prefix+line))
+	}
+	return lines
+}
+
+func markdownHeading(line string) (string, bool) {
+	if !strings.HasPrefix(line, "#") {
+		return "", false
+	}
+	level := 0
+	for level < len(line) && line[level] == '#' {
+		level++
+	}
+	if level == 0 || level > 6 || level >= len(line) || line[level] != ' ' {
+		return "", false
+	}
+	return strings.TrimSpace(line[level:]), true
+}
+
+func markdownListItem(line string) (string, string, bool) {
+	for _, marker := range []string{"- ", "* "} {
+		if strings.HasPrefix(line, marker) {
+			return "- ", strings.TrimSpace(line[len(marker):]), true
+		}
+	}
+	dot := 0
+	for dot < len(line) && line[dot] >= '0' && line[dot] <= '9' {
+		dot++
+	}
+	if dot > 0 && dot+1 < len(line) && line[dot] == '.' && line[dot+1] == ' ' {
+		return line[:dot+2], strings.TrimSpace(line[dot+2:]), true
+	}
+	return "", "", false
 }
 
 func wrapChatText(text string, width int) []string {

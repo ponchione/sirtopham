@@ -20,6 +20,9 @@ type styles struct {
 	chatAgentLabel lipgloss.Style
 	chatUser       lipgloss.Style
 	chatAgent      lipgloss.Style
+	chatHeading    lipgloss.Style
+	chatCode       lipgloss.Style
+	chatCodeHeader lipgloss.Style
 	composer       lipgloss.Style
 }
 
@@ -42,6 +45,9 @@ func newStyles() styles {
 		chatAgentLabel: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("220")),
 		chatUser:       lipgloss.NewStyle().Foreground(lipgloss.Color("252")),
 		chatAgent:      lipgloss.NewStyle().Foreground(lipgloss.Color("250")),
+		chatHeading:    lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("159")),
+		chatCode:       lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Background(lipgloss.Color("236")).Padding(0, 1),
+		chatCodeHeader: lipgloss.NewStyle().Foreground(lipgloss.Color("244")),
 		composer:       lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Border(lipgloss.NormalBorder(), true).BorderForeground(lipgloss.Color("238")).Padding(0, 1),
 	}
 }
