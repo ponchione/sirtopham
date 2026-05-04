@@ -485,7 +485,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "R":
 		if m.screen == screenChains {
-			return m.showResumeCommand()
+			return m.resumeSelectedChain()
 		}
 	case "P":
 		if m.screen == screenChains {
@@ -768,7 +768,7 @@ func (m Model) confirmCancelSelectedChain() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) showResumeCommand() (tea.Model, tea.Cmd) {
+func (m Model) resumeSelectedChain() (tea.Model, tea.Cmd) {
 	chainID := m.selectedVisibleChainID()
 	if chainID == "" {
 		m.notice = "no chain selected"
@@ -779,8 +779,8 @@ func (m Model) showResumeCommand() (tea.Model, tea.Cmd) {
 		m.notice = fmt.Sprintf("chain %s is %s and cannot be resumed here", chainID, status)
 		return m, nil
 	}
-	m.notice = fmt.Sprintf("resume in a foreground shell: yard chain resume %s", chainID)
-	return m, nil
+	m.loading = true
+	return m, m.controlCmd("resume", chainID)
 }
 
 func (m Model) toggleFollowSelectedChain() (tea.Model, tea.Cmd) {
@@ -1017,6 +1017,8 @@ func (m Model) controlCmd(action string, chainID string) tea.Cmd {
 		switch action {
 		case "pause":
 			result, err = m.svc.PauseChain(ctx, chainID)
+		case "resume":
+			result, err = m.svc.ResumeChain(ctx, chainID)
 		case "cancel":
 			result, err = m.svc.CancelChain(ctx, chainID)
 		default:
@@ -1131,7 +1133,11 @@ func (m Model) statusLine() string {
 	if m.loading {
 		updated = " loading"
 	}
-	return fmt.Sprintf("Yard  %s  %s  chains:%d%s", project, provider, m.status.ActiveChains, updated)
+	warnings := ""
+	if len(m.status.Warnings) > 0 {
+		warnings = fmt.Sprintf(" warnings:%d", len(m.status.Warnings))
+	}
+	return fmt.Sprintf("Yard  %s  %s  chains:%d%s%s", project, provider, m.status.ActiveChains, warnings, updated)
 }
 
 func (m Model) renderNav() string {

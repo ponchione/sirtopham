@@ -15,8 +15,10 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/ponchione/sodoryard/internal/agent"
+	"github.com/ponchione/sodoryard/internal/chain"
 	appconfig "github.com/ponchione/sodoryard/internal/config"
 	"github.com/ponchione/sodoryard/internal/conversation"
+	"github.com/ponchione/sodoryard/internal/operator"
 	rtpkg "github.com/ponchione/sodoryard/internal/runtime"
 	"github.com/ponchione/sodoryard/internal/server"
 	"github.com/ponchione/sodoryard/internal/tool"
@@ -131,6 +133,23 @@ func runYardServe(cmd *cobra.Command, configPath string, portOverride int, hostO
 	server.NewProjectHandler(srv, cfg, logger)
 	server.NewConfigHandler(srv, cfg, rt.ProviderRouter, runtimeDefaults, logger)
 	server.NewMetricsHandler(srv, rt.Queries, logger)
+	operatorRuntime := &rtpkg.OrchestratorRuntime{
+		Config:              cfg,
+		Logger:              logger,
+		Database:            rt.Database,
+		Queries:             rt.Queries,
+		ProviderRouter:      rt.ProviderRouter,
+		BrainBackend:        rt.BrainBackend,
+		ConversationManager: rt.ConversationManager,
+		ChainStore:          chain.NewStore(rt.Database),
+		Cleanup:             func() {},
+	}
+	operatorSvc, err := operator.NewForRuntime(operatorRuntime, operator.Options{ProcessID: os.Getpid})
+	if err != nil {
+		return fmt.Errorf("operator service: %w", err)
+	}
+	defer operatorSvc.Close()
+	server.NewChainInspectorHandler(srv, operatorSvc, logger)
 
 	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

@@ -16,10 +16,23 @@ func TestDashboardRenderIncludesStableFragments(t *testing.T) {
 	got := updated.(Model)
 
 	view := got.View()
-	for _, want := range []string{"Dashboard", "project: project", "provider: codex", "auth: not checked", "code index: indexed at 2026-05-01T12:00:00Z commit abc123", "brain index: disabled", "local services: disabled", "chain-1"} {
+	for _, want := range []string{"Dashboard", "project: project", "provider: codex", "auth: ready (oauth, private_store)", "code index: indexed at 2026-05-01T12:00:00Z commit abc123", "brain index: disabled", "local services: disabled", "chain-1"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("dashboard view missing %q:\n%s", want, view)
 		}
+	}
+}
+
+func TestStatusLineIncludesWarningCount(t *testing.T) {
+	fake := newFakeOperator()
+	fake.status.Warnings = []operator.RuntimeWarning{{Message: "degraded runtime"}, {Message: "index stale"}}
+	model := NewModel(fake, Options{RefreshInterval: -1})
+	updated, _ := model.Update(model.refreshCmd()())
+	got := updated.(Model)
+
+	view := got.View()
+	if !strings.Contains(view, "warnings:2") {
+		t.Fatalf("status line missing warning count:\n%s", view)
 	}
 }
 

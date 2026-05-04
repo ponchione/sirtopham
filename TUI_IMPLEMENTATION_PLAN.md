@@ -23,8 +23,8 @@ Primary specs:
 - `chainrun.Start` supports orchestrator mode, `one_step_chain` mode, `manual_roster` mode, and `constrained_orchestration` mode. Constrained orchestration reuses the orchestrator runner and injects an allowed-role list into the orchestrator task packet.
 - Bubble Tea, Bubbles, and Lip Gloss dependencies are present.
 - Bare `yard` starts the TUI. It starts without `yard serve`, reads through `internal/operator`, and includes raw provider/model chat, dashboard, chains, receipts, chain and receipt filtering, event follow, pause/cancel, receipt open, web-inspector target handoffs, built-in/custom launch presets, persistent current launch drafts, launch role-list add/remove/clear controls, launch preview, and launch start flows.
-- TUI resume currently shows the foreground `yard chain resume <chain-id>` command instead of continuing runner execution inside the TUI.
-- Remaining product gaps are project tree file attachment and fuller browser inspector parity.
+- TUI resume is handled through `internal/operator` alongside pause/cancel.
+- Daily-driver final touches landed: actionable runtime readiness in the TUI, in-console pause/resume/cancel controls, and read-only browser inspector routes for chains and metrics. The TUI intentionally does not include a project file browser; code review stays in the operator's IDE.
 
 ## Non-Negotiables
 
@@ -85,7 +85,7 @@ internal/server
 
 ## Recommended Next Order
 
-1. Project tree file attachment or browser inspector parity.
+1. Use dogfooding runs to choose the next narrow slice; likely candidates are deeper chain metrics, richer receipt rendering, or launch-history ergonomics.
 
 This order keeps new work on the shared runtime path and avoids rebuilding execution behavior inside the TUI.
 
@@ -438,7 +438,7 @@ Add TUI actions:
 
 - follow selected chain - landed
 - pause selected chain - landed
-- resume selected chain - command handoff landed; in-TUI resume runner continuation remains deferred
+- resume selected chain - landed through the shared `internal/operator` control path
 - cancel selected chain - landed
 - open receipt in `$PAGER` - landed
 - open receipt in `$EDITOR` - landed
@@ -461,7 +461,7 @@ Acceptance:
 
 - TUI can follow a running chain and append new events.
 - TUI can request pause/cancel and the CLI sees the updated status.
-- TUI can resume a paused chain or surface the command needed if resume still requires foreground execution semantics.
+- TUI can resume a paused chain through the shared operator service.
 - Controls are not available for terminal chains.
 
 Verification:
@@ -805,7 +805,7 @@ The original first slice is complete:
 
 Choose one narrow remaining slice:
 
-1. Project tree file attachment or browser inspector parity.
+1. Use dogfooding runs to choose the next narrow slice; likely candidates are deeper chain metrics, richer receipt rendering, or launch-history ergonomics.
 
 For any slice, keep core operations routed through `internal/operator`, avoid Cobra shell-outs from the TUI, and run `make test` plus `make build`.
 

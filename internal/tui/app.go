@@ -18,6 +18,7 @@ type Operator interface {
 	ListEventsSince(context.Context, string, int64) ([]chain.Event, error)
 	ReadReceipt(context.Context, string, string) (operator.ReceiptView, error)
 	PauseChain(context.Context, string) (operator.ControlResult, error)
+	ResumeChain(context.Context, string) (operator.ControlResult, error)
 	CancelChain(context.Context, string) (operator.ControlResult, error)
 	ValidateLaunch(context.Context, operator.LaunchRequest) (operator.LaunchPreview, error)
 	SaveLaunchDraft(context.Context, operator.LaunchRequest) (operator.LaunchDraft, error)

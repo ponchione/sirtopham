@@ -34,13 +34,13 @@ func (m Model) renderHelp() string {
 		"S             start previewed launch",
 		"F             follow selected chain",
 		"P             pause selected chain",
-		"R             show foreground resume command",
+		"R             resume selected paused chain",
 		"X             cancel selected chain with confirmation",
 		"w             show web inspector target without starting yard serve",
 		"o             open selected receipt in PAGER",
 		"E             open selected receipt in EDITOR",
 		"",
-		m.styles.subtle.Render("Resume is still handled by yard chain resume because it continues runner execution."),
+		m.styles.subtle.Render("Resume uses the same operator service path as other chain controls."),
 	}
 	return strings.Join(lines, "\n")
 }

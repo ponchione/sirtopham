@@ -320,7 +320,7 @@ Current repo state:
 - Live packaging/install surfaces no longer ship unsupported `sodoryard` or placeholder `knapford` binaries.
 - The active UI direction is terminal-first: bare `yard` now starts the daily-driver operator console, while `yard serve` remains the browser/API surface for rich inspection. This direction is specified in `docs/specs/20-operator-console-tui.md` and `docs/specs/21-web-inspector.md`.
 - Implemented TUI/operator work includes raw provider/model chat, readiness metadata, recent chain and detail views, chain and receipt filtering, receipt summaries/content, event following, pause/cancel controls, receipt opening through `$PAGER`/`$EDITOR`, web-inspector target handoffs, built-in and custom launch presets, persistent current launch drafts, launch role-list add/remove/clear controls, and launch preview/start for one-step, manual-roster, orchestrated, and constrained-orchestration chains.
-- Remaining TUI-first work includes project tree file attachment and fuller browser inspector parity.
+- Daily-driver final touches now include actionable runtime readiness in the TUI, in-console pause/resume/cancel controls, and read-only browser inspector routes for chains and metrics. The TUI intentionally does not grow a project file browser; code review stays in the operator's IDE.
 - The remaining active docs are the README, current specs, `NEXT_SESSION_HANDOFF.md`, and `TUI_IMPLEMENTATION_PLAN.md`; stale migration/implementation-plan markdown is being removed rather than treated as archival guidance.
 
 If you are resuming work cold, read in this order:
@@ -339,7 +339,7 @@ First thing to address next session:
 - keep `tidmouth` limited to the internal engine contract (`run`, `index`) unless you explicitly redesign the spawn contract too
 - keep operator-facing docs aligned with the actual `yard` / container / runtime surface
 - keep TUI-first docs clear about target behavior versus already-implemented commands
-- choose the next implementation slice from project tree file attachment or browser inspector parity
+- use dogfooding runs to decide the next slice; likely candidates are deeper chain metrics, richer receipt rendering, or launch-history ergonomics
 - rerun `make test` and `make build` after each narrow slice
 
 Useful commands:

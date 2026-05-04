@@ -21,6 +21,7 @@ type ProviderAuthReport struct {
 	Name       string               `json:"name"`
 	Type       string               `json:"type"`
 	Healthy    bool                 `json:"healthy"`
+	AuthState  string               `json:"auth_state,omitempty"`
 	BuildError string               `json:"build_error,omitempty"`
 	PingError  string               `json:"ping_error,omitempty"`
 	Auth       *provider.AuthStatus `json:"auth,omitempty"`
@@ -81,6 +82,7 @@ func CollectProviderAuthReports(ctx context.Context, cfg *appconfig.Config, incl
 		if reporter, ok := p.(provider.AuthStatusReporter); ok {
 			status, err := reporter.AuthStatus(ctx)
 			if err != nil {
+				report.Healthy = false
 				if report.Auth == nil {
 					report.Auth = &provider.AuthStatus{Provider: name, Detail: err.Error()}
 				}
@@ -112,6 +114,19 @@ func CollectProviderAuthReports(ctx context.Context, cfg *appconfig.Config, incl
 						report.Auth.Remediation = pe.Remediation
 					}
 				}
+				if pingErr == nil {
+					if reporter, ok := p.(provider.AuthStatusReporter); ok {
+						if status, err := reporter.AuthStatus(ctx); err == nil {
+							report.Auth = status
+						}
+					}
+				}
+			}
+		}
+		if report.Auth != nil {
+			report.AuthState = provider.AuthStatusState(report.Auth, time.Now())
+			if report.AuthState != "" && report.AuthState != "ready" {
+				report.Healthy = false
 			}
 		}
 		reports = append(reports, report)
@@ -121,10 +136,7 @@ func CollectProviderAuthReports(ctx context.Context, cfg *appconfig.Config, incl
 
 func PrintProviderAuthReports(out io.Writer, reports []ProviderAuthReport) {
 	for _, report := range reports {
-		status := "healthy"
-		if !report.Healthy {
-			status = "unhealthy"
-		}
+		status := providerReportStatus(report)
 		_, _ = fmt.Fprintf(out, "%s (%s): %s\n", report.Name, report.Type, status)
 		if report.BuildError != "" {
 			_, _ = fmt.Fprintf(out, "  build_error: %s\n", report.BuildError)
@@ -136,6 +148,9 @@ func PrintProviderAuthReports(out io.Writer, reports []ProviderAuthReport) {
 		if report.Auth == nil {
 			_, _ = fmt.Fprintln(out, "  auth: unavailable")
 			continue
+		}
+		if report.AuthState != "" {
+			_, _ = fmt.Fprintf(out, "  auth_state: %s\n", report.AuthState)
 		}
 		_, _ = fmt.Fprintf(out, "  auth_mode: %s\n", reportValueOrDefault(report.Auth.Mode, "unknown"))
 		if report.Auth.Source != "" {
@@ -163,6 +178,27 @@ func PrintProviderAuthReports(out io.Writer, reports []ProviderAuthReport) {
 		if report.Auth.Remediation != "" {
 			_, _ = fmt.Fprintf(out, "  remediation: %s\n", report.Auth.Remediation)
 		}
+	}
+}
+
+func providerReportStatus(report ProviderAuthReport) string {
+	if report.BuildError != "" || report.PingError != "" {
+		return "unhealthy"
+	}
+	switch report.AuthState {
+	case "", "ready":
+		if report.Healthy {
+			return "healthy"
+		}
+		return "unhealthy"
+	case "expired_access_token":
+		return "expired"
+	case "access_token_expires_soon":
+		return "expires_soon"
+	case "missing_credentials", "missing_access_token":
+		return "missing_auth"
+	default:
+		return report.AuthState
 	}
 }
 

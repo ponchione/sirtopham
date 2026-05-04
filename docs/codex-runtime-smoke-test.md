@@ -195,31 +195,48 @@ Expected:
 - No encrypted `codex_reasoning` payload is shown in the UI transcript.
 - A follow-up message in the same conversation still works, proving replay did not break the next request.
 
-## 7. Optional Headless Smoke
+## 7. TUI And Chain Smoke
 
-This verifies the same provider path without the browser:
+This verifies the daily-driver terminal path and the one-step chain contract.
 
 ```bash
-rtk ./bin/yard run \
-  --max-turns 1 \
-  --timeout 2m \
+rtk ./bin/yard chain start \
+  --role coder \
+  --max-steps 1 \
+  --max-duration 2m \
   --task "In one sentence, name the default Codex model configured by this project. Do not edit files."
 ```
 
 Expected:
-- The run completes.
+- The command prints a chain ID.
+- The one-step chain completes or leaves a readable failure receipt.
 - The answer is `gpt-5.5` or explicitly says the default Codex model is `gpt-5.5`.
 - No provider auth or tool-result mismatch error appears.
+
+Then open the terminal console:
+
+```bash
+rtk ./bin/yard
+```
+
+Expected:
+- The dashboard shows the configured provider/model, auth status, code index status, brain index status, local service mode, and active-chain count.
+- The Chains screen can follow, pause, resume, cancel where valid, and open receipts.
+- The Metrics browser route is optional; the TUI remains the daily-driver control surface.
 
 ## 8. API Sanity Checks While Server Is Running
 
 ```bash
 rtk curl -s http://localhost:8090/api/config
+rtk curl -s http://localhost:8090/api/runtime/status
+rtk curl -s http://localhost:8090/api/chains
 ```
 
 Expected:
 - `default_provider` is `codex`.
 - `default_model` is `gpt-5.5`.
+- `/api/runtime/status` reports provider/model/auth/index readiness.
+- `/api/chains` returns JSON, even if it is an empty list.
 
 If you launched on a different port, replace `8090`.
 
@@ -259,4 +276,6 @@ Good to keep testing daily-driver use when all are true:
 - `rtk ./bin/yard index --full` succeeds if retrieval is part of the test.
 - `rtk ./bin/yard serve` launches the UI.
 - Browser chat completes at least one normal turn and one repository-context turn.
+- `rtk ./bin/yard chain start --role coder --max-steps 1 ...` completes or produces an inspectable receipt.
+- Bare `rtk ./bin/yard` opens the TUI and shows actionable readiness.
 - A follow-up turn in the same conversation works.

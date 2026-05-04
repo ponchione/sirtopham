@@ -32,6 +32,7 @@ type fakeOperator struct {
 	chatResult     operator.ChatTurnResult
 	chatWaitCancel bool
 	pausedChain    string
+	resumedChain   string
 	cancelledChain string
 }
 
@@ -43,7 +44,7 @@ func newFakeOperator() *fakeOperator {
 			ProjectName: "project",
 			Provider:    "codex",
 			Model:       "test-model",
-			AuthStatus:  "not checked",
+			AuthStatus:  "ready (oauth, private_store)",
 			CodeIndex: operator.RuntimeIndexStatus{
 				Status:            "indexed",
 				LastIndexedAt:     "2026-05-01T12:00:00Z",
@@ -141,6 +142,11 @@ func (f *fakeOperator) ListEventsSince(_ context.Context, chainID string, afterI
 func (f *fakeOperator) PauseChain(_ context.Context, chainID string) (operator.ControlResult, error) {
 	f.pausedChain = chainID
 	return operator.ControlResult{ChainID: chainID, Message: "pause requested"}, nil
+}
+
+func (f *fakeOperator) ResumeChain(_ context.Context, chainID string) (operator.ControlResult, error) {
+	f.resumedChain = chainID
+	return operator.ControlResult{ChainID: chainID, Message: "resumed"}, nil
 }
 
 func (f *fakeOperator) CancelChain(_ context.Context, chainID string) (operator.ControlResult, error) {
@@ -1478,7 +1484,7 @@ func TestModelClearsStaleCancelConfirmation(t *testing.T) {
 	}
 }
 
-func TestModelShowsResumeCommandForPausedChain(t *testing.T) {
+func TestModelResumesPausedChain(t *testing.T) {
 	fake := newFakeOperator()
 	fake.chains[1].Status = "paused"
 	fake.details["chain-2"] = operator.ChainDetail{
@@ -1495,12 +1501,17 @@ func TestModelShowsResumeCommandForPausedChain(t *testing.T) {
 
 	updated, cmd := got.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'R'}})
 	got = updated.(Model)
-	if cmd != nil {
-		t.Fatal("resume guidance returned command")
+	if cmd == nil {
+		t.Fatal("resume returned no command")
 	}
-	want := "resume in a foreground shell: yard chain resume chain-2"
-	if got.notice != want {
-		t.Fatalf("notice = %q, want %q", got.notice, want)
+	msg := cmd()
+	updated, _ = got.Update(msg)
+	got = updated.(Model)
+	if fake.resumedChain != "chain-2" {
+		t.Fatalf("resumedChain = %q, want chain-2", fake.resumedChain)
+	}
+	if got.notice != "chain chain-2 resumed" {
+		t.Fatalf("notice = %q, want resumed notice", got.notice)
 	}
 }
 

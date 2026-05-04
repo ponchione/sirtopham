@@ -78,7 +78,7 @@ func controlsForStatus(status string) string {
 		hasStateControl = true
 	}
 	if status == "paused" {
-		parts = append(parts, "R resume command")
+		parts = append(parts, "R resume")
 		hasStateControl = true
 	}
 	if canCancelChain(status) {

@@ -46,9 +46,11 @@ func TestRootCommandDoesNotRegisterPublicRun(t *testing.T) {
 
 func TestRootCommandRunsTUIByDefault(t *testing.T) {
 	oldOpen := openYardOperator
+	oldDegraded := openYardDegradedOperator
 	oldRun := runYardTUI
 	t.Cleanup(func() {
 		openYardOperator = oldOpen
+		openYardDegradedOperator = oldDegraded
 		runYardTUI = oldRun
 	})
 
@@ -59,6 +61,10 @@ func TestRootCommandRunsTUIByDefault(t *testing.T) {
 	openYardOperator = func(ctx context.Context, path string) (*operator.Service, error) {
 		openedConfig = path
 		return &operator.Service{}, nil
+	}
+	openYardDegradedOperator = func(ctx context.Context, path string, cause error) (*operator.Service, error) {
+		t.Fatal("openYardDegradedOperator should not be called after successful open")
+		return nil, nil
 	}
 	runYardTUI = func(ctx context.Context, svc tuiapp.Operator, opts tuiapp.Options) error {
 		if svc == nil {
@@ -87,9 +93,11 @@ func TestRootCommandRunsTUIByDefault(t *testing.T) {
 
 func TestTUICmdOpensOperatorAndRunsTUI(t *testing.T) {
 	oldOpen := openYardOperator
+	oldDegraded := openYardDegradedOperator
 	oldRun := runYardTUI
 	t.Cleanup(func() {
 		openYardOperator = oldOpen
+		openYardDegradedOperator = oldDegraded
 		runYardTUI = oldRun
 	})
 
@@ -100,6 +108,10 @@ func TestTUICmdOpensOperatorAndRunsTUI(t *testing.T) {
 	openYardOperator = func(ctx context.Context, path string) (*operator.Service, error) {
 		openedConfig = path
 		return &operator.Service{}, nil
+	}
+	openYardDegradedOperator = func(ctx context.Context, path string, cause error) (*operator.Service, error) {
+		t.Fatal("openYardDegradedOperator should not be called after successful open")
+		return nil, nil
 	}
 	runYardTUI = func(ctx context.Context, svc tuiapp.Operator, opts tuiapp.Options) error {
 		if svc == nil {
@@ -125,26 +137,74 @@ func TestTUICmdOpensOperatorAndRunsTUI(t *testing.T) {
 	}
 }
 
-func TestTUICmdWrapsOpenError(t *testing.T) {
+func TestTUICmdFallsBackToDegradedOperator(t *testing.T) {
 	oldOpen := openYardOperator
+	oldDegraded := openYardDegradedOperator
 	oldRun := runYardTUI
 	t.Cleanup(func() {
 		openYardOperator = oldOpen
+		openYardDegradedOperator = oldDegraded
+		runYardTUI = oldRun
+	})
+
+	fullErr := errors.New("provider auth failed")
+	configPath := "test-yard.yaml"
+	var degradedConfig string
+	var degradedCause error
+	var ran bool
+	openYardOperator = func(ctx context.Context, path string) (*operator.Service, error) {
+		return nil, fullErr
+	}
+	openYardDegradedOperator = func(ctx context.Context, path string, cause error) (*operator.Service, error) {
+		degradedConfig = path
+		degradedCause = cause
+		return &operator.Service{}, nil
+	}
+	runYardTUI = func(ctx context.Context, svc tuiapp.Operator, opts tuiapp.Options) error {
+		if svc == nil {
+			t.Fatal("runYardTUI received nil service")
+		}
+		ran = true
+		return nil
+	}
+
+	cmd := newYardTUICmd(&configPath)
+	if err := cmd.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if degradedConfig != configPath || !errors.Is(degradedCause, fullErr) {
+		t.Fatalf("degraded open = config %q cause %v, want %q %v", degradedConfig, degradedCause, configPath, fullErr)
+	}
+	if !ran {
+		t.Fatal("runYardTUI was not called")
+	}
+}
+
+func TestTUICmdWrapsFullAndDegradedOpenErrors(t *testing.T) {
+	oldOpen := openYardOperator
+	oldDegraded := openYardDegradedOperator
+	oldRun := runYardTUI
+	t.Cleanup(func() {
+		openYardOperator = oldOpen
+		openYardDegradedOperator = oldDegraded
 		runYardTUI = oldRun
 	})
 
 	openYardOperator = func(ctx context.Context, path string) (*operator.Service, error) {
-		return nil, errors.New("boom")
+		return nil, errors.New("full boom")
+	}
+	openYardDegradedOperator = func(ctx context.Context, path string, cause error) (*operator.Service, error) {
+		return nil, errors.New("degraded boom")
 	}
 	runYardTUI = func(ctx context.Context, svc tuiapp.Operator, opts tuiapp.Options) error {
-		t.Fatal("runYardTUI should not be called after open error")
+		t.Fatal("runYardTUI should not be called after open errors")
 		return nil
 	}
 
 	configPath := "test-yard.yaml"
 	cmd := newYardTUICmd(&configPath)
 	err := cmd.ExecuteContext(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "open operator: boom") {
-		t.Fatalf("Execute error = %v, want wrapped open operator error", err)
+	if err == nil || !strings.Contains(err.Error(), "open operator: full boom") || !strings.Contains(err.Error(), "degraded operator open also failed: degraded boom") {
+		t.Fatalf("Execute error = %v, want wrapped full and degraded open errors", err)
 	}
 }

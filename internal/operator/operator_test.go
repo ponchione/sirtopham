@@ -21,12 +21,36 @@ import (
 	"github.com/ponchione/sodoryard/internal/chainrun"
 	appconfig "github.com/ponchione/sodoryard/internal/config"
 	appdb "github.com/ponchione/sodoryard/internal/db"
+	"github.com/ponchione/sodoryard/internal/provider"
+	"github.com/ponchione/sodoryard/internal/provider/router"
 	rtpkg "github.com/ponchione/sodoryard/internal/runtime"
 )
 
 type fakeBrainBackend struct {
 	docs      map[string]string
 	readPaths []string
+}
+
+type fakeAuthProvider struct {
+	status *provider.AuthStatus
+}
+
+func (f fakeAuthProvider) Name() string { return "codex" }
+
+func (f fakeAuthProvider) Complete(context.Context, *provider.Request) (*provider.Response, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (f fakeAuthProvider) Stream(context.Context, *provider.Request) (<-chan provider.StreamEvent, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (f fakeAuthProvider) Models(context.Context) ([]provider.Model, error) {
+	return []provider.Model{{ID: "test-model", Provider: "codex"}}, nil
+}
+
+func (f fakeAuthProvider) AuthStatus(context.Context) (*provider.AuthStatus, error) {
+	return f.status, nil
 }
 
 func (f *fakeBrainBackend) ReadDocument(ctx context.Context, path string) (string, error) {
@@ -165,8 +189,57 @@ agent_roles:
 		t.Fatalf("mark brain index stale: %v", err)
 	}
 	store := chain.NewStore(db)
+	providerRouter := newOperatorTestRouter(t, &provider.AuthStatus{
+		Provider:       "codex",
+		Mode:           "oauth",
+		Source:         "private_store",
+		HasAccessToken: true,
+	})
 	svc, err := Open(ctx, Options{
 		ConfigPath: configPath,
+		BuildRuntime: func(ctx context.Context, cfg *appconfig.Config) (*rtpkg.OrchestratorRuntime, error) {
+			return &rtpkg.OrchestratorRuntime{
+				Config:         cfg,
+				Database:       db,
+				ProviderRouter: providerRouter,
+				ChainStore:     store,
+				BrainBackend:   &fakeBrainBackend{},
+				Cleanup:        func() {},
+			}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	t.Cleanup(svc.Close)
+
+	status, err := svc.RuntimeStatus(ctx)
+	if err != nil {
+		t.Fatalf("RuntimeStatus returned error: %v", err)
+	}
+	if status.AuthStatus != "ready (oauth, private_store)" {
+		t.Fatalf("AuthStatus = %q, want ready auth detail", status.AuthStatus)
+	}
+	if status.CodeIndex.Status != "indexed" || status.CodeIndex.LastIndexedAt != indexedAt || status.CodeIndex.LastIndexedCommit != "abc123" {
+		t.Fatalf("CodeIndex = %+v, want indexed metadata", status.CodeIndex)
+	}
+	if status.BrainIndex.Status != brainindexstate.StatusStale || status.BrainIndex.StaleSince != staleAt.Format(time.RFC3339) || status.BrainIndex.StaleReason != "brain_update" {
+		t.Fatalf("BrainIndex = %+v, want stale brain_update metadata", status.BrainIndex)
+	}
+	if status.LocalServicesStatus != "manual" {
+		t.Fatalf("LocalServicesStatus = %q, want manual", status.LocalServicesStatus)
+	}
+}
+
+func TestRuntimeStatusIncludesStartupWarnings(t *testing.T) {
+	ctx := context.Background()
+	projectRoot := t.TempDir()
+	configPath := writeOperatorTestConfig(t, projectRoot)
+	db := newOperatorTestDB(t)
+	store := chain.NewStore(db)
+	svc, err := Open(ctx, Options{
+		ConfigPath:      configPath,
+		StartupWarnings: []RuntimeWarning{{Message: "opened operator in degraded read-only mode"}},
 		BuildRuntime: func(ctx context.Context, cfg *appconfig.Config) (*rtpkg.OrchestratorRuntime, error) {
 			return &rtpkg.OrchestratorRuntime{
 				Config:       cfg,
@@ -186,17 +259,8 @@ agent_roles:
 	if err != nil {
 		t.Fatalf("RuntimeStatus returned error: %v", err)
 	}
-	if status.AuthStatus != "not checked" {
-		t.Fatalf("AuthStatus = %q, want not checked", status.AuthStatus)
-	}
-	if status.CodeIndex.Status != "indexed" || status.CodeIndex.LastIndexedAt != indexedAt || status.CodeIndex.LastIndexedCommit != "abc123" {
-		t.Fatalf("CodeIndex = %+v, want indexed metadata", status.CodeIndex)
-	}
-	if status.BrainIndex.Status != brainindexstate.StatusStale || status.BrainIndex.StaleSince != staleAt.Format(time.RFC3339) || status.BrainIndex.StaleReason != "brain_update" {
-		t.Fatalf("BrainIndex = %+v, want stale brain_update metadata", status.BrainIndex)
-	}
-	if status.LocalServicesStatus != "manual" {
-		t.Fatalf("LocalServicesStatus = %q, want manual", status.LocalServicesStatus)
+	if !hasRuntimeWarning(status.Warnings, "opened operator in degraded read-only mode") {
+		t.Fatalf("Warnings = %+v, want startup warning", status.Warnings)
 	}
 }
 
@@ -917,6 +981,24 @@ func openOperatorTestService(t *testing.T, projectRoot string, store *chain.Stor
 				Cleanup:      func() {},
 			}, nil
 		},
+		ChainStarter: func(ctx context.Context, cfg *appconfig.Config, opts chainrun.Options, deps chainrun.Deps) (*chainrun.Result, error) {
+			chainID := opts.ChainID
+			if chainID == "" {
+				chainID = "operator-test-chain"
+				if _, err := store.StartChain(context.Background(), chain.ChainSpec{ChainID: chainID, SourceTask: opts.SourceTask, SourceSpecs: opts.SourceSpecs}); err != nil {
+					return nil, err
+				}
+			} else {
+				if err := store.SetChainStatus(context.Background(), chainID, "running"); err != nil {
+					return nil, err
+				}
+				_ = store.LogEvent(context.Background(), chainID, "", chain.EventChainResumed, map[string]any{"resumed_by": "test"})
+			}
+			if opts.OnChainID != nil {
+				opts.OnChainID(chainID)
+			}
+			return &chainrun.Result{ChainID: chainID, Status: "running"}, nil
+		},
 		ProcessSignaler: signaler,
 	})
 	if err != nil {
@@ -972,6 +1054,20 @@ func newOperatorTestDB(t *testing.T) *sql.DB {
 	return db
 }
 
+func newOperatorTestRouter(t *testing.T, status *provider.AuthStatus) *router.Router {
+	t.Helper()
+	r, err := router.NewRouter(router.RouterConfig{
+		Default: router.RouteTarget{Provider: "codex", Model: "test-model"},
+	}, nil, nil)
+	if err != nil {
+		t.Fatalf("NewRouter returned error: %v", err)
+	}
+	if err := r.RegisterProvider(fakeAuthProvider{status: status}); err != nil {
+		t.Fatalf("RegisterProvider returned error: %v", err)
+	}
+	return r
+}
+
 func requireSummary(t *testing.T, summaries []ChainSummary, chainID string) ChainSummary {
 	t.Helper()
 	for _, summary := range summaries {
@@ -992,4 +1088,13 @@ func requireChainStatus(t *testing.T, ctx context.Context, store *chain.Store, c
 	if ch.Status != want {
 		t.Fatalf("chain %s status = %q, want %q", chainID, ch.Status, want)
 	}
+}
+
+func hasRuntimeWarning(warnings []RuntimeWarning, want string) bool {
+	for _, warning := range warnings {
+		if strings.Contains(warning.Message, want) {
+			return true
+		}
+	}
+	return false
 }

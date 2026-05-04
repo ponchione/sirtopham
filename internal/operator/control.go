@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/ponchione/sodoryard/internal/chain"
+	"github.com/ponchione/sodoryard/internal/chainrun"
 )
 
 func (s *Service) PauseChain(ctx context.Context, chainID string) (ControlResult, error) {
@@ -13,7 +14,7 @@ func (s *Service) PauseChain(ctx context.Context, chainID string) (ControlResult
 }
 
 func (s *Service) ResumeChain(ctx context.Context, chainID string) (ControlResult, error) {
-	return s.setChainStatus(ctx, chainID, "running", chain.EventChainResumed, "resumed")
+	return s.resumeChainExecution(ctx, chainID)
 }
 
 func (s *Service) CancelChain(ctx context.Context, chainID string) (ControlResult, error) {
@@ -108,5 +109,79 @@ func controlStatusMessage(targetStatus string, persistedStatus string, fallback 
 		return "cancel requested"
 	default:
 		return fallback
+	}
+}
+
+func (s *Service) resumeChainExecution(ctx context.Context, chainID string) (ControlResult, error) {
+	store, err := s.store()
+	if err != nil {
+		return ControlResult{}, err
+	}
+	existing, err := store.GetChain(ctx, chainID)
+	if err != nil {
+		return ControlResult{}, err
+	}
+	if _, err := chain.ResumeExecutionReady(existing.Status); err != nil {
+		return ControlResult{}, fmt.Errorf("chain %s %w", chainID, err)
+	}
+	cfg, err := s.config()
+	if err != nil {
+		return ControlResult{}, err
+	}
+	startOpts := chainrun.Options{ChainID: chainID}
+	chainIDCh := make(chan string, 1)
+	doneCh := make(chan startChainDone, 1)
+	runnerCtx, runnerCancel := context.WithCancel(context.WithoutCancel(ctx))
+	startOpts.OnChainID = func(startedChainID string) {
+		s.registerActiveStart(startedChainID, runnerCancel, doneCh)
+		select {
+		case chainIDCh <- startedChainID:
+		default:
+		}
+	}
+	starter := s.chainStarter
+	if starter == nil {
+		starter = chainrun.Start
+	}
+	go func() {
+		defer s.unregisterActiveStart(chainID)
+		result, err := starter(runnerCtx, cfg, startOpts, chainrun.Deps{BuildRuntime: s.buildRuntime, ProcessID: func() int { return 0 }})
+		if result != nil && result.ChainID != "" {
+			select {
+			case chainIDCh <- result.ChainID:
+			default:
+			}
+		}
+		doneCh <- startChainDone{Result: result, Err: err}
+	}()
+
+	select {
+	case startedChainID := <-chainIDCh:
+		return ControlResult{
+			ChainID:        startedChainID,
+			PreviousStatus: existing.Status,
+			TargetStatus:   "running",
+			Status:         "running",
+			EventType:      chain.EventChainResumed,
+			Message:        "resumed",
+		}, nil
+	case done := <-doneCh:
+		if done.Err != nil {
+			return ControlResult{}, done.Err
+		}
+		if done.Result == nil {
+			return ControlResult{}, fmt.Errorf("chain resume returned no result")
+		}
+		return ControlResult{
+			ChainID:        done.Result.ChainID,
+			PreviousStatus: existing.Status,
+			TargetStatus:   "running",
+			Status:         done.Result.Status,
+			EventType:      chain.EventChainResumed,
+			Message:        "resumed",
+		}, nil
+	case <-ctx.Done():
+		runnerCancel()
+		return ControlResult{}, ctx.Err()
 	}
 }
