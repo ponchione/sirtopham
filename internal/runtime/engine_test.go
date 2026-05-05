@@ -11,6 +11,7 @@ import (
 
 	"github.com/ponchione/sodoryard/internal/codeintel/embedder"
 	appconfig "github.com/ponchione/sodoryard/internal/config"
+	contextpkg "github.com/ponchione/sodoryard/internal/context"
 	"github.com/ponchione/sodoryard/internal/conversation"
 	appdb "github.com/ponchione/sodoryard/internal/db"
 	"github.com/ponchione/sodoryard/internal/projectmemory"
@@ -230,6 +231,49 @@ func TestBuildToolExecutionRecorderUsesProjectMemoryInShunterMode(t *testing.T) 
 	}
 	if len(executions) != 1 || executions[0].ToolUseID != "toolu-runtime" || executions[0].DurationMs != 10 {
 		t.Fatalf("executions = %+v, want runtime Shunter tool record", executions)
+	}
+}
+
+func TestBuildContextReportStoreUsesProjectMemoryInShunterMode(t *testing.T) {
+	ctx := context.Background()
+	projectRoot := t.TempDir()
+	cfg := appconfig.Default()
+	cfg.ProjectRoot = projectRoot
+	cfg.Memory.Backend = "shunter"
+	backend, err := projectmemory.OpenBrainBackend(ctx, projectmemory.Config{DataDir: filepath.Join(projectRoot, "memory"), DurableAck: true})
+	if err != nil {
+		t.Fatalf("OpenBrainBackend: %v", err)
+	}
+	defer backend.Close()
+	if err := backend.CreateConversation(ctx, projectmemory.CreateConversationArgs{
+		ID:          "conv-runtime-context",
+		ProjectID:   "project-1",
+		Title:       "Runtime Context",
+		CreatedAtUS: uint64(time.Now().UTC().UnixMicro()),
+	}); err != nil {
+		t.Fatalf("CreateConversation: %v", err)
+	}
+
+	store, err := BuildContextReportStore(cfg, nil, backend)
+	if err != nil {
+		t.Fatalf("BuildContextReportStore: %v", err)
+	}
+	if _, ok := store.(*contextpkg.ProjectMemoryReportStore); !ok {
+		t.Fatalf("store = %T, want *context.ProjectMemoryReportStore", store)
+	}
+	if err := store.Insert(ctx, "conv-runtime-context", &contextpkg.ContextAssemblyReport{
+		TurnNumber:      1,
+		RAGResults:      []contextpkg.RAGHit{{ChunkID: "chunk-runtime", FilePath: "internal/runtime/engine.go", Included: true}},
+		BudgetBreakdown: map[string]int{},
+	}); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	report, found, err := backend.ReadContextReport(ctx, "conv-runtime-context", 1)
+	if err != nil {
+		t.Fatalf("ReadContextReport: %v", err)
+	}
+	if !found || report.ID != projectmemory.ContextReportID("conv-runtime-context", 1) {
+		t.Fatalf("report = %+v found=%t, want runtime Shunter context report", report, found)
 	}
 }
 

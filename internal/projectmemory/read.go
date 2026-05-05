@@ -442,6 +442,30 @@ func (r *Runtime) ListTurnToolExecutions(ctx context.Context, conversationID str
 	return out, nil
 }
 
+func (r *Runtime) ReadContextReport(ctx context.Context, conversationID string, turnNumber uint32) (ContextReport, bool, error) {
+	if strings.TrimSpace(conversationID) == "" {
+		return ContextReport{}, false, fmt.Errorf("context report conversation id is required")
+	}
+	if turnNumber == 0 {
+		return ContextReport{}, false, fmt.Errorf("context report turn number is required")
+	}
+	var report ContextReport
+	var found bool
+	id := ContextReportID(conversationID, turnNumber)
+	err := r.rt.Read(ctx, func(view shunter.LocalReadView) error {
+		for _, row := range view.SeekIndex(tableContextReports, indexContextReportsPrimary, types.NewString(id)) {
+			report = decodeContextReportRow(row)
+			found = true
+			break
+		}
+		return nil
+	})
+	if err != nil {
+		return ContextReport{}, false, err
+	}
+	return report, found, nil
+}
+
 type SearchHit struct {
 	Path    string
 	Snippet string

@@ -137,6 +137,17 @@ type ToolExecution struct {
 	MetadataJSON   string
 }
 
+type ContextReport struct {
+	ID             string
+	ConversationID string
+	TurnNumber     uint32
+	CreatedAtUS    uint64
+	UpdatedAtUS    uint64
+	RequestJSON    string
+	ReportJSON     string
+	QualityJSON    string
+}
+
 func documentRow(doc Document) types.ProductValue {
 	return types.ProductValue{
 		types.NewString(doc.Path),
@@ -435,6 +446,32 @@ func decodeToolExecutionRow(row types.ProductValue) ToolExecution {
 	}
 }
 
+func contextReportRow(report ContextReport) types.ProductValue {
+	return types.ProductValue{
+		types.NewString(report.ID),
+		types.NewString(report.ConversationID),
+		types.NewUint32(report.TurnNumber),
+		types.NewUint64(report.CreatedAtUS),
+		types.NewUint64(report.UpdatedAtUS),
+		types.NewString(defaultString(report.RequestJSON, emptyJSONObject)),
+		types.NewString(defaultString(report.ReportJSON, emptyJSONObject)),
+		types.NewString(defaultString(report.QualityJSON, emptyJSONObject)),
+	}
+}
+
+func decodeContextReportRow(row types.ProductValue) ContextReport {
+	return ContextReport{
+		ID:             row[0].AsString(),
+		ConversationID: row[1].AsString(),
+		TurnNumber:     row[2].AsUint32(),
+		CreatedAtUS:    row[3].AsUint64(),
+		UpdatedAtUS:    row[4].AsUint64(),
+		RequestJSON:    row[5].AsString(),
+		ReportJSON:     row[6].AsString(),
+		QualityJSON:    row[7].AsString(),
+	}
+}
+
 func splitDocumentChunks(path string, content string) []documentChunk {
 	if content == "" {
 		return nil
@@ -500,6 +537,10 @@ func SubCallID(parts ...string) string {
 
 func ToolExecutionID(conversationID string, turnNumber uint32, iteration uint32, toolUseID string, toolName string) string {
 	return stableID(strings.Join([]string{conversationID, fmt.Sprint(turnNumber), fmt.Sprint(iteration), toolUseID, toolName}, "\x00"))
+}
+
+func ContextReportID(conversationID string, turnNumber uint32) string {
+	return stableID(strings.Join([]string{conversationID, fmt.Sprint(turnNumber)}, "\x00"))
 }
 
 func stableID(value string) string {

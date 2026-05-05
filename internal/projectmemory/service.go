@@ -266,6 +266,16 @@ type ListToolExecutionsResponse struct {
 	Executions []ToolExecution
 }
 
+type ReadContextReportRequest struct {
+	ConversationID string
+	TurnNumber     uint32
+}
+
+type ReadContextReportResponse struct {
+	Report ContextReport
+	Found  bool
+}
+
 type EmptyResponse struct{}
 
 func (s *brainRPCService) ReadDocument(req ReadDocumentRequest, resp *ReadDocumentResponse) error {
@@ -489,4 +499,22 @@ func (s *brainRPCService) ListTurnToolExecutions(req ListTurnToolExecutionsReque
 	}
 	resp.Executions = executions
 	return nil
+}
+
+func (s *brainRPCService) StoreContextReport(req StoreContextReportArgs, resp *EmptyResponse) error {
+	return s.backend.StoreContextReport(context.Background(), req)
+}
+
+func (s *brainRPCService) ReadContextReport(req ReadContextReportRequest, resp *ReadContextReportResponse) error {
+	report, found, err := s.backend.ReadContextReport(context.Background(), req.ConversationID, req.TurnNumber)
+	if err != nil {
+		return err
+	}
+	resp.Report = report
+	resp.Found = found
+	return nil
+}
+
+func (s *brainRPCService) UpdateContextReportQuality(req UpdateContextReportQualityArgs, resp *EmptyResponse) error {
+	return s.backend.UpdateContextReportQuality(context.Background(), req)
 }

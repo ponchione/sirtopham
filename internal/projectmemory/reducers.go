@@ -172,6 +172,24 @@ type RecordToolExecutionArgs struct {
 	MetadataJSON   string `json:"metadata_json"`
 }
 
+type StoreContextReportArgs struct {
+	ID             string `json:"id"`
+	ConversationID string `json:"conversation_id"`
+	TurnNumber     uint32 `json:"turn_number"`
+	CreatedAtUS    uint64 `json:"created_at_us"`
+	UpdatedAtUS    uint64 `json:"updated_at_us"`
+	RequestJSON    string `json:"request_json"`
+	ReportJSON     string `json:"report_json"`
+	QualityJSON    string `json:"quality_json"`
+}
+
+type UpdateContextReportQualityArgs struct {
+	ConversationID string `json:"conversation_id"`
+	TurnNumber     uint32 `json:"turn_number"`
+	UpdatedAtUS    uint64 `json:"updated_at_us"`
+	QualityJSON    string `json:"quality_json"`
+}
+
 type reducerResult struct {
 	Path        string `json:"path,omitempty"`
 	ContentHash string `json:"content_hash,omitempty"`
@@ -589,6 +607,7 @@ func discardTurnReducer(ctx *schema.ReducerContext, raw []byte) ([]byte, error) 
 	}
 	deleteTurnToolExecutions(ctx.DB, args.ConversationID, args.TurnNumber)
 	deleteTurnSubCalls(ctx.DB, args.ConversationID, args.TurnNumber)
+	deleteTurnContextReports(ctx.DB, args.ConversationID, args.TurnNumber)
 	return encodeReducerResult(reducerResult{})
 }
 
@@ -726,6 +745,75 @@ func recordToolExecutionReducer(ctx *schema.ReducerContext, raw []byte) ([]byte,
 	return encodeReducerResult(reducerResult{OperationID: id})
 }
 
+func storeContextReportReducer(ctx *schema.ReducerContext, raw []byte) ([]byte, error) {
+	var args StoreContextReportArgs
+	if err := decodeReducerArgs(raw, &args); err != nil {
+		return nil, err
+	}
+	conversationID := strings.TrimSpace(args.ConversationID)
+	if conversationID == "" {
+		return nil, fmt.Errorf("context report conversation id is required")
+	}
+	if _, conversation, found := findConversationByID(ctx.DB, conversationID); !found || conversation.Deleted {
+		return nil, fmt.Errorf("conversation not found: %s", conversationID)
+	}
+	if args.TurnNumber == 0 {
+		return nil, fmt.Errorf("context report turn number is required")
+	}
+	expectedID := ContextReportID(conversationID, args.TurnNumber)
+	id := strings.TrimSpace(args.ID)
+	if id == "" {
+		id = expectedID
+	}
+	if id != expectedID {
+		return nil, fmt.Errorf("context report id must match conversation and turn")
+	}
+	if _, _, found := firstRow(ctx.DB.SeekIndex(uint32(tableContextReports), uint32(indexContextReportsPrimary), types.NewString(id))); found {
+		return nil, fmt.Errorf("context report already exists: %s", id)
+	}
+	createdAtUS := nonZeroUS(args.CreatedAtUS, reducerNowUS(ctx))
+	updatedAtUS := nonZeroUS(args.UpdatedAtUS, createdAtUS)
+	if _, err := ctx.DB.Insert(uint32(tableContextReports), contextReportRow(ContextReport{
+		ID:             id,
+		ConversationID: conversationID,
+		TurnNumber:     args.TurnNumber,
+		CreatedAtUS:    createdAtUS,
+		UpdatedAtUS:    updatedAtUS,
+		RequestJSON:    defaultString(args.RequestJSON, emptyJSONObject),
+		ReportJSON:     defaultString(args.ReportJSON, emptyJSONObject),
+		QualityJSON:    defaultString(args.QualityJSON, emptyJSONObject),
+	})); err != nil {
+		return nil, err
+	}
+	return encodeReducerResult(reducerResult{OperationID: id})
+}
+
+func updateContextReportQualityReducer(ctx *schema.ReducerContext, raw []byte) ([]byte, error) {
+	var args UpdateContextReportQualityArgs
+	if err := decodeReducerArgs(raw, &args); err != nil {
+		return nil, err
+	}
+	conversationID := strings.TrimSpace(args.ConversationID)
+	if conversationID == "" {
+		return nil, fmt.Errorf("context report conversation id is required")
+	}
+	if args.TurnNumber == 0 {
+		return nil, fmt.Errorf("context report turn number is required")
+	}
+	id := ContextReportID(conversationID, args.TurnNumber)
+	rowID, row, found := firstRow(ctx.DB.SeekIndex(uint32(tableContextReports), uint32(indexContextReportsPrimary), types.NewString(id)))
+	if !found {
+		return nil, fmt.Errorf("context report not found: %s/%d", conversationID, args.TurnNumber)
+	}
+	report := decodeContextReportRow(row)
+	report.UpdatedAtUS = nonZeroUS(args.UpdatedAtUS, reducerNowUS(ctx))
+	report.QualityJSON = defaultString(args.QualityJSON, emptyJSONObject)
+	if _, err := ctx.DB.Update(uint32(tableContextReports), rowID, contextReportRow(report)); err != nil {
+		return nil, err
+	}
+	return encodeReducerResult(reducerResult{OperationID: id})
+}
+
 type documentMutation struct {
 	OperationType string
 	Path          string
@@ -846,6 +934,7 @@ func deleteMessagesForConversation(db types.ReducerDB, conversationID string) {
 	}
 	deleteSubCallsForConversation(db, conversationID)
 	deleteToolExecutionsForConversation(db, conversationID)
+	deleteContextReportsForConversation(db, conversationID)
 }
 
 func insertConversationMessage(db types.ReducerDB, conversationID string, message Message) (Message, error) {
@@ -920,6 +1009,12 @@ func deleteToolExecutionsForConversation(db types.ReducerDB, conversationID stri
 	}
 }
 
+func deleteContextReportsForConversation(db types.ReducerDB, conversationID string) {
+	for rowID := range db.SeekIndex(uint32(tableContextReports), uint32(indexContextReportsConversation), types.NewString(conversationID)) {
+		_ = db.Delete(uint32(tableContextReports), rowID)
+	}
+}
+
 func deleteIterationSubCalls(db types.ReducerDB, conversationID string, turnNumber uint32, iteration uint32) {
 	for rowID, row := range db.SeekIndex(uint32(tableSubCalls), uint32(indexSubCallsConversation), types.NewString(conversationID)) {
 		subCall := decodeSubCallRow(row)
@@ -952,6 +1047,15 @@ func deleteTurnToolExecutions(db types.ReducerDB, conversationID string, turnNum
 		execution := decodeToolExecutionRow(row)
 		if execution.TurnNumber == turnNumber {
 			_ = db.Delete(uint32(tableToolExecutions), rowID)
+		}
+	}
+}
+
+func deleteTurnContextReports(db types.ReducerDB, conversationID string, turnNumber uint32) {
+	for rowID, row := range db.SeekIndex(uint32(tableContextReports), uint32(indexContextReportsConversation), types.NewString(conversationID)) {
+		report := decodeContextReportRow(row)
+		if report.TurnNumber == turnNumber {
+			_ = db.Delete(uint32(tableContextReports), rowID)
 		}
 	}
 }

@@ -26,6 +26,12 @@ type ToolExecutionRecorder interface {
 	RecordToolExecution(ctx context.Context, args RecordToolExecutionArgs) error
 }
 
+type ContextReportStore interface {
+	StoreContextReport(ctx context.Context, args StoreContextReportArgs) error
+	ReadContextReport(ctx context.Context, conversationID string, turnNumber uint32) (ContextReport, bool, error)
+	UpdateContextReportQuality(ctx context.Context, args UpdateContextReportQualityArgs) error
+}
+
 func Open(ctx context.Context, cfg Config) (*Runtime, error) {
 	if cfg.DataDir == "" {
 		return nil, fmt.Errorf("project memory shunter data dir is required")
@@ -156,5 +162,15 @@ func (r *Runtime) RecordSubCall(ctx context.Context, args RecordSubCallArgs) err
 
 func (r *Runtime) RecordToolExecution(ctx context.Context, args RecordToolExecutionArgs) error {
 	_, err := r.callReducerJSON(ctx, "record_tool_execution", args)
+	return err
+}
+
+func (r *Runtime) StoreContextReport(ctx context.Context, args StoreContextReportArgs) error {
+	_, err := r.callReducerJSON(ctx, "store_context_report", args)
+	return err
+}
+
+func (r *Runtime) UpdateContextReportQuality(ctx context.Context, args UpdateContextReportQualityArgs) error {
+	_, err := r.callReducerJSON(ctx, "update_context_report_quality", args)
 	return err
 }

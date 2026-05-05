@@ -20,7 +20,7 @@ type ContextAssembler struct {
 	retriever   Retriever
 	budgeter    BudgetManager
 	serializer  Serializer
-	reportStore contextReportStore
+	reportStore ReportStore
 	cfg         config.ContextConfig
 	now         func() time.Time
 }
@@ -36,6 +36,28 @@ func NewContextAssembler(
 	cfg config.ContextConfig,
 	database *sql.DB,
 ) *ContextAssembler {
+	return NewContextAssemblerWithReportStore(
+		analyzer,
+		extractor,
+		momentum,
+		retriever,
+		budgeter,
+		serializer,
+		cfg,
+		NewSQLiteReportStore(database),
+	)
+}
+
+func NewContextAssemblerWithReportStore(
+	analyzer TurnAnalyzer,
+	extractor QueryExtractor,
+	momentum MomentumTracker,
+	retriever Retriever,
+	budgeter BudgetManager,
+	serializer Serializer,
+	cfg config.ContextConfig,
+	reportStore ReportStore,
+) *ContextAssembler {
 	return &ContextAssembler{
 		analyzer:    analyzer,
 		extractor:   extractor,
@@ -43,7 +65,7 @@ func NewContextAssembler(
 		retriever:   retriever,
 		budgeter:    budgeter,
 		serializer:  serializer,
-		reportStore: NewSQLiteReportStore(database),
+		reportStore: reportStore,
 		cfg:         cfg,
 		now:         time.Now,
 	}

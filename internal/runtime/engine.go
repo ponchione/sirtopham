@@ -94,6 +94,10 @@ func BuildEngineRuntime(ctx context.Context, cfg *appconfig.Config) (*EngineRunt
 	if err != nil {
 		return closeOnError(err)
 	}
+	contextReportStore, err := BuildContextReportStore(cfg, database, memoryBackend)
+	if err != nil {
+		return closeOnError(err)
+	}
 
 	graphStore, closeGraphStore, err := BuildGraphStore(cfg)
 	if err != nil {
@@ -113,7 +117,7 @@ func BuildEngineRuntime(ctx context.Context, cfg *appconfig.Config) (*EngineRunt
 		return closeOnError(err)
 	}
 	cleanup = ChainCleanup(cleanup, closeConversationManager)
-	contextAssembler := contextpkg.NewContextAssembler(
+	contextAssembler := contextpkg.NewContextAssemblerWithReportStore(
 		contextpkg.RuleBasedAnalyzer{},
 		contextpkg.HeuristicQueryExtractor{},
 		contextpkg.HistoryMomentumTracker{},
@@ -121,7 +125,7 @@ func BuildEngineRuntime(ctx context.Context, cfg *appconfig.Config) (*EngineRunt
 		budgetManager,
 		contextpkg.MarkdownSerializer{},
 		cfg.Context,
-		database,
+		contextReportStore,
 	)
 
 	return &EngineRuntime{
@@ -274,6 +278,17 @@ func BuildToolExecutionRecorder(cfg *appconfig.Config, queries *appdb.Queries, m
 		return tool.NewProjectMemoryToolExecutionRecorder(recorder), nil
 	}
 	return tool.NewToolExecutionRecorder(queries), nil
+}
+
+func BuildContextReportStore(cfg *appconfig.Config, database *sql.DB, memoryBackend any) (contextpkg.ReportStore, error) {
+	if cfg != nil && cfg.Memory.Backend == "shunter" {
+		store, ok := memoryBackend.(projectmemory.ContextReportStore)
+		if !ok || store == nil {
+			return nil, fmt.Errorf("shunter memory backend requires a project memory context report store")
+		}
+		return contextpkg.NewProjectMemoryReportStore(store), nil
+	}
+	return contextpkg.NewSQLiteReportStore(database), nil
 }
 
 // BuildGraphStore opens (or creates) the code-graph SQLite store at the path

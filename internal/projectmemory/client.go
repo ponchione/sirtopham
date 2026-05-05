@@ -245,6 +245,22 @@ func (c *Client) ListTurnToolExecutions(ctx context.Context, conversationID stri
 	return resp.Executions, nil
 }
 
+func (c *Client) StoreContextReport(ctx context.Context, args StoreContextReportArgs) error {
+	return c.call(ctx, "Brain.StoreContextReport", args, &EmptyResponse{})
+}
+
+func (c *Client) ReadContextReport(ctx context.Context, conversationID string, turnNumber uint32) (ContextReport, bool, error) {
+	var resp ReadContextReportResponse
+	if err := c.call(ctx, "Brain.ReadContextReport", ReadContextReportRequest{ConversationID: conversationID, TurnNumber: turnNumber}, &resp); err != nil {
+		return ContextReport{}, false, err
+	}
+	return resp.Report, resp.Found, nil
+}
+
+func (c *Client) UpdateContextReportQuality(ctx context.Context, args UpdateContextReportQualityArgs) error {
+	return c.call(ctx, "Brain.UpdateContextReportQuality", args, &EmptyResponse{})
+}
+
 func (c *Client) call(ctx context.Context, method string, args any, reply any) error {
 	if c == nil || c.rpc == nil {
 		return fmt.Errorf("project memory RPC client is closed")

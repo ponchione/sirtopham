@@ -7,7 +7,7 @@ import (
 
 const ModuleName = "yard_project_memory"
 
-const schemaVersion = 5
+const schemaVersion = 6
 
 const (
 	tableProjectState schema.TableID = iota
@@ -22,6 +22,7 @@ const (
 	tableMessages
 	tableSubCalls
 	tableToolExecutions
+	tableContextReports
 )
 
 const (
@@ -85,6 +86,11 @@ const (
 	indexToolExecutionsToolName
 )
 
+const (
+	indexContextReportsPrimary schema.IndexID = iota
+	indexContextReportsConversation
+)
+
 func NewModule() *shunter.Module {
 	mod := shunter.NewModule(ModuleName).SchemaVersion(schemaVersion)
 	declareProjectState(mod)
@@ -99,6 +105,7 @@ func NewModule() *shunter.Module {
 	declareMessages(mod)
 	declareSubCalls(mod)
 	declareToolExecutions(mod)
+	declareContextReports(mod)
 	mod.Reducer("write_document", writeDocumentReducer)
 	mod.Reducer("patch_document", patchDocumentReducer)
 	mod.Reducer("delete_document", deleteDocumentReducer)
@@ -117,6 +124,8 @@ func NewModule() *shunter.Module {
 	mod.Reducer("discard_turn", discardTurnReducer)
 	mod.Reducer("record_sub_call", recordSubCallReducer)
 	mod.Reducer("record_tool_execution", recordToolExecutionReducer)
+	mod.Reducer("store_context_report", storeContextReportReducer)
+	mod.Reducer("update_context_report_quality", updateContextReportQualityReducer)
 	return mod
 }
 
@@ -355,6 +364,25 @@ func declareToolExecutions(mod *shunter.Module) {
 		Indexes: []schema.IndexDefinition{
 			{Name: "tool_executions_conversation", Columns: []string{"conversation_id"}},
 			{Name: "tool_executions_tool_name", Columns: []string{"tool_name"}},
+		},
+	})
+}
+
+func declareContextReports(mod *shunter.Module) {
+	mod.TableDef(schema.TableDefinition{
+		Name: "context_reports",
+		Columns: []schema.ColumnDefinition{
+			{Name: "id", Type: schema.KindString, PrimaryKey: true},
+			{Name: "conversation_id", Type: schema.KindString},
+			{Name: "turn_number", Type: schema.KindUint32},
+			{Name: "created_at_us", Type: schema.KindUint64},
+			{Name: "updated_at_us", Type: schema.KindUint64},
+			{Name: "request_json", Type: schema.KindString},
+			{Name: "report_json", Type: schema.KindString},
+			{Name: "quality_json", Type: schema.KindString},
+		},
+		Indexes: []schema.IndexDefinition{
+			{Name: "context_reports_conversation", Columns: []string{"conversation_id"}},
 		},
 	})
 }

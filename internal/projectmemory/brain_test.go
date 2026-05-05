@@ -527,6 +527,84 @@ func TestToolExecutionsRecordCancelDiscardAndRestart(t *testing.T) {
 	}
 }
 
+func TestContextReportsStoreUpdateDiscardAndRestart(t *testing.T) {
+	ctx := context.Background()
+	dataDir := t.TempDir()
+	backend, err := OpenBrainBackend(ctx, Config{DataDir: dataDir, DurableAck: true})
+	if err != nil {
+		t.Fatalf("OpenBrainBackend: %v", err)
+	}
+
+	createdAt := time.Date(2026, 5, 5, 22, 0, 0, 0, time.UTC)
+	if err := backend.CreateConversation(ctx, CreateConversationArgs{
+		ID:          "conv-context",
+		ProjectID:   "project-1",
+		Title:       "Context Slice",
+		CreatedAtUS: uint64(createdAt.UnixMicro()),
+	}); err != nil {
+		t.Fatalf("CreateConversation: %v", err)
+	}
+	if err := backend.StoreContextReport(ctx, StoreContextReportArgs{
+		ConversationID: "conv-context",
+		TurnNumber:     1,
+		CreatedAtUS:    uint64(createdAt.Add(time.Second).UnixMicro()),
+		RequestJSON:    `{"conversation_id":"conv-context","turn_number":1}`,
+		ReportJSON:     `{"turn_number":1,"included_chunks":["internal/auth/service.go"]}`,
+		QualityJSON:    `{"agent_read_files":[]}`,
+	}); err != nil {
+		t.Fatalf("StoreContextReport: %v", err)
+	}
+	report, found, err := backend.ReadContextReport(ctx, "conv-context", 1)
+	if err != nil {
+		t.Fatalf("ReadContextReport: %v", err)
+	}
+	expectedID := ContextReportID("conv-context", 1)
+	if !found || report.ID != expectedID || !strings.Contains(report.ReportJSON, "included_chunks") {
+		t.Fatalf("report = %+v found=%t, want %s", report, found, expectedID)
+	}
+	if err := backend.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopened, err := OpenBrainBackend(ctx, Config{DataDir: dataDir, DurableAck: true})
+	if err != nil {
+		t.Fatalf("reopen OpenBrainBackend: %v", err)
+	}
+	defer reopened.Close()
+	report, found, err = reopened.ReadContextReport(ctx, "conv-context", 1)
+	if err != nil {
+		t.Fatalf("ReadContextReport after restart: %v", err)
+	}
+	if !found || report.ID != expectedID {
+		t.Fatalf("report after restart = %+v found=%t, want %s", report, found, expectedID)
+	}
+	if err := reopened.UpdateContextReportQuality(ctx, UpdateContextReportQualityArgs{
+		ConversationID: "conv-context",
+		TurnNumber:     1,
+		UpdatedAtUS:    uint64(createdAt.Add(2 * time.Second).UnixMicro()),
+		QualityJSON:    `{"agent_used_search_tool":true,"agent_read_files":["internal/auth/service.go"],"context_hit_rate":1}`,
+	}); err != nil {
+		t.Fatalf("UpdateContextReportQuality: %v", err)
+	}
+	report, found, err = reopened.ReadContextReport(ctx, "conv-context", 1)
+	if err != nil {
+		t.Fatalf("ReadContextReport after quality: %v", err)
+	}
+	if !found || !strings.Contains(report.QualityJSON, "context_hit_rate") || report.UpdatedAtUS != uint64(createdAt.Add(2*time.Second).UnixMicro()) {
+		t.Fatalf("report after quality = %+v found=%t, want quality update", report, found)
+	}
+	if err := reopened.DiscardTurn(ctx, DiscardTurnArgs{ConversationID: "conv-context", TurnNumber: 1}); err != nil {
+		t.Fatalf("DiscardTurn: %v", err)
+	}
+	_, found, err = reopened.ReadContextReport(ctx, "conv-context", 1)
+	if err != nil {
+		t.Fatalf("ReadContextReport after discard: %v", err)
+	}
+	if found {
+		t.Fatal("ReadContextReport after discard found report, want missing")
+	}
+}
+
 func TestRPCClientUsesParentBrainBackend(t *testing.T) {
 	ctx := context.Background()
 	backend, err := OpenBrainBackend(ctx, Config{DataDir: t.TempDir(), DurableAck: true})
@@ -653,5 +731,28 @@ func TestRPCClientUsesParentBrainBackend(t *testing.T) {
 	}
 	if len(parentExecutions) != 1 || parentExecutions[0].ToolUseID != "toolu-rpc" || parentExecutions[0].NormalizedSize != 8 {
 		t.Fatalf("parent executions after RPC = %+v, want toolu-rpc", parentExecutions)
+	}
+	if err := client.StoreContextReport(ctx, StoreContextReportArgs{
+		ConversationID: "rpc-conv",
+		TurnNumber:     1,
+		RequestJSON:    `{"conversation_id":"rpc-conv","turn_number":1}`,
+		ReportJSON:     `{"turn_number":1,"included_chunks":["notes/rpc.md"]}`,
+		QualityJSON:    `{"agent_read_files":[]}`,
+	}); err != nil {
+		t.Fatalf("client StoreContextReport: %v", err)
+	}
+	if err := client.UpdateContextReportQuality(ctx, UpdateContextReportQualityArgs{
+		ConversationID: "rpc-conv",
+		TurnNumber:     1,
+		QualityJSON:    `{"agent_used_search_tool":true,"agent_read_files":["notes/rpc.md"],"context_hit_rate":1}`,
+	}); err != nil {
+		t.Fatalf("client UpdateContextReportQuality: %v", err)
+	}
+	parentReport, found, err := backend.ReadContextReport(ctx, "rpc-conv", 1)
+	if err != nil {
+		t.Fatalf("parent ReadContextReport: %v", err)
+	}
+	if !found || !strings.Contains(parentReport.QualityJSON, "notes/rpc.md") {
+		t.Fatalf("parent report after RPC = %+v found=%t, want notes/rpc.md quality", parentReport, found)
 	}
 }

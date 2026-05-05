@@ -216,6 +216,18 @@ func (b *BrainBackend) ListTurnToolExecutions(ctx context.Context, conversationI
 	return b.runtime.ListTurnToolExecutions(ctx, conversationID, turnNumber)
 }
 
+func (b *BrainBackend) StoreContextReport(ctx context.Context, args StoreContextReportArgs) error {
+	return b.runtime.StoreContextReport(ctx, args)
+}
+
+func (b *BrainBackend) ReadContextReport(ctx context.Context, conversationID string, turnNumber uint32) (ContextReport, bool, error) {
+	return b.runtime.ReadContextReport(ctx, conversationID, turnNumber)
+}
+
+func (b *BrainBackend) UpdateContextReportQuality(ctx context.Context, args UpdateContextReportQualityArgs) error {
+	return b.runtime.UpdateContextReportQuality(ctx, args)
+}
+
 func inferDocumentKind(path string) string {
 	switch {
 	case strings.HasPrefix(path, "conventions/"):
